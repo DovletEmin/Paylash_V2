@@ -1,0 +1,92 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: paylash-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      PAYLASH_DOMAIN: "${PAYLASH_DOMAIN}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+      - collabora
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: paylash-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: paylash-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  collabora:
+    image: collabora/code:latest
+    container_name: paylash-collabora
+    restart: unless-stopped
+    environment:
+      - server_name=${PAYLASH_DOMAIN}
+      - extra_params=--o:ssl.enable=false --o:ssl.termination=true --o:net.proto=IPv4 --o:default_language.locale.language=tk --o:default_language.locale.country=TM
+      - aliasgroup1=http://paylash-app:${PAYLASH_PORT}
+    cap_add:
+      - MKNOD
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  app:
+    build: .
+    container_name: paylash-app
+    restart: unless-stopped
+    environment:
+      PAYLASH_PORT: "${PAYLASH_PORT}"
+      PAYLASH_DB_URL: "${PAYLASH_DB_URL}"
+      PAYLASH_MINIO_ENDPOINT: "${PAYLASH_MINIO_ENDPOINT}"
+      PAYLASH_MINIO_ACCESS_KEY: "${PAYLASH_MINIO_ACCESS_KEY}"
+      PAYLASH_MINIO_SECRET_KEY: "${PAYLASH_MINIO_SECRET_KEY}"
+      PAYLASH_MINIO_USE_SSL: "${PAYLASH_MINIO_USE_SSL}"
+      PAYLASH_COLLABORA_URL: "${PAYLASH_COLLABORA_URL}"
+      PAYLASH_BASE_URL: "${PAYLASH_BASE_URL}"
+      PAYLASH_JWT_SECRET: "${PAYLASH_JWT_SECRET}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      collabora:
+        condition: service_started
+
+volumes:
+  postgres_data:
+  minio_data:
+  caddy_data:
+  caddy_config:
