@@ -100,7 +100,6 @@ func (d *DB) Migrate() error {
 		`UPDATE files SET scope = 'project' WHERE scope = 'group'`,
 		`UPDATE folders SET scope = 'common' WHERE scope = 'public'`,
 		`UPDATE files SET scope = 'common' WHERE scope = 'public'`,
-		`UPDATE files SET visibility = 'common' WHERE visibility IN ('public', 'group')`,
 		`CREATE TABLE IF NOT EXISTS file_shares (
 			id          SERIAL PRIMARY KEY,
 			file_id     INT REFERENCES files(id) ON DELETE CASCADE,
@@ -139,6 +138,7 @@ func (d *DB) Migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_project_members_project ON project_members(project_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_project_members_user ON project_members(user_id)`,
 		`ALTER TABLE files ADD COLUMN IF NOT EXISTS visibility VARCHAR(20) NOT NULL DEFAULT 'private'`,
+		`UPDATE files SET visibility = 'common' WHERE visibility IN ('public', 'group')`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url VARCHAR(500) DEFAULT ''`,
 		`CREATE TABLE IF NOT EXISTS settings (
 			key   VARCHAR(100) PRIMARY KEY,
