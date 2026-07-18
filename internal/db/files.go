@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"paylash/internal/models"
 	"strconv"
+
+	"github.com/lib/pq"
 )
 
 // Files
@@ -23,29 +25,44 @@ func (d *DB) CreateFile(f *models.File) error {
 func (d *DB) GetFile(id int) (*models.File, error) {
 	f := &models.File{}
 	err := d.QueryRow(
-		`SELECT id, name, mime_type, size_bytes, minio_bucket, minio_key, folder_id, owner_id, project_id, scope, visibility, version, created_at, updated_at
-		 FROM files WHERE id = $1`, id,
-	).Scan(&f.ID, &f.Name, &f.MimeType, &f.SizeBytes, &f.MinioBucket, &f.MinioKey, &f.FolderID, &f.OwnerID, &f.ProjectID, &f.Scope, &f.Visibility, &f.Version, &f.CreatedAt, &f.UpdatedAt)
+		`SELECT id, name, mime_type, size_bytes, minio_bucket, minio_key, folder_id, owner_id, project_id, scope, visibility, version, deleted_at, created_at, updated_at
+		 FROM files WHERE id = $1 AND deleted_at IS NULL`, id,
+	).Scan(&f.ID, &f.Name, &f.MimeType, &f.SizeBytes, &f.MinioBucket, &f.MinioKey, &f.FolderID, &f.OwnerID, &f.ProjectID, &f.Scope, &f.Visibility, &f.Version, &f.DeletedAt, &f.CreatedAt, &f.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	return f, err
 }
 
-func (d *DB) ListFiles(ownerID int, projectID *int, scope string, folderID *int, sort, order string) ([]models.File, error) {
+// GetFileIncludingTrash fetches a file regardless of trash state — used by
+// the trash-management endpoints (restore/purge), which need to act on
+// already-trashed rows that GetFile deliberately hides.
+func (d *DB) GetFileIncludingTrash(id int) (*models.File, error) {
+	f := &models.File{}
+	err := d.QueryRow(
+		`SELECT id, name, mime_type, size_bytes, minio_bucket, minio_key, folder_id, owner_id, project_id, scope, visibility, version, deleted_at, created_at, updated_at
+		 FROM files WHERE id = $1`, id,
+	).Scan(&f.ID, &f.Name, &f.MimeType, &f.SizeBytes, &f.MinioBucket, &f.MinioKey, &f.FolderID, &f.OwnerID, &f.ProjectID, &f.Scope, &f.Visibility, &f.Version, &f.DeletedAt, &f.CreatedAt, &f.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return f, err
+}
+
+func (d *DB) ListFiles(ownerID int, projectID *int, scope string, folderID *int, sort, order string, limit, offset int) ([]models.File, error) {
 	var q string
 	var args []any
 	var n int
 
 	if scope == "common" {
-		q = `SELECT id, name, mime_type, size_bytes, minio_bucket, minio_key, folder_id, owner_id, project_id, scope, visibility, version, created_at, updated_at FROM files WHERE (visibility = 'common' OR scope = 'common')`
+		q = `SELECT id, name, mime_type, size_bytes, minio_bucket, minio_key, folder_id, owner_id, project_id, scope, visibility, version, created_at, updated_at FROM files WHERE (visibility = 'common' OR scope = 'common') AND deleted_at IS NULL`
 		n = 0
 	} else if scope == "project" && projectID != nil {
-		q = `SELECT id, name, mime_type, size_bytes, minio_bucket, minio_key, folder_id, owner_id, project_id, scope, visibility, version, created_at, updated_at FROM files WHERE scope = 'project' AND project_id = $1`
+		q = `SELECT id, name, mime_type, size_bytes, minio_bucket, minio_key, folder_id, owner_id, project_id, scope, visibility, version, created_at, updated_at FROM files WHERE scope = 'project' AND project_id = $1 AND deleted_at IS NULL`
 		args = []any{*projectID}
 		n = 1
 	} else {
-		q = `SELECT id, name, mime_type, size_bytes, minio_bucket, minio_key, folder_id, owner_id, project_id, scope, visibility, version, created_at, updated_at FROM files WHERE scope = $1`
+		q = `SELECT id, name, mime_type, size_bytes, minio_bucket, minio_key, folder_id, owner_id, project_id, scope, visibility, version, created_at, updated_at FROM files WHERE scope = $1 AND deleted_at IS NULL`
 		args = []any{scope}
 		n = 1
 
@@ -78,6 +95,13 @@ func (d *DB) ListFiles(ownerID int, projectID *int, scope string, folderID *int,
 		q += ` DESC`
 	}
 
+	n++
+	q += ` LIMIT $` + strconv.Itoa(n)
+	args = append(args, limit)
+	n++
+	q += ` OFFSET $` + strconv.Itoa(n)
+	args = append(args, offset)
+
 	rows, err := d.Query(q, args...)
 	if err != nil {
 		return nil, err
@@ -94,13 +118,44 @@ func (d *DB) ListFiles(ownerID int, projectID *int, scope string, folderID *int,
 	return files, rows.Err()
 }
 
+// ReassignNonPersonalFiles moves ownership of every common/project-scope
+// file from fromUserID to toUserID. Used before deleting a user: their
+// contribution to shared/project work should survive them (files.owner_id
+// is ON DELETE CASCADE), only their private personal-scope files should not.
+func (d *DB) ReassignNonPersonalFiles(fromUserID, toUserID int) error {
+	_, err := d.Exec(
+		`UPDATE files SET owner_id = $2 WHERE owner_id = $1 AND scope != 'personal'`,
+		fromUserID, toUserID,
+	)
+	return err
+}
+
+// ReassignNonPersonalFolders is ReassignNonPersonalFiles' counterpart for
+// folders — just as necessary, and for a sharper reason: folders.parent_id
+// is ALSO ON DELETE CASCADE, so leaving a common/project folder's owner_id
+// cascading on user delete wouldn't just lose that one employee's own
+// folder, it would take every subfolder nested under it with it — created
+// by anyone, not just the deleted user.
+func (d *DB) ReassignNonPersonalFolders(fromUserID, toUserID int) error {
+	_, err := d.Exec(
+		`UPDATE folders SET owner_id = $2 WHERE owner_id = $1 AND scope != 'personal'`,
+		fromUserID, toUserID,
+	)
+	return err
+}
+
 func (d *DB) RenameFile(id int, name string) error {
 	_, err := d.Exec(`UPDATE files SET name = $1, updated_at = NOW() WHERE id = $2`, name, id)
 	return err
 }
 
-func (d *DB) DeleteFile(id int) error {
-	_, err := d.Exec(`DELETE FROM files WHERE id = $1`, id)
+// MoveFile reassigns a file to a different folder (nil = scope root) within
+// the same scope/project — a metadata-only move. It deliberately does not
+// touch the file's MinIO object: the key's folder-ID prefix is just how new
+// uploads happen to be laid out in storage, not something reads depend on,
+// so leaving it as-is avoids a copy of however large the object is.
+func (d *DB) MoveFile(id int, name string, folderID *int) error {
+	_, err := d.Exec(`UPDATE files SET name = $1, folder_id = $2, updated_at = NOW() WHERE id = $3`, name, folderID, id)
 	return err
 }
 
@@ -117,11 +172,11 @@ func (d *DB) SearchFiles(userID int, isAdmin bool, query string) ([]models.File,
 
 	if isAdmin {
 		q = `SELECT id, name, mime_type, size_bytes, minio_bucket, minio_key, folder_id, owner_id, project_id, scope, visibility, version, created_at, updated_at
-		     FROM files WHERE name ILIKE $1`
+		     FROM files WHERE name ILIKE $1 AND deleted_at IS NULL`
 		args = []any{"%" + query + "%"}
 	} else {
 		q = `SELECT id, name, mime_type, size_bytes, minio_bucket, minio_key, folder_id, owner_id, project_id, scope, visibility, version, created_at, updated_at
-		     FROM files WHERE name ILIKE $1 AND (
+		     FROM files WHERE name ILIKE $1 AND deleted_at IS NULL AND (
 		         owner_id = $2
 		         OR visibility = 'common' OR scope = 'common'
 		         OR project_id IN (SELECT project_id FROM project_members WHERE user_id = $2)
@@ -153,7 +208,7 @@ func (d *DB) SetFileVisibility(fileID int, visibility string) error {
 
 // FileNameExists checks if a file with the given name exists in the same scope/folder context.
 func (d *DB) FileNameExists(name string, ownerID int, scope string, folderID *int, projectID *int) (bool, error) {
-	q := `SELECT COUNT(*) FROM files WHERE name = $1 AND scope = $2`
+	q := `SELECT COUNT(*) FROM files WHERE name = $1 AND scope = $2 AND deleted_at IS NULL`
 	args := []any{name, scope}
 	n := 2
 
@@ -231,10 +286,10 @@ func (d *DB) ListFolders(ownerID int, projectID *int, scope string, parentID *in
 	var n int
 
 	if scope == "common" {
-		q = `SELECT id, name, parent_id, owner_id, project_id, scope, created_at FROM folders WHERE scope = 'common'`
+		q = `SELECT id, name, parent_id, owner_id, project_id, scope, created_at FROM folders WHERE scope = 'common' AND deleted_at IS NULL`
 		n = 0
 	} else {
-		q = `SELECT id, name, parent_id, owner_id, project_id, scope, created_at FROM folders WHERE scope = $1`
+		q = `SELECT id, name, parent_id, owner_id, project_id, scope, created_at FROM folders WHERE scope = $1 AND deleted_at IS NULL`
 		args = []any{scope}
 		n = 1
 	}
@@ -274,11 +329,67 @@ func (d *DB) ListFolders(ownerID int, projectID *int, scope string, parentID *in
 	return folders, rows.Err()
 }
 
+// ListAllFoldersInScope returns every folder in a scope (regardless of
+// nesting depth) — used to build the "move to" folder picker, which needs
+// the whole tree rather than one level at a time.
+func (d *DB) ListAllFoldersInScope(ownerID int, projectID *int, scope string) ([]models.Folder, error) {
+	var q string
+	var args []any
+	var n int
+
+	if scope == "common" {
+		q = `SELECT id, name, parent_id, owner_id, project_id, scope, created_at FROM folders WHERE scope = 'common' AND deleted_at IS NULL`
+	} else {
+		q = `SELECT id, name, parent_id, owner_id, project_id, scope, created_at FROM folders WHERE scope = $1 AND deleted_at IS NULL`
+		args = []any{scope}
+		n = 1
+	}
+
+	if scope == "personal" {
+		n++
+		q += ` AND owner_id = $` + strconv.Itoa(n)
+		args = append(args, ownerID)
+	} else if scope == "project" && projectID != nil {
+		n++
+		q += ` AND project_id = $` + strconv.Itoa(n)
+		args = append(args, *projectID)
+	}
+	q += ` ORDER BY name`
+
+	rows, err := d.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var folders []models.Folder
+	for rows.Next() {
+		var f models.Folder
+		if err := rows.Scan(&f.ID, &f.Name, &f.ParentID, &f.OwnerID, &f.ProjectID, &f.Scope, &f.CreatedAt); err != nil {
+			return nil, err
+		}
+		folders = append(folders, f)
+	}
+	return folders, rows.Err()
+}
+
 func (d *DB) GetFolder(id int) (*models.Folder, error) {
 	f := &models.Folder{}
 	err := d.QueryRow(
-		`SELECT id, name, parent_id, owner_id, project_id, scope, created_at FROM folders WHERE id = $1`, id,
-	).Scan(&f.ID, &f.Name, &f.ParentID, &f.OwnerID, &f.ProjectID, &f.Scope, &f.CreatedAt)
+		`SELECT id, name, parent_id, owner_id, project_id, scope, deleted_at, created_at FROM folders WHERE id = $1 AND deleted_at IS NULL`, id,
+	).Scan(&f.ID, &f.Name, &f.ParentID, &f.OwnerID, &f.ProjectID, &f.Scope, &f.DeletedAt, &f.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return f, err
+}
+
+// GetFolderIncludingTrash fetches a folder regardless of trash state — used
+// by the trash-management endpoints (restore/purge).
+func (d *DB) GetFolderIncludingTrash(id int) (*models.Folder, error) {
+	f := &models.Folder{}
+	err := d.QueryRow(
+		`SELECT id, name, parent_id, owner_id, project_id, scope, deleted_at, created_at FROM folders WHERE id = $1`, id,
+	).Scan(&f.ID, &f.Name, &f.ParentID, &f.OwnerID, &f.ProjectID, &f.Scope, &f.DeletedAt, &f.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -290,7 +401,92 @@ func (d *DB) RenameFolder(id int, name string) error {
 	return err
 }
 
-func (d *DB) DeleteFolder(id int) error {
-	_, err := d.Exec(`DELETE FROM folders WHERE id = $1`, id)
+// MoveFolder reassigns a folder to a different parent (nil = scope root).
+// Caller is responsible for the cycle check (target isn't the folder itself
+// or one of its own descendants) — see ListFolderAndDescendantIDs.
+func (d *DB) MoveFolder(id int, name string, parentID *int) error {
+	_, err := d.Exec(`UPDATE folders SET name = $1, parent_id = $2 WHERE id = $3`, name, parentID, id)
+	return err
+}
+
+// IsFolderTrashed reports whether a folder currently has deleted_at set.
+// A missing folder is treated as "trashed" too, so restore logic that uses
+// this to decide whether to keep a parent/folder reference falls back to
+// the scope root instead of pointing at nothing.
+func (d *DB) IsFolderTrashed(id int) (bool, error) {
+	var deletedAt sql.NullTime
+	err := d.QueryRow(`SELECT deleted_at FROM folders WHERE id = $1`, id).Scan(&deletedAt)
+	if err == sql.ErrNoRows {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return deletedAt.Valid, nil
+}
+
+// ListFolderAndDescendantIDs returns folderID plus every folder nested under
+// it (any depth), via a recursive CTE over parent_id.
+func (d *DB) ListFolderAndDescendantIDs(folderID int) ([]int, error) {
+	rows, err := d.Query(
+		// The path array + NOT ... = ANY(path) guard makes this safe even if
+		// a parent_id cycle somehow existed (it shouldn't — MoveFolder's
+		// caller checks for that — but UNION ALL alone would recurse
+		// forever against one instead of erroring or returning wrong data).
+		`WITH RECURSIVE sub AS (
+			SELECT id, ARRAY[id] AS path FROM folders WHERE id = $1
+			UNION ALL
+			SELECT f.id, sub.path || f.id
+			FROM folders f JOIN sub ON f.parent_id = sub.id
+			WHERE NOT f.id = ANY(sub.path)
+		)
+		SELECT id FROM sub`, folderID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// ListFilesInFolders returns every file whose folder_id is one of folderIDs.
+func (d *DB) ListFilesInFolders(folderIDs []int) ([]models.File, error) {
+	if len(folderIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := d.Query(
+		`SELECT id, name, mime_type, size_bytes, minio_bucket, minio_key, folder_id, owner_id, project_id, scope, visibility, version, created_at, updated_at
+		 FROM files WHERE folder_id = ANY($1)`, pq.Array(folderIDs),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var files []models.File
+	for rows.Next() {
+		var f models.File
+		if err := rows.Scan(&f.ID, &f.Name, &f.MimeType, &f.SizeBytes, &f.MinioBucket, &f.MinioKey, &f.FolderID, &f.OwnerID, &f.ProjectID, &f.Scope, &f.Visibility, &f.Version, &f.CreatedAt, &f.UpdatedAt); err != nil {
+			return nil, err
+		}
+		files = append(files, f)
+	}
+	return files, rows.Err()
+}
+
+// DeleteFilesInFolders removes every file row whose folder_id is one of
+// folderIDs. Callers must delete the corresponding MinIO objects first.
+func (d *DB) DeleteFilesInFolders(folderIDs []int) error {
+	if len(folderIDs) == 0 {
+		return nil
+	}
+	_, err := d.Exec(`DELETE FROM files WHERE folder_id = ANY($1)`, pq.Array(folderIDs))
 	return err
 }

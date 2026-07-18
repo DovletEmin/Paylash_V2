@@ -1,4 +1,5 @@
 /* Paylash — UI Components & Utilities */
+const ESC_CHARS = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 const UI = {
     toast(msg, type = 'info') {
         const c = document.getElementById('toast-container');
@@ -10,12 +11,12 @@ const UI = {
         setTimeout(() => { el.classList.add('toast-removing'); setTimeout(() => el.remove(), 250); }, 3500);
     },
 
-    showModal(title, bodyHTML, footerHTML) {
+    showModal(title, bodyHTML, footerHTML, hideClose) {
         const o = document.getElementById('modal-overlay');
         o.innerHTML = `<div class="modal">
             <div class="modal-header">
                 <h3 class="modal-title">${this.esc(title)}</h3>
-                <button class="modal-close" onclick="UI.closeModal()">✕</button>
+                ${hideClose ? '' : '<button class="modal-close" onclick="UI.closeModal()">✕</button>'}
             </div>
             <div class="modal-body">${bodyHTML}</div>
             ${footerHTML ? `<div class="modal-footer">${footerHTML}</div>` : ''}
@@ -62,7 +63,67 @@ const UI = {
         inp.type = inp.type === 'password' ? 'text' : 'password';
     },
 
-    esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; },
+    // HTML-escapes a value for use in text content or a quoted attribute.
+    // Escapes quotes too (unlike the old textContent/innerHTML trick this
+    // replaced) — plain attribute values like title="${UI.esc(name)}" are
+    // built by string concatenation throughout this codebase, and a
+    // filename containing a bare " or ' could otherwise break out of the
+    // attribute and inject new ones (a real stored-XSS vector via renames).
+    esc(s) {
+        if (s === null || s === undefined) return '';
+        return String(s).replace(/[&<>"']/g, c => ESC_CHARS[c]);
+    },
+
+    // Safely embeds a JS value as an inline-handler argument, e.g.
+    // onclick="Foo.bar(${UI.escJson(item)})". JSON.stringify produces valid
+    // JS-literal syntax (and correctly backslash-escapes quotes inside
+    // strings); the follow-up HTML-escape lets the result sit inside a
+    // "-delimited attribute without the browser's HTML entity decoding
+    // (which runs before the attribute is executed as JS) reintroducing a
+    // raw quote that could break out of the JS literal.
+    escJson(v) {
+        return JSON.stringify(v).replace(/[&<>"']/g, c => ESC_CHARS[c]);
+    },
+
+    // Flattens a scope's folder list (parent_id links) into a depth-ordered
+    // array suitable for an indented <select> — used by the "move to" picker.
+    flattenFolderTree(folders) {
+        const byParent = {};
+        for (const f of folders) {
+            const key = f.parent_id || 'root';
+            (byParent[key] = byParent[key] || []).push(f);
+        }
+        const lines = [];
+        const visited = new Set();
+        const walk = (parentKey, depth) => {
+            const kids = (byParent[parentKey] || []).slice().sort((a, b) => a.name.localeCompare(b.name));
+            for (const f of kids) {
+                // Guards against hanging the tab if a parent_id cycle ever
+                // made it into the data (shouldn't happen — the backend
+                // rejects moves that would create one — but a walker with no
+                // guard at all would infinite-loop instead of just being
+                // wrong if one slipped through some other way).
+                if (visited.has(f.id)) continue;
+                visited.add(f.id);
+                lines.push({ id: f.id, name: f.name, depth });
+                walk(f.id, depth + 1);
+            }
+        };
+        walk('root', 0);
+        return lines;
+    },
+
+    // Shared double-click dispatch for non-folder items: preview media
+    // inline, open office docs in Collabora, or fall back to a download.
+    // Centralized so every file list (personal/project/common/admin
+    // browsers/shares) makes this decision the same way instead of
+    // duplicating the branch — and so item names never need to be
+    // string-interpolated into inline JS handlers (see escJson above).
+    openFile(id, name, size) {
+        if (this.isMediaPreviewable(name)) return PreviewPage.open(id, name, size);
+        if (this.isCollaboraViewable(name)) return EditorPage.open(id, name);
+        return FilesPage.download(id, name);
+    },
 
     formatBytes(b) {
         if (!b || b === 0) return '0 B';

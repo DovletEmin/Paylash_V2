@@ -5,6 +5,7 @@ import (
 	"log"
 	"paylash/internal/config"
 	"paylash/internal/db"
+	"paylash/internal/janitor"
 	"paylash/internal/server"
 	"paylash/internal/storage"
 )
@@ -34,11 +35,14 @@ func main() {
 
 	// Connect to MinIO
 	minioClient, err := storage.NewMinioClient(
-		cfg.MinioEndpoint, cfg.MinioAccessKey, cfg.MinioSecretKey, cfg.MinioUseSSL,
+		cfg.MinioEndpoint, cfg.MinioAccessKey, cfg.MinioSecretKey, cfg.MinioUseSSL, cfg.MinioPublicEndpoint,
 	)
 	if err != nil {
 		log.Fatal("failed to connect to MinIO:", err)
 	}
+
+	// Daily background cleanup (expired trash, etc.)
+	go janitor.Run(database, minioClient)
 
 	// Start server
 	srv := server.New(cfg, database, minioClient, webFS)

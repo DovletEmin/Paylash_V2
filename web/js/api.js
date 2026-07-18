@@ -17,6 +17,10 @@ const API = {
         return data;
     },
 
+    public: {
+        config() { return API._request('GET', '/api/public/config'); },
+    },
+
     auth: {
         register(username, password, fullName) {
             return API._request('POST', '/api/auth/register', { username, password, full_name: fullName });
@@ -51,6 +55,8 @@ const API = {
             if (params.project_id) url += `&project_id=${params.project_id}`;
             if (params.sort) url += `&sort=${params.sort}`;
             if (params.order) url += `&order=${params.order}`;
+            if (params.limit) url += `&limit=${params.limit}`;
+            if (params.offset) url += `&offset=${params.offset}`;
             return API._request('GET', url);
         },
         upload(file, scope, folderId, projectId, onProgress) {
@@ -81,8 +87,8 @@ const API = {
                 xhr.send(form);
             });
         },
-        download(id) { window.open(`/api/files/${id}/download`, '_blank'); },
         rename(id, name) { return API._request('PATCH', `/api/files/${id}`, { name }); },
+        move(id, folderId) { return API._request('PATCH', `/api/files/${id}/move`, { folder_id: folderId || null }); },
         delete(id) { return API._request('DELETE', `/api/files/${id}`); },
         search(q) { return API._request('GET', `/api/search?q=${encodeURIComponent(q)}`); },
         storageUsage(scope, projectId) {
@@ -96,16 +102,47 @@ const API = {
             if (projectId) body.project_id = projectId;
             return API._request('POST', '/api/files/create', body);
         },
+        versions(id) { return API._request('GET', `/api/files/${id}/versions`); },
+        restoreVersion(id, versionId) { return API._request('POST', `/api/files/${id}/versions/${encodeURIComponent(versionId)}/restore`); },
+        downloadVersion(id, versionId) { window.open(`/api/files/${id}/versions/${encodeURIComponent(versionId)}/download`, '_blank'); },
     },
 
     folders: {
+        tree(scope, projectId) {
+            let url = `/api/folders/tree?scope=${scope || 'personal'}`;
+            if (projectId) url += `&project_id=${projectId}`;
+            return API._request('GET', url);
+        },
         create(name, scope, parentId, projectId) {
             const body = { name, scope: scope || 'personal', parent_id: parentId || null };
             if (projectId) body.project_id = projectId;
             return API._request('POST', '/api/folders', body);
         },
         rename(id, name) { return API._request('PATCH', `/api/folders/${id}`, { name }); },
+        move(id, parentId) { return API._request('PATCH', `/api/folders/${id}/move`, { parent_id: parentId || null }); },
         delete(id) { return API._request('DELETE', `/api/folders/${id}`); },
+    },
+
+    uploads: {
+        init(fileName, size, scope, folderId, projectId) {
+            const body = { file_name: fileName, size, scope: scope || 'personal' };
+            if (folderId) body.folder_id = folderId;
+            if (projectId) body.project_id = projectId;
+            return API._request('POST', '/api/uploads/init', body);
+        },
+        status(id) { return API._request('GET', `/api/uploads/${id}`); },
+        partURL(id, partNumber) { return API._request('GET', `/api/uploads/${id}/parts/${partNumber}/url`); },
+        complete(id, parts) { return API._request('POST', `/api/uploads/${id}/complete`, { parts }); },
+        abort(id) { return API._request('DELETE', `/api/uploads/${id}`); },
+    },
+
+    trash: {
+        list() { return API._request('GET', '/api/trash'); },
+        restoreFile(id) { return API._request('POST', `/api/trash/files/${id}/restore`); },
+        restoreFolder(id) { return API._request('POST', `/api/trash/folders/${id}/restore`); },
+        purgeFile(id) { return API._request('DELETE', `/api/trash/files/${id}`); },
+        purgeFolder(id) { return API._request('DELETE', `/api/trash/folders/${id}`); },
+        empty() { return API._request('DELETE', '/api/trash'); },
     },
 
     sharing: {
@@ -138,6 +175,11 @@ const API = {
 
     admin: {
         dashboard() { return API._request('GET', '/api/admin/dashboard'); },
+        auditLog(limit) { return API._request('GET', `/api/admin/audit-log${limit ? '?limit=' + limit : ''}`); },
+        uploads: {
+            list() { return API._request('GET', '/api/admin/uploads'); },
+            abort(id) { return API._request('DELETE', `/api/admin/uploads/${id}`); },
+        },
         publicQuota: {
             get() { return API._request('GET', '/api/admin/public-quota'); },
             set(quotaMB) { return API._request('PATCH', '/api/admin/public-quota', { quota_mb: quotaMB }); },

@@ -96,6 +96,10 @@ func (d *DB) Migrate() error {
 			created_at   TIMESTAMPTZ DEFAULT NOW(),
 			updated_at   TIMESTAMPTZ DEFAULT NOW()
 		)`,
+		// visibility must exist before any migration below references it —
+		// on a brand-new database the files table above is just created
+		// without that column (it was bolted on later in this app's history).
+		`ALTER TABLE files ADD COLUMN IF NOT EXISTS visibility VARCHAR(20) NOT NULL DEFAULT 'private'`,
 		`UPDATE folders SET scope = 'project' WHERE scope = 'group'`,
 		`UPDATE files SET scope = 'project' WHERE scope = 'group'`,
 		`UPDATE folders SET scope = 'common' WHERE scope = 'public'`,
@@ -138,8 +142,45 @@ func (d *DB) Migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_wopi_tokens_token ON wopi_tokens(token)`,
 		`CREATE INDEX IF NOT EXISTS idx_project_members_project ON project_members(project_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_project_members_user ON project_members(user_id)`,
-		`ALTER TABLE files ADD COLUMN IF NOT EXISTS visibility VARCHAR(20) NOT NULL DEFAULT 'private'`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url VARCHAR(500) DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE`,
+		`ALTER TABLE files ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ NULL`,
+		`ALTER TABLE folders ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_files_deleted_at ON files(deleted_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_folders_deleted_at ON folders(deleted_at)`,
+		`CREATE TABLE IF NOT EXISTS audit_log (
+			id          SERIAL PRIMARY KEY,
+			actor_id    INT REFERENCES users(id) ON DELETE SET NULL,
+			actor_name  VARCHAR(255) NOT NULL DEFAULT '',
+			action      VARCHAR(50) NOT NULL,
+			target_type VARCHAR(50) NOT NULL DEFAULT '',
+			target_id   INT,
+			target_name VARCHAR(500) NOT NULL DEFAULT '',
+			details     JSONB,
+			created_at  TIMESTAMPTZ DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_log_actor ON audit_log(actor_id)`,
+		`CREATE TABLE IF NOT EXISTS upload_sessions (
+			id              VARCHAR(64) PRIMARY KEY,
+			minio_upload_id TEXT NOT NULL,
+			bucket          VARCHAR(255) NOT NULL,
+			object_key      VARCHAR(1000) NOT NULL,
+			owner_id        INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			scope           VARCHAR(20) NOT NULL,
+			project_id      INT REFERENCES projects(id) ON DELETE SET NULL,
+			folder_id       INT REFERENCES folders(id) ON DELETE SET NULL,
+			file_name       VARCHAR(500) NOT NULL,
+			mime_type       VARCHAR(255) NOT NULL DEFAULT 'application/octet-stream',
+			total_size      BIGINT NOT NULL,
+			part_size       BIGINT NOT NULL,
+			part_count      INT NOT NULL,
+			status          VARCHAR(20) NOT NULL DEFAULT 'in_progress',
+			created_at      TIMESTAMPTZ DEFAULT NOW(),
+			updated_at      TIMESTAMPTZ DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_upload_sessions_owner ON upload_sessions(owner_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_upload_sessions_status ON upload_sessions(status, updated_at)`,
 		`CREATE TABLE IF NOT EXISTS settings (
 			key   VARCHAR(100) PRIMARY KEY,
 			value TEXT NOT NULL DEFAULT ''

@@ -45,20 +45,6 @@ func AdminMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func CORSMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		w.Header().Set("Access-Control-Allow-Credentials", "true")
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
 func LoggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -80,8 +66,8 @@ func SeedAdmin(database *db.DB) error {
 		return err
 	}
 	_, err = database.Exec(
-		`INSERT INTO users (username, password_hash, display_name, role)
-		 VALUES ('admin', $1, 'Administrator', 'admin')
+		`INSERT INTO users (username, password_hash, display_name, role, must_change_password)
+		 VALUES ('admin', $1, 'Administrator', 'admin', TRUE)
 		 ON CONFLICT (username) DO NOTHING`, hash,
 	)
 	if err != nil {

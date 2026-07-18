@@ -37,6 +37,7 @@ func (s *Server) routes(webFS embed.FS) {
 	wopiH := wopi.NewHandler(s.db, s.minio, s.cfg)
 
 	// Public routes
+	s.mux.HandleFunc("GET /api/public/config", h.PublicConfig)
 	s.mux.HandleFunc("POST /api/auth/register", h.Register)
 	s.mux.HandleFunc("POST /api/auth/login", h.Login)
 	s.mux.HandleFunc("POST /api/auth/logout", h.Logout)
@@ -53,13 +54,28 @@ func (s *Server) routes(webFS embed.FS) {
 	s.mux.Handle("POST /api/files/create", auth(http.HandlerFunc(h.CreateBlankFile)))
 	s.mux.Handle("GET /api/files/{id}/download", auth(http.HandlerFunc(h.DownloadFile)))
 	s.mux.Handle("PATCH /api/files/{id}", auth(http.HandlerFunc(h.RenameFile)))
+	s.mux.Handle("PATCH /api/files/{id}/move", auth(http.HandlerFunc(h.MoveFile)))
 	s.mux.Handle("DELETE /api/files/{id}", auth(http.HandlerFunc(h.DeleteFile)))
 	s.mux.Handle("GET /api/search", auth(http.HandlerFunc(h.SearchFiles)))
 	s.mux.Handle("GET /api/storage/usage", auth(http.HandlerFunc(h.StorageUsage)))
 
+	// File versions (MinIO bucket versioning)
+	s.mux.Handle("GET /api/files/{id}/versions", auth(http.HandlerFunc(h.ListFileVersions)))
+	s.mux.Handle("POST /api/files/{id}/versions/{versionId}/restore", auth(http.HandlerFunc(h.RestoreFileVersion)))
+	s.mux.Handle("GET /api/files/{id}/versions/{versionId}/download", auth(http.HandlerFunc(h.DownloadFileVersion)))
+
+	// Large-file resumable upload (presigned multipart direct-to-MinIO)
+	s.mux.Handle("POST /api/uploads/init", auth(http.HandlerFunc(h.InitUpload)))
+	s.mux.Handle("GET /api/uploads/{id}", auth(http.HandlerFunc(h.UploadStatus)))
+	s.mux.Handle("GET /api/uploads/{id}/parts/{n}/url", auth(http.HandlerFunc(h.UploadPartURL)))
+	s.mux.Handle("POST /api/uploads/{id}/complete", auth(http.HandlerFunc(h.CompleteUpload)))
+	s.mux.Handle("DELETE /api/uploads/{id}", auth(http.HandlerFunc(h.AbortUpload)))
+
 	// Folders
+	s.mux.Handle("GET /api/folders/tree", auth(http.HandlerFunc(h.ListFolderTree)))
 	s.mux.Handle("POST /api/folders", auth(http.HandlerFunc(h.CreateFolder)))
 	s.mux.Handle("PATCH /api/folders/{id}", auth(http.HandlerFunc(h.RenameFolder)))
+	s.mux.Handle("PATCH /api/folders/{id}/move", auth(http.HandlerFunc(h.MoveFolder)))
 	s.mux.Handle("DELETE /api/folders/{id}", auth(http.HandlerFunc(h.DeleteFolder)))
 
 	// Sharing
@@ -73,6 +89,14 @@ func (s *Server) routes(webFS embed.FS) {
 	s.mux.Handle("GET /api/files/{id}/shares", auth(http.HandlerFunc(h.GetSharesForFile)))
 	s.mux.Handle("GET /api/users/search", auth(http.HandlerFunc(h.SearchUsers)))
 
+	// Trash (soft-delete)
+	s.mux.Handle("GET /api/trash", auth(http.HandlerFunc(h.ListTrash)))
+	s.mux.Handle("DELETE /api/trash", auth(http.HandlerFunc(h.EmptyTrash)))
+	s.mux.Handle("POST /api/trash/files/{id}/restore", auth(http.HandlerFunc(h.RestoreFile)))
+	s.mux.Handle("DELETE /api/trash/files/{id}", auth(http.HandlerFunc(h.PurgeFile)))
+	s.mux.Handle("POST /api/trash/folders/{id}/restore", auth(http.HandlerFunc(h.RestoreFolder)))
+	s.mux.Handle("DELETE /api/trash/folders/{id}", auth(http.HandlerFunc(h.PurgeFolder)))
+
 	// Projects the current employee can see (for the sidebar)
 	s.mux.Handle("GET /api/projects", auth(http.HandlerFunc(h.ListMyProjects)))
 
@@ -81,6 +105,7 @@ func (s *Server) routes(webFS embed.FS) {
 
 	// Admin routes
 	s.mux.Handle("GET /api/admin/dashboard", auth(AdminMiddleware(http.HandlerFunc(h.AdminDashboard))))
+	s.mux.Handle("GET /api/admin/audit-log", auth(AdminMiddleware(http.HandlerFunc(h.AdminAuditLog))))
 	s.mux.Handle("GET /api/admin/projects", auth(AdminMiddleware(http.HandlerFunc(h.AdminListProjects))))
 	s.mux.Handle("POST /api/admin/projects", auth(AdminMiddleware(http.HandlerFunc(h.AdminCreateProject))))
 	s.mux.Handle("PATCH /api/admin/projects/{id}", auth(AdminMiddleware(http.HandlerFunc(h.AdminUpdateProject))))
@@ -99,6 +124,8 @@ func (s *Server) routes(webFS embed.FS) {
 	s.mux.Handle("POST /api/admin/users/import", auth(AdminMiddleware(http.HandlerFunc(h.AdminImportUsers))))
 	s.mux.Handle("GET /api/admin/public-quota", auth(AdminMiddleware(http.HandlerFunc(h.AdminGetPublicQuota))))
 	s.mux.Handle("PATCH /api/admin/public-quota", auth(AdminMiddleware(http.HandlerFunc(h.AdminSetPublicQuota))))
+	s.mux.Handle("GET /api/admin/uploads", auth(AdminMiddleware(http.HandlerFunc(h.AdminListUploads))))
+	s.mux.Handle("DELETE /api/admin/uploads/{id}", auth(AdminMiddleware(http.HandlerFunc(h.AdminAbortUpload))))
 
 	// WOPI endpoints (accessed by Collabora, token-based auth)
 	s.mux.HandleFunc("GET /wopi/files/{id}", wopiH.CheckFileInfo)
@@ -127,7 +154,10 @@ func (s *Server) routes(webFS embed.FS) {
 
 func (s *Server) Start() error {
 	addr := fmt.Sprintf(":%d", s.cfg.Port)
-	handler := LoggingMiddleware(CORSMiddleware(s.mux))
+	// The frontend and API are always served same-origin (embedded SPA +
+	// API on this same binary, fronted by Caddy under one hostname) — no
+	// cross-origin CORS headers are needed, so none are sent.
+	handler := LoggingMiddleware(s.mux)
 	log.Printf("Paylash server starting on http://localhost%s", addr)
 	return http.ListenAndServe(addr, handler)
 }

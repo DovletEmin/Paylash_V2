@@ -1,16 +1,20 @@
 package models
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type User struct {
-	ID           int       `json:"id"`
-	Username     string    `json:"username"`
-	PasswordHash string    `json:"-"`
-	DisplayName  string    `json:"full_name"`
-	Role         string    `json:"role"`
-	QuotaBytes   int64     `json:"quota_bytes"`
-	AvatarURL    string    `json:"avatar_url"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID                 int       `json:"id"`
+	Username           string    `json:"username"`
+	PasswordHash       string    `json:"-"`
+	DisplayName        string    `json:"full_name"`
+	Role               string    `json:"role"`
+	QuotaBytes         int64     `json:"quota_bytes"`
+	AvatarURL          string    `json:"avatar_url"`
+	MustChangePassword bool      `json:"must_change_password"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 // Project is an admin-created folder with an explicit member list (ACL).
@@ -50,30 +54,32 @@ type ProjectView struct {
 }
 
 type Folder struct {
-	ID        int       `json:"id"`
-	Name      string    `json:"name"`
-	ParentID  *int      `json:"parent_id"`
-	OwnerID   int       `json:"owner_id"`
-	ProjectID *int      `json:"project_id"`
-	Scope     string    `json:"scope"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        int        `json:"id"`
+	Name      string     `json:"name"`
+	ParentID  *int       `json:"parent_id"`
+	OwnerID   int        `json:"owner_id"`
+	ProjectID *int       `json:"project_id"`
+	Scope     string     `json:"scope"`
+	DeletedAt *time.Time `json:"deleted_at,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
 }
 
 type File struct {
-	ID          int       `json:"id"`
-	Name        string    `json:"name"`
-	MimeType    string    `json:"mime_type"`
-	SizeBytes   int64     `json:"size_bytes"`
-	MinioBucket string    `json:"minio_bucket"`
-	MinioKey    string    `json:"minio_key"`
-	FolderID    *int      `json:"folder_id"`
-	OwnerID     int       `json:"owner_id"`
-	ProjectID   *int      `json:"project_id"`
-	Scope       string    `json:"scope"`
-	Visibility  string    `json:"visibility"`
-	Version     int       `json:"version"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          int        `json:"id"`
+	Name        string     `json:"name"`
+	MimeType    string     `json:"mime_type"`
+	SizeBytes   int64      `json:"size_bytes"`
+	MinioBucket string     `json:"minio_bucket"`
+	MinioKey    string     `json:"minio_key"`
+	FolderID    *int       `json:"folder_id"`
+	OwnerID     int        `json:"owner_id"`
+	ProjectID   *int       `json:"project_id"`
+	Scope       string     `json:"scope"`
+	Visibility  string     `json:"visibility"`
+	Version     int        `json:"version"`
+	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 type FileShare struct {
@@ -186,6 +192,57 @@ type SharedByMeView struct {
 	SharedWithName string    `json:"shared_with_name"`
 	Permission     string    `json:"permission"`
 	SharedAt       time.Time `json:"shared_at"`
+}
+
+// UploadSession tracks an in-progress resumable/chunked large-file upload —
+// the browser talks to MinIO directly for the actual bytes (see
+// internal/api/uploads.go), this row is just enough state to resume after a
+// reload and to finalize/abort the underlying MinIO multipart upload.
+type UploadSession struct {
+	ID            string    `json:"id"`
+	MinioUploadID string    `json:"-"`
+	Bucket        string    `json:"-"`
+	ObjectKey     string    `json:"-"`
+	OwnerID       int       `json:"owner_id"`
+	Scope         string    `json:"scope"`
+	ProjectID     *int      `json:"project_id"`
+	FolderID      *int      `json:"folder_id"`
+	FileName      string    `json:"file_name"`
+	MimeType      string    `json:"mime_type"`
+	TotalSize     int64     `json:"total_size"`
+	PartSize      int64     `json:"part_size"`
+	PartCount     int       `json:"part_count"`
+	Status        string    `json:"status"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// UploadSessionView is an in-progress upload session joined with its
+// owner's name — the admin panel's view into large uploads under way.
+type UploadSessionView struct {
+	ID               string    `json:"id"`
+	FileName         string    `json:"file_name"`
+	TotalSize        int64     `json:"total_size"`
+	PartCount        int       `json:"part_count"`
+	Scope            string    `json:"scope"`
+	Status           string    `json:"status"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+	OwnerID          int       `json:"owner_id"`
+	OwnerUsername    string    `json:"owner_username"`
+	OwnerDisplayName string    `json:"owner_display_name"`
+}
+
+type AuditLogEntry struct {
+	ID         int             `json:"id"`
+	ActorID    *int            `json:"actor_id"`
+	ActorName  string          `json:"actor_name"`
+	Action     string          `json:"action"`
+	TargetType string          `json:"target_type"`
+	TargetID   *int            `json:"target_id"`
+	TargetName string          `json:"target_name"`
+	Details    json.RawMessage `json:"details,omitempty"`
+	CreatedAt  time.Time       `json:"created_at"`
 }
 
 type UserSearchResult struct {

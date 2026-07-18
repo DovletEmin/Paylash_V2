@@ -2,6 +2,11 @@
 const PreviewPage = {
     currentFileId: null,
     currentFileName: '',
+    currentFileSize: 0,
+    // Text preview fetches the whole file into a JS string to render it —
+    // fine for a config file or log, not for something CAD/render-scale.
+    // Above this, point the user at Download instead of hanging the tab.
+    TEXT_PREVIEW_LIMIT: 5 * 1024 * 1024,
 
     render() {
         return `
@@ -20,9 +25,10 @@ const PreviewPage = {
         </div>`;
     },
 
-    async open(fileId, fileName) {
+    async open(fileId, fileName, size) {
         this.currentFileId = fileId;
         this.currentFileName = fileName;
+        this.currentFileSize = size || 0;
         App.navigate('preview');
     },
 
@@ -43,6 +49,10 @@ const PreviewPage = {
         } else if (type === 'video') {
             c.innerHTML = `<div class="preview-media preview-video"><video controls autoplay preload="metadata"><source src="${url}" type="${this.guessMime()}">Siziň brauzeriňiz wideo görkezmeýär.</video></div>`;
         } else if (type === 'text') {
+            if (this.currentFileSize > this.TEXT_PREVIEW_LIMIT) {
+                c.innerHTML = `<div class="empty-state"><p>Faýl görkezmek üçin gaty uly (${UI.formatBytes(this.currentFileSize)})</p><p class="text-muted">Ýüklläp görüň</p><button class="btn btn-primary btn-sm" style="margin-top:10px" onclick="PreviewPage.download()">${UI.icons.download} Ýükle</button></div>`;
+                return;
+            }
             try {
                 const res = await fetch(url, { credentials: 'same-origin' });
                 if (!res.ok) throw new Error('Ýükläp bolmady');

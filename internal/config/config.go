@@ -6,15 +6,16 @@ import (
 )
 
 type Config struct {
-	Port          int
-	DBURL         string
-	MinioEndpoint string
-	MinioAccessKey string
-	MinioSecretKey string
-	MinioUseSSL   bool
-	CollaboraURL  string
-	BaseURL       string
-	JWTSecret     string
+	Port                int
+	DBURL               string
+	MinioEndpoint       string
+	MinioAccessKey      string
+	MinioSecretKey      string
+	MinioUseSSL         bool
+	MinioPublicEndpoint string
+	CollaboraURL        string
+	BaseURL             string
+	AllowRegistration   bool
 }
 
 func Load() *Config {
@@ -25,9 +26,19 @@ func Load() *Config {
 		MinioAccessKey: getEnv("PAYLASH_MINIO_ACCESS_KEY", "paylash"),
 		MinioSecretKey: getEnv("PAYLASH_MINIO_SECRET_KEY", "paylash_secret"),
 		MinioUseSSL:   getEnvBool("PAYLASH_MINIO_USE_SSL", false),
-		CollaboraURL:  getEnv("PAYLASH_COLLABORA_URL", "http://localhost:9980"),
-		BaseURL:       getEnv("PAYLASH_BASE_URL", "http://localhost:8080"),
-		JWTSecret:     getEnv("PAYLASH_JWT_SECRET", "paylash-dev-secret-change-me"),
+		// Host:port the BROWSER can reach MinIO's S3 API on directly, used only
+		// to sign presigned URLs for large resumable uploads (bulk bytes flow
+		// straight from the browser to MinIO, bypassing the app entirely). Empty
+		// disables that upload path — see internal/api/uploads.go.
+		MinioPublicEndpoint: getEnv("PAYLASH_MINIO_PUBLIC_ENDPOINT", ""),
+		CollaboraURL:        getEnv("PAYLASH_COLLABORA_URL", "http://localhost:9980"),
+		BaseURL:             getEnv("PAYLASH_BASE_URL", "http://localhost:8080"),
+		// Self-registration is on by default (matches prior behavior, where
+		// it wasn't configurable at all). Studios that rely solely on
+		// admin-managed onboarding (manual + CSV/XLSX import) can close it —
+		// an open registration endpoint on a LAN hands instant access to the
+		// company-wide "common" space to anyone who can reach the server.
+		AllowRegistration: getEnvBool("PAYLASH_ALLOW_REGISTRATION", true),
 	}
 }
 

@@ -18,7 +18,7 @@ const AuthPage = {
                     </div>
                     <button type="submit" class="btn btn-primary btn-block" id="login-btn">Giriş</button>
                 </form>
-                <p class="auth-link">Hasabyňyz ýokmy? <a onclick="App.navigate('register')">Hasaba durmak</a></p>
+                ${App.config.allow_registration ? `<p class="auth-link">Hasabyňyz ýokmy? <a onclick="App.navigate('register')">Hasaba durmak</a></p>` : ''}
             </div>
         </div>`;
     },
@@ -37,6 +37,7 @@ const AuthPage = {
                 await API.auth.login(u, p);
                 await App.checkAuth();
                 App.navigate('files');
+                App.checkForcedPasswordChange();
             } catch (err) {
                 UI.toast(err.message || 'Giriş ýalňyşlygy', 'error');
             } finally { btn.disabled = false; btn.textContent = 'Giriş'; }

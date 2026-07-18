@@ -156,7 +156,7 @@ CREATE TABLE files (
 CREATE TABLE file_shares (
     id          SERIAL PRIMARY KEY,
     file_id     INT REFERENCES files(id) ON DELETE CASCADE,
-    shared_by   INT REFERENCES users(id) ON DELETE CASCADE,
+    shared_by   INT REFERENCES users(id) ON DELETE CASCADE, 
     shared_with INT REFERENCES users(id) ON DELETE CASCADE,
     permission  VARCHAR(20) DEFAULT 'view',    -- 'view' | 'edit'
     is_public   BOOLEAN DEFAULT FALSE,         -- доступ всем, у кого есть ссылка на шеринг

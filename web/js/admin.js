@@ -17,6 +17,8 @@ const AdminPage = {
                     <a class="admin-nav-item ${this.currentTab === 'users' ? 'active' : ''}" onclick="AdminPage.switchTab('users')">${UI.icons.user} Işgärler</a>
                     <a class="admin-nav-item ${this.currentTab === 'project-files' ? 'active' : ''}" onclick="AdminPage.switchTab('project-files')">📁 Taslama faýllary</a>
                     <a class="admin-nav-item ${this.currentTab === 'common-files' ? 'active' : ''}" onclick="AdminPage.switchTab('common-files')">🌐 Umumy faýllar</a>
+                    <a class="admin-nav-item ${this.currentTab === 'audit-log' ? 'active' : ''}" onclick="AdminPage.switchTab('audit-log')">🕓 Žurnal</a>
+                    <a class="admin-nav-item ${this.currentTab === 'uploads' ? 'active' : ''}" onclick="AdminPage.switchTab('uploads')">⬆ Ýüklemeler</a>
                 </nav>
             </div>
             <div class="admin-content" id="admin-content"></div>
@@ -28,7 +30,7 @@ const AdminPage = {
     async switchTab(tab) {
         this.currentTab = tab;
         document.querySelectorAll('.admin-nav-item').forEach((el, i) => {
-            el.classList.toggle('active', ['dashboard','projects','users','project-files','common-files'][i] === tab);
+            el.classList.toggle('active', ['dashboard','projects','users','project-files','common-files','audit-log','uploads'][i] === tab);
         });
         const c = document.getElementById('admin-content');
         if (!c) return;
@@ -39,6 +41,8 @@ const AdminPage = {
             case 'users':         await this.renderUsers(c); break;
             case 'project-files': await this.renderProjectFiles(c); break;
             case 'common-files':  await this.renderCommonFiles(c); break;
+            case 'audit-log':     await this.renderAuditLog(c); break;
+            case 'uploads':       await this.renderUploads(c); break;
         }
     },
 
@@ -84,8 +88,8 @@ const AdminPage = {
             <p class="text-muted" style="font-size:.82rem;margin-bottom:12px">Her taslama — aýratyn papka. Diňe siziň goşan işgärleriňiz ol papka girip bilýär.</p>
             <table class="admin-table"><thead><tr><th>ID</th><th>Ady</th><th>Kwota</th><th>Hereketler</th></tr></thead><tbody>
             ${items.map(p => `<tr><td>${p.id}</td><td>${UI.esc(p.name)}</td><td>${UI.formatBytes(p.quota_bytes || 0)}</td><td>
-                <button class="btn btn-sm btn-ghost" onclick="AdminPage.showMembersModal(${p.id},'${UI.esc(p.name)}')">👥 Gatnaşyjylar</button>
-                <button class="btn btn-sm btn-ghost" onclick="AdminPage.showProjectModal(${p.id},'${UI.esc(p.name)}',${p.quota_bytes||0})">✏️</button>
+                <button class="btn btn-sm btn-ghost" onclick="AdminPage.showMembersModal(${p.id},${UI.escJson(p.name)})">👥 Gatnaşyjylar</button>
+                <button class="btn btn-sm btn-ghost" onclick="AdminPage.showProjectModal(${p.id},${UI.escJson(p.name)},${p.quota_bytes||0})">✏️</button>
                 <button class="btn btn-sm btn-danger" onclick="AdminPage.deleteProject(${p.id})">🗑</button></td></tr>`).join('')}
             ${!items.length ? '<tr><td colspan="4" class="text-muted text-center">Taslama ýok</td></tr>' : ''}
             </tbody></table>`;
@@ -216,7 +220,7 @@ const AdminPage = {
                 </div>
             </div>
             <table class="admin-table" id="admin-users-table"><thead><tr><th>ID</th><th>Ady</th><th>Ulanyjy ady</th><th>Rol</th><th>Kwota</th><th>Hereketler</th></tr></thead><tbody>
-            ${users.map(u => `<tr data-uid="${u.id}"><td>${u.id}</td><td>${UI.esc(u.full_name)}</td><td>@${UI.esc(u.username)}</td>
+            ${users.map(u => `<tr data-uid="${u.id}"><td>${u.id}</td><td>${UI.esc(u.full_name)} ${u.must_change_password ? `<span class="badge" title="Ilkinji girişde paroly çalyşmaly">🔑</span>` : ''}</td><td>@${UI.esc(u.username)}</td>
                 <td><span class="badge badge-${u.role === 'admin' ? 'admin' : 'user'}">${u.role === 'admin' ? 'Admin' : 'Işgär'}</span></td>
                 <td>${UI.formatBytes(u.quota_bytes || 0)}</td>
                 <td><button class="btn btn-sm btn-ghost" onclick="AdminPage.showEditUserModal(${u.id})">✏️</button>
@@ -230,6 +234,57 @@ const AdminPage = {
     filterUsers(q) {
         const lc = q.toLowerCase();
         document.querySelectorAll('#admin-users-table tbody tr').forEach(r => { r.style.display = r.textContent.toLowerCase().includes(lc) ? '' : 'none'; });
+    },
+
+    /* ── Audit log ── */
+    async renderAuditLog(el) {
+        try {
+            const entries = (await API.admin.auditLog()) || [];
+            el.innerHTML = `
+            <div class="admin-header"><h2>Žurnal</h2></div>
+            <table class="admin-table"><thead><tr><th>Wagt</th><th>Kim</th><th>Hereket</th><th>Nyşana</th><th>Jikme-jik</th></tr></thead><tbody>
+            ${entries.map(e => `<tr>
+                <td class="text-muted" style="white-space:nowrap">${new Date(e.created_at).toLocaleString('tk-TM')}</td>
+                <td>${UI.esc(e.actor_name || '—')}</td>
+                <td><code>${UI.esc(e.action)}</code></td>
+                <td>${UI.esc(e.target_name || (e.target_type ? e.target_type + ' #' + e.target_id : '—'))}</td>
+                <td class="text-muted" style="font-size:.75rem">${e.details ? UI.esc(JSON.stringify(e.details)) : ''}</td>
+            </tr>`).join('')}
+            ${!entries.length ? '<tr><td colspan="5" class="text-muted text-center">Ýazgy ýok</td></tr>' : ''}
+            </tbody></table>`;
+        } catch (e) { el.innerHTML = `<p class="text-muted">${UI.esc(e.message)}</p>`; }
+    },
+
+    /* ── Active large uploads ── */
+    async renderUploads(el) {
+        try {
+            const sessions = (await API.admin.uploads.list()) || [];
+            el.innerHTML = `
+            <div class="admin-header"><h2>Işjeň ýüklemeler</h2>
+                <p class="text-muted" style="font-size:.8rem">24 sagatdan bäri hereketsiz ýüklemeler awtomatik ýatyrylýar</p>
+            </div>
+            <table class="admin-table"><thead><tr><th>Faýl</th><th>Işgär</th><th>Ölçegi</th><th>Bölekler</th><th>Ýer</th><th>Soňky hereket</th><th></th></tr></thead><tbody>
+            ${sessions.map(s => `<tr>
+                <td>${UI.esc(s.file_name)}</td>
+                <td>${UI.esc(s.owner_display_name || s.owner_username)}</td>
+                <td>${UI.formatBytes(s.total_size)}</td>
+                <td>${s.part_count}</td>
+                <td>${UI.esc(s.scope)}</td>
+                <td class="text-muted">${UI.formatDate(s.updated_at)}</td>
+                <td><button class="btn btn-sm btn-danger" onclick="AdminPage.abortUpload('${s.id}')">Ýatyr</button></td>
+            </tr>`).join('')}
+            ${!sessions.length ? '<tr><td colspan="7" class="text-muted text-center">Işjeň ýükleme ýok</td></tr>' : ''}
+            </tbody></table>`;
+        } catch (e) { el.innerHTML = `<p class="text-muted">${UI.esc(e.message)}</p>`; }
+    },
+
+    async abortUpload(id) {
+        if (!confirm('Bu ýüklemäni ýatyrmak isleýärsiňizmi?')) return;
+        try {
+            await API.admin.uploads.abort(id);
+            UI.toast('Ýatyryldy', 'success');
+            this.switchTab('uploads');
+        } catch (e) { UI.toast(e.message, 'error'); }
     },
 
     showCreateUserModal() {
@@ -410,13 +465,14 @@ const AdminPage = {
         const items = [...st.folders.map(f => ({ ...f, isFolder: true })), ...st.files];
         if (!items.length) { c.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📂</div><p>Bu ýerde faýl ýok</p></div>'; return; }
         c.innerHTML = '<div class="file-grid">' + items.map(i => {
-            const icon = UI.fileIcon(i.name, i.isFolder);
             const cls = UI.fileIconClass(i.name, i.isFolder);
-            let dbl = i.isFolder ? `AdminPage._adminProjectFiles.folderId=${i.id};AdminPage.loadPjfFiles()` : `FilesPage.download(${i.id},'${UI.esc(i.name)}')`;
-            if (!i.isFolder && UI.isMediaPreviewable(i.name)) dbl = `PreviewPage.open(${i.id},'${UI.esc(i.name)}')`;
-            else if (!i.isFolder && UI.isCollaboraViewable(i.name)) dbl = `EditorPage.open(${i.id},'${UI.esc(i.name)}')`;
-            return `<div class="file-card" ondblclick="${dbl}" oncontextmenu="AdminPage.showPjfMenu(event,${JSON.stringify(i).replace(/"/g,'&quot;')})">
-                <div class="file-card-icon ${cls}">${icon}</div>
+            const dbl = i.isFolder ? `AdminPage._adminProjectFiles.folderId=${i.id};AdminPage.loadPjfFiles()` : `UI.openFile(${i.id},${UI.escJson(i.name)},${i.size_bytes || 0})`;
+            const ext = i.isFolder ? '' : i.name.split('.').pop().toLowerCase();
+            const iconHtml = !i.isFolder && UI.isImage(ext)
+                ? `<img class="file-card-thumb" src="/api/files/${i.id}/download" loading="lazy" alt="" onerror="FilesPage.thumbError(this)">`
+                : `<div class="file-card-icon ${cls}">${UI.fileIcon(i.name, i.isFolder)}</div>`;
+            return `<div class="file-card" ondblclick="${dbl}" oncontextmenu="AdminPage.showPjfMenu(event,${UI.escJson(i)})">
+                ${iconHtml}
                 <div class="file-card-name" title="${UI.esc(i.name)}">${UI.esc(i.name)}</div>
                 ${!i.isFolder ? `<div class="file-card-meta">${UI.formatBytes(i.size_bytes||0)}</div>` : '<div class="file-card-meta">Papka</div>'}
             </div>`;
@@ -444,24 +500,19 @@ const AdminPage = {
         if (!fileList.length || !this._adminProjectFiles.projectId) return;
         const prog = document.getElementById('pjf-upload-progress');
         prog.classList.remove('hidden');
+        const projectId = this._adminProjectFiles.projectId, folderId = this._adminProjectFiles.folderId;
         for (const file of fileList) {
             const id = 'pjfu-' + Math.random().toString(36).substr(2, 6);
-            prog.innerHTML += `<div class="upload-item" id="${id}"><div class="upload-item-name">${UI.esc(file.name)}</div><div class="upload-item-bar"><div class="upload-item-fill" id="${id}-f"></div></div><div class="upload-item-pct" id="${id}-p">0%</div></div>`;
+            const isLarge = typeof Uploader !== 'undefined' && Uploader.isLarge(file);
+            const resumeBadge = isLarge ? '<span class="upload-item-badge">↻ dowam eder</span>' : '';
+            prog.innerHTML += `<div class="upload-item" id="${id}"><div class="upload-item-name">${UI.esc(file.name)} ${resumeBadge}</div><div class="upload-item-bar"><div class="upload-item-fill" id="${id}-f"></div></div><div class="upload-item-pct" id="${id}-p">0%</div></div>`;
+            const onProgress = pct => { const f = document.getElementById(id+'-f'), p = document.getElementById(id+'-p'); if (f) f.style.width = pct+'%'; if (p) p.textContent = pct+'%'; };
             try {
-                const form = new FormData();
-                form.append('file', file);
-                form.append('scope', 'project');
-                form.append('project_id', String(this._adminProjectFiles.projectId));
-                if (this._adminProjectFiles.folderId) form.append('folder_id', String(this._adminProjectFiles.folderId));
-                await new Promise((resolve, reject) => {
-                    const xhr = new XMLHttpRequest();
-                    xhr.open('POST', '/api/files/upload');
-                    xhr.withCredentials = true;
-                    xhr.upload.onprogress = (ev) => { if (ev.lengthComputable) { const pct = Math.round(ev.loaded / ev.total * 100); const f = document.getElementById(id+'-f'), p = document.getElementById(id+'-p'); if (f) f.style.width = pct+'%'; if (p) p.textContent = pct+'%'; } };
-                    xhr.onload = () => { if (xhr.status >= 200 && xhr.status < 300) resolve(); else { try { reject(new Error(JSON.parse(xhr.responseText).error)); } catch { reject(new Error('Ýükläp bolmady')); } } };
-                    xhr.onerror = () => reject(new Error('Tor näsazlygy'));
-                    xhr.send(form);
-                });
+                if (isLarge) {
+                    await Uploader.uploadLarge(file, 'project', folderId, projectId, onProgress);
+                } else {
+                    await API.files.upload(file, 'project', folderId, projectId, onProgress);
+                }
                 document.getElementById(id)?.classList.add('upload-done');
             } catch (err) {
                 UI.toast(`"${file.name}": ${err.message}`, 'error');
@@ -547,13 +598,14 @@ const AdminPage = {
         const items = [...st.folders.map(f => ({ ...f, isFolder: true })), ...st.files];
         if (!items.length) { c.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📂</div><p>Bu ýerde faýl ýok</p></div>'; return; }
         c.innerHTML = '<div class="file-grid">' + items.map(i => {
-            const icon = UI.fileIcon(i.name, i.isFolder);
             const cls = UI.fileIconClass(i.name, i.isFolder);
-            let dbl = i.isFolder ? `AdminPage._adminCommonFiles.folderId=${i.id};AdminPage.loadCfFiles()` : `FilesPage.download(${i.id},'${UI.esc(i.name)}')`;
-            if (!i.isFolder && UI.isMediaPreviewable(i.name)) dbl = `PreviewPage.open(${i.id},'${UI.esc(i.name)}')`;
-            else if (!i.isFolder && UI.isCollaboraViewable(i.name)) dbl = `EditorPage.open(${i.id},'${UI.esc(i.name)}')`;
-            return `<div class="file-card" ondblclick="${dbl}" oncontextmenu="AdminPage.showCfMenu(event,${JSON.stringify(i).replace(/"/g,'&quot;')})">
-                <div class="file-card-icon ${cls}">${icon}</div>
+            const dbl = i.isFolder ? `AdminPage._adminCommonFiles.folderId=${i.id};AdminPage.loadCfFiles()` : `UI.openFile(${i.id},${UI.escJson(i.name)},${i.size_bytes || 0})`;
+            const ext = i.isFolder ? '' : i.name.split('.').pop().toLowerCase();
+            const iconHtml = !i.isFolder && UI.isImage(ext)
+                ? `<img class="file-card-thumb" src="/api/files/${i.id}/download" loading="lazy" alt="" onerror="FilesPage.thumbError(this)">`
+                : `<div class="file-card-icon ${cls}">${UI.fileIcon(i.name, i.isFolder)}</div>`;
+            return `<div class="file-card" ondblclick="${dbl}" oncontextmenu="AdminPage.showCfMenu(event,${UI.escJson(i)})">
+                ${iconHtml}
                 <div class="file-card-name" title="${UI.esc(i.name)}">${UI.esc(i.name)}</div>
                 ${!i.isFolder ? `<div class="file-card-meta">${UI.formatBytes(i.size_bytes||0)}</div>` : '<div class="file-card-meta">Papka</div>'}
             </div>`;
@@ -581,23 +633,19 @@ const AdminPage = {
         if (!fileList.length) return;
         const prog = document.getElementById('cf-upload-progress');
         prog.classList.remove('hidden');
+        const folderId = this._adminCommonFiles.folderId;
         for (const file of fileList) {
             const id = 'cfu-' + Math.random().toString(36).substr(2, 6);
-            prog.innerHTML += `<div class="upload-item" id="${id}"><div class="upload-item-name">${UI.esc(file.name)}</div><div class="upload-item-bar"><div class="upload-item-fill" id="${id}-f"></div></div><div class="upload-item-pct" id="${id}-p">0%</div></div>`;
+            const isLarge = typeof Uploader !== 'undefined' && Uploader.isLarge(file);
+            const resumeBadge = isLarge ? '<span class="upload-item-badge">↻ dowam eder</span>' : '';
+            prog.innerHTML += `<div class="upload-item" id="${id}"><div class="upload-item-name">${UI.esc(file.name)} ${resumeBadge}</div><div class="upload-item-bar"><div class="upload-item-fill" id="${id}-f"></div></div><div class="upload-item-pct" id="${id}-p">0%</div></div>`;
+            const onProgress = pct => { const f = document.getElementById(id+'-f'), p = document.getElementById(id+'-p'); if (f) f.style.width = pct+'%'; if (p) p.textContent = pct+'%'; };
             try {
-                const form = new FormData();
-                form.append('file', file);
-                form.append('scope', 'common');
-                if (this._adminCommonFiles.folderId) form.append('folder_id', String(this._adminCommonFiles.folderId));
-                await new Promise((resolve, reject) => {
-                    const xhr = new XMLHttpRequest();
-                    xhr.open('POST', '/api/files/upload');
-                    xhr.withCredentials = true;
-                    xhr.upload.onprogress = (ev) => { if (ev.lengthComputable) { const pct = Math.round(ev.loaded / ev.total * 100); const f = document.getElementById(id+'-f'), p = document.getElementById(id+'-p'); if (f) f.style.width = pct+'%'; if (p) p.textContent = pct+'%'; } };
-                    xhr.onload = () => { if (xhr.status >= 200 && xhr.status < 300) resolve(); else { try { reject(new Error(JSON.parse(xhr.responseText).error)); } catch { reject(new Error('Ýükläp bolmady')); } } };
-                    xhr.onerror = () => reject(new Error('Tor näsazlygy'));
-                    xhr.send(form);
-                });
+                if (isLarge) {
+                    await Uploader.uploadLarge(file, 'common', folderId, null, onProgress);
+                } else {
+                    await API.files.upload(file, 'common', folderId, null, onProgress);
+                }
                 document.getElementById(id)?.classList.add('upload-done');
             } catch (err) {
                 UI.toast(`"${file.name}": ${err.message}`, 'error');

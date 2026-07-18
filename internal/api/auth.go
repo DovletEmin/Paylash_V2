@@ -3,7 +3,9 @@ package api
 import (
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"path/filepath"
 	"paylash/internal/authutil"
 	"paylash/internal/models"
 	"paylash/internal/storage"
@@ -13,6 +15,10 @@ import (
 )
 
 func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
+	if !h.cfg.AllowRegistration {
+		writeError(w, http.StatusForbidden, "hasaba durmak öçürilen, admin bilen habarlaşyň")
+		return
+	}
 	var req models.RegisterRequest
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "nädogry maglumat")
@@ -45,7 +51,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.db.CreateUser(&req, hash)
+	user, err := h.db.CreateUser(&req, hash, false)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "hasap döredip bolmady")
 		return
@@ -68,16 +74,35 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.db.GetUserByUsername(strings.TrimSpace(req.Username))
+	username := strings.TrimSpace(req.Username)
+	userKey := "u:" + strings.ToLower(username)
+	ipKey := "ip:" + clientIP(r)
+
+	if h.loginLimiter.blocked(userKey) || h.loginLimiter.blocked(ipKey) {
+		if err := h.db.LogAction(nil, username, "login.blocked", "", nil, "", map[string]any{"ip": clientIP(r)}); err != nil {
+			log.Printf("audit log: %v", err)
+		}
+		writeError(w, http.StatusTooManyRequests, "köp synanyşyk boldy, birazdan gaýtadan synanyşyň")
+		return
+	}
+
+	user, err := h.db.GetUserByUsername(username)
 	if err != nil || user == nil {
+		h.loginLimiter.recordFailure(userKey)
+		h.loginLimiter.recordFailure(ipKey)
 		writeError(w, http.StatusUnauthorized, "nädogry ulanyjy ady ýa-da parol")
 		return
 	}
 
 	if !authutil.CheckPassword(req.Password, user.PasswordHash) {
+		h.loginLimiter.recordFailure(userKey)
+		h.loginLimiter.recordFailure(ipKey)
 		writeError(w, http.StatusUnauthorized, "nädogry ulanyjy ady ýa-da parol")
 		return
 	}
+
+	h.loginLimiter.reset(userKey)
+	h.loginLimiter.reset(ipKey)
 
 	session, err := h.db.CreateSession(user.ID)
 	if err != nil {
@@ -249,7 +274,7 @@ func (h *Handler) ServeAvatar(w http.ResponseWriter, r *http.Request) {
 	defer obj.Close()
 
 	w.Header().Set("Cache-Control", "public, max-age=86400")
-	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Content-Type", mimeFromExt(filepath.Ext(parts[1])))
 	io.Copy(w, obj)
 }
 
@@ -263,5 +288,20 @@ func extFromMime(mime string) string {
 		return ".webp"
 	default:
 		return ".jpg"
+	}
+}
+
+// mimeFromExt is extFromMime's inverse — used to serve the avatar back with
+// its real content type instead of hardcoding image/jpeg for every format.
+func mimeFromExt(ext string) string {
+	switch ext {
+	case ".png":
+		return "image/png"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	default:
+		return "image/jpeg"
 	}
 }

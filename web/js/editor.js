@@ -11,6 +11,7 @@ const EditorPage = {
                 <span class="editor-filename">${UI.esc(this.currentFileName)}</span>
                 <div class="editor-toolbar-right">
                     <button class="btn btn-ghost btn-sm" onclick="EditorPage.download()">${UI.icons.download} Ýükle</button>
+                    <button class="btn btn-ghost btn-sm" onclick="FilesPage.showVersionsModal({id:EditorPage.currentFileId,name:EditorPage.currentFileName})">🕓 Wersiýalar</button>
                     <button class="btn btn-ghost btn-sm" onclick="SharesPage.showShareModal({id:EditorPage.currentFileId,name:EditorPage.currentFileName})">${UI.icons.share} Paýlaş</button>
                 </div>
             </div>

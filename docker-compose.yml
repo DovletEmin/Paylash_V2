@@ -40,8 +40,23 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      # Large-file uploads PUT parts straight from the browser to MinIO
+      # (cross-origin from the app's own Caddy-fronted origin) and need to
+      # read back the ETag response header — wildcard is acceptable here
+      # since the deployment is LAN-only and every request still needs a
+      # valid SigV4 signature scoped to one specific bucket/key/part.
+      MINIO_API_CORS_ALLOW_ORIGIN: "*"
     ports:
-      - "9001:9001"
+      # Admin console — root-credential access to every bucket, bypassing
+      # the app's own per-file ACLs entirely. Bound to the host loopback
+      # only (not the LAN) so it's still reachable for troubleshooting via
+      # SSH tunnel / on the host itself, without handing every device on
+      # the studio's network a path around the app's permission model.
+      - "127.0.0.1:9001:9001"
+      # S3 API port, published so browsers can PUT large-file upload parts
+      # directly to MinIO (see PAYLASH_MINIO_PUBLIC_ENDPOINT below) — the app
+      # server itself keeps talking to MinIO over the internal Docker network.
+      - "9000:9000"
     volumes:
       - minio_data:/data
     healthcheck:
@@ -74,9 +89,10 @@ services:
       PAYLASH_MINIO_ACCESS_KEY: "${PAYLASH_MINIO_ACCESS_KEY}"
       PAYLASH_MINIO_SECRET_KEY: "${PAYLASH_MINIO_SECRET_KEY}"
       PAYLASH_MINIO_USE_SSL: "${PAYLASH_MINIO_USE_SSL}"
+      PAYLASH_MINIO_PUBLIC_ENDPOINT: "${PAYLASH_MINIO_PUBLIC_ENDPOINT}"
       PAYLASH_COLLABORA_URL: "${PAYLASH_COLLABORA_URL}"
       PAYLASH_BASE_URL: "${PAYLASH_BASE_URL}"
-      PAYLASH_JWT_SECRET: "${PAYLASH_JWT_SECRET}"
+      PAYLASH_ALLOW_REGISTRATION: "${PAYLASH_ALLOW_REGISTRATION:-true}"
     depends_on:
       postgres:
         condition: service_healthy

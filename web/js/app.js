@@ -3,12 +3,40 @@ const App = {
     user: null,
     currentPage: null,
     projects: [],
+    config: { allow_registration: true },
 
     async start() {
         this.initTheme();
         await this.checkAuth();
+        try { this.config = await API.public.config(); } catch {}
         window.addEventListener('popstate', () => this.route());
         this.route();
+        this.checkForcedPasswordChange();
+    },
+
+    checkForcedPasswordChange() {
+        if (this.user && this.user.must_change_password) this.showForcePasswordModal();
+    },
+
+    showForcePasswordModal() {
+        UI.showModal('Paroly çalyşmaly', `
+            <p class="text-muted" style="margin-bottom:12px">Ilkinji giriş — dowam etmezden ozal parolyňyzy üýtgediň.</p>
+            <div class="form-group"><label>Köne parol</label>${UI.passwordField('force-old-pw', 'Häzirki parol')}</div>
+            <div class="form-group"><label>Täze parol</label>${UI.passwordField('force-new-pw', 'Azyndan 6 simwol')}</div>`,
+            `<button class="btn btn-primary btn-block" onclick="App.saveForcedPassword()">Ýatda sakla</button>`,
+            true);
+    },
+
+    async saveForcedPassword() {
+        const oldPw = document.getElementById('force-old-pw').value;
+        const newPw = document.getElementById('force-new-pw').value;
+        if (!oldPw || newPw.length < 6) { UI.toast('Köne parol we azyndan 6 simwollyk täze parol giriziň', 'error'); return; }
+        try {
+            const updated = await API.auth.updateProfile(this.user.full_name, oldPw, newPw);
+            this.user = updated;
+            UI.closeModal();
+            UI.toast('Parol üýtgedildi', 'success');
+        } catch (e) { UI.toast(e.message, 'error'); }
     },
 
     async checkAuth() {
@@ -32,6 +60,7 @@ const App = {
 
         if (!this.user && !['login', 'register'].includes(page)) { this.navigate('login', true); return; }
         if (this.user && ['login', 'register'].includes(page)) { this.navigate('files', true); return; }
+        if (page === 'register' && !this.config.allow_registration) { this.navigate('login', true); return; }
         if (page === 'admin' && this.user && this.user.role !== 'admin') { this.navigate('files', true); return; }
 
         this.renderPage(page);
@@ -86,11 +115,14 @@ const App = {
                         <span>🌐</span> <span>Umumy</span>
                     </a>
                     ${this.projects.map(p => `
-                    <a class="nav-item nav-sub ${page === 'files' && FilesPage.currentScope === 'project' && FilesPage.currentProjectId === p.id ? 'active' : ''}" onclick="FilesPage.setScope('project',${p.id},'${UI.esc(p.name)}','${p.permission}');App.navigate('files')">
+                    <a class="nav-item nav-sub ${page === 'files' && FilesPage.currentScope === 'project' && FilesPage.currentProjectId === p.id ? 'active' : ''}" onclick="FilesPage.setScope('project',${p.id},${UI.escJson(p.name)},${UI.escJson(p.permission)});App.navigate('files')">
                         <span>${p.permission === 'view' ? '👁' : '📁'}</span> <span>${UI.esc(p.name)}</span>
                     </a>`).join('')}
                     <a class="nav-item ${page === 'shared' ? 'active' : ''}" onclick="App.navigate('shared')">
                         ${UI.icons.share} <span>Paýlaşylanlar</span>
+                    </a>
+                    <a class="nav-item ${page === 'trash' ? 'active' : ''}" onclick="App.navigate('trash')">
+                        ${UI.icons.trash} <span>Çöp gutusy</span>
                     </a>
                     ${isAdmin ? `
                     <div class="sidebar-section">Dolandyryş</div>
@@ -127,7 +159,7 @@ const App = {
     },
 
     pageTitle(p) {
-        return { files: 'Faýllar', shared: 'Paýlaşylanlar', admin: 'Dolandyryş' }[p] || 'Paylash';
+        return { files: 'Faýllar', shared: 'Paýlaşylanlar', trash: 'Çöp gutusy', admin: 'Dolandyryş' }[p] || 'Paylash';
     },
 
     initPage(page) {
@@ -136,6 +168,7 @@ const App = {
         switch (page) {
             case 'files':  c.innerHTML = FilesPage.render(); FilesPage.init(); break;
             case 'shared': c.innerHTML = SharesPage.renderSharedWithMe(); SharesPage.initSharedWithMe(); break;
+            case 'trash':  c.innerHTML = TrashPage.render(); TrashPage.init(); break;
             case 'admin':  c.innerHTML = AdminPage.render(); AdminPage.init(); break;
             default:       c.innerHTML = '<div class="empty-state"><p>Sahypa tapylmady</p></div>';
         }

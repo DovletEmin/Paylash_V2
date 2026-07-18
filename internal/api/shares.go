@@ -8,6 +8,37 @@ import (
 	"strings"
 )
 
+// canManageSharing decides who may create/revoke/update a file's shares,
+// toggle public sharing, or view its share list. Deliberately stricter than
+// plain content-edit access for personal-scope files: someone given edit
+// access to one colleague's personal file should be able to edit its
+// content, not unilaterally invite third parties, revoke the owner's other
+// shares, or make it company-wide public — that stays the owner's (or
+// admin's) call. Project/common scope keep the same collaborative model
+// already established for rename/delete there (any project editor, anyone
+// at all for common), since those are vetted shared workspaces rather than
+// one person's private space.
+func canManageSharingWith(lookup projectPermLookup, role string, userID int, f *models.File) (bool, error) {
+	if role == "admin" || f.OwnerID == userID {
+		return true, nil
+	}
+	switch f.Scope {
+	case "common":
+		return true, nil
+	case "project":
+		if f.ProjectID == nil {
+			return false, nil
+		}
+		perm, err := lookup.GetProjectMemberPermission(*f.ProjectID, userID)
+		return err == nil && perm == "edit", err
+	}
+	return f.Visibility == "common", nil
+}
+
+func (h *Handler) canManageSharing(user *models.User, f *models.File) (bool, error) {
+	return canManageSharingWith(h.db, user.Role, user.ID, f)
+}
+
 func (h *Handler) ShareFile(w http.ResponseWriter, r *http.Request) {
 	user := authutil.GetUser(r)
 	fileID, err := strconv.Atoi(r.PathValue("id"))
@@ -22,12 +53,9 @@ func (h *Handler) ShareFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	canAccess, err := h.db.CanAccessFile(fileID, user.ID, user.Role == "admin", "edit")
-	if err != nil || !canAccess {
-		if f.OwnerID != user.ID {
-			writeError(w, http.StatusForbidden, "rugsat ýok")
-			return
-		}
+	if canManage, err := h.canManageSharing(user, f); err != nil || !canManage {
+		writeError(w, http.StatusForbidden, "rugsat ýok")
+		return
 	}
 
 	var req models.ShareRequest
@@ -49,6 +77,9 @@ func (h *Handler) ShareFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "paýlaşyp bolmady")
 		return
 	}
+	h.logAction(r, "share.create", "file", fileID, f.Name, map[string]any{
+		"shared_with": req.UserID, "permission": req.Permission, "is_public": req.IsPublic,
+	})
 	writeJSON(w, http.StatusCreated, share)
 }
 
@@ -70,7 +101,7 @@ func (h *Handler) DeleteShare(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "faýl tapylmady")
 		return
 	}
-	if f.OwnerID != user.ID && user.Role != "admin" {
+	if canManage, err := h.canManageSharing(user, f); err != nil || !canManage {
 		writeError(w, http.StatusForbidden, "rugsat ýok")
 		return
 	}
@@ -79,6 +110,7 @@ func (h *Handler) DeleteShare(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "paýlaşmagy aýyryp bolmady")
 		return
 	}
+	h.logAction(r, "share.revoke", "file", fileID, f.Name, map[string]any{"shared_with": sharedWithID})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -100,7 +132,7 @@ func (h *Handler) UpdateSharePermission(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusNotFound, "faýl tapylmady")
 		return
 	}
-	if f.OwnerID != user.ID && user.Role != "admin" {
+	if canManage, err := h.canManageSharing(user, f); err != nil || !canManage {
 		writeError(w, http.StatusForbidden, "rugsat ýok")
 		return
 	}
@@ -137,7 +169,7 @@ func (h *Handler) SetPublicShare(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "faýl tapylmady")
 		return
 	}
-	if f.OwnerID != user.ID && user.Role != "admin" {
+	if canManage, err := h.canManageSharing(user, f); err != nil || !canManage {
 		writeError(w, http.StatusForbidden, "rugsat ýok")
 		return
 	}
@@ -233,7 +265,7 @@ func (h *Handler) GetSharesForFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "faýl tapylmady")
 		return
 	}
-	if f.OwnerID != user.ID && user.Role != "admin" {
+	if canManage, err := h.canManageSharing(user, f); err != nil || !canManage {
 		writeError(w, http.StatusForbidden, "rugsat ýok")
 		return
 	}

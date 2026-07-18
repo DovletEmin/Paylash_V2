@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"encoding/csv"
 	"fmt"
+	"log"
 	"net/http"
 	"paylash/internal/authutil"
 	"paylash/internal/models"
@@ -12,6 +14,32 @@ import (
 
 	"github.com/xuri/excelize/v2"
 )
+
+// wouldRemoveLastAdmin reports whether changing targetRole to newRole would
+// leave the studio with zero admins (and everyone locked out of the admin
+// panel, with no way back in short of a manual DB edit).
+func wouldRemoveLastAdmin(targetRole, newRole string, adminCount int) bool {
+	return targetRole == "admin" && newRole != "admin" && adminCount <= 1
+}
+
+// AdminAuditLog returns admin-oversight events, newest first, optionally
+// filtered by ?action= and/or ?actor_id=.
+func (h *Handler) AdminAuditLog(w http.ResponseWriter, r *http.Request) {
+	limit, offset := parsePagination(r, 50, 500)
+	action := r.URL.Query().Get("action")
+	actorID, _ := strconv.Atoi(r.URL.Query().Get("actor_id"))
+
+	entries, err := h.db.ListAuditLog(limit, offset, action, actorID)
+	if err != nil {
+		log.Printf("list audit log: %v", err)
+		writeError(w, http.StatusInternalServerError, "maglumat alyp bolmady")
+		return
+	}
+	if entries == nil {
+		entries = []models.AuditLogEntry{}
+	}
+	writeJSON(w, http.StatusOK, entries)
+}
 
 // Admin Dashboard
 func (h *Handler) AdminDashboard(w http.ResponseWriter, r *http.Request) {
@@ -88,10 +116,20 @@ func (h *Handler) AdminDeleteProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "nädogry ID")
 		return
 	}
+	h.abortProjectUploadSessions(r.Context(), id)
 	if err := h.db.DeleteProject(id); err != nil {
 		writeError(w, http.StatusInternalServerError, "pozup bolmady")
 		return
 	}
+	// Best-effort: the project's bucket is exclusively its own, so once the
+	// DB rows are gone it's safe to wipe the bucket wholesale. A failure
+	// here leaves an orphaned bucket but doesn't affect app correctness —
+	// log it rather than failing a delete that already succeeded in the DB.
+	bucket := storage.ProjectBucket(id)
+	if err := h.minio.RemoveBucketAndAllObjects(r.Context(), bucket); err != nil {
+		log.Printf("cleanup project bucket %s: %v", bucket, err)
+	}
+	h.logAction(r, "project.delete", "project", id, "", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -136,6 +174,7 @@ func (h *Handler) AdminAddProjectMember(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "goşup bolmady")
 		return
 	}
+	h.logAction(r, "project.member.add", "project", id, "", map[string]any{"user_id": req.UserID, "permission": req.Permission})
 	writeJSON(w, http.StatusCreated, m)
 }
 
@@ -161,6 +200,7 @@ func (h *Handler) AdminUpdateProjectMember(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "üýtgedip bolmady")
 		return
 	}
+	h.logAction(r, "project.member.update", "project", id, "", map[string]any{"user_id": userID, "permission": req.Permission})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -179,12 +219,17 @@ func (h *Handler) AdminRemoveProjectMember(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "aýyryp bolmady")
 		return
 	}
+	h.logAction(r, "project.member.remove", "project", id, "", map[string]any{"user_id": userID})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // Users management
 func (h *Handler) AdminListUsers(w http.ResponseWriter, r *http.Request) {
-	users, err := h.db.ListUsers()
+	// The admin table does its own full-list client-side search (AdminPage.filterUsers),
+	// so the default page is generous — realistic employee counts stay well under it —
+	// with a hard cap only to guard against a pathological unbounded query.
+	limit, offset := parsePagination(r, 500, 2000)
+	users, err := h.db.ListUsers(limit, offset)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "ulanyjylary alyp bolmady")
 		return
@@ -214,6 +259,12 @@ func (h *Handler) AdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 	if req.Role != "user" && req.Role != "admin" {
 		req.Role = "user"
 	}
+	if target, _ := h.db.GetUserByID(id); target != nil {
+		if n, err := h.db.CountAdmins(); err == nil && wouldRemoveLastAdmin(target.Role, req.Role, n) {
+			writeError(w, http.StatusConflict, "soňky admini adaty ulanyja öwrüp bolmaýar")
+			return
+		}
+	}
 	var hash string
 	if req.Password != "" {
 		if len(req.Password) < 6 {
@@ -231,6 +282,9 @@ func (h *Handler) AdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "üýtgedip bolmady")
 		return
 	}
+	h.logAction(r, "user.update", "user", id, req.DisplayName, map[string]any{
+		"role": req.Role, "quota_bytes": req.QuotaBytes, "password_changed": req.Password != "",
+	})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -240,20 +294,123 @@ func (h *Handler) AdminDeleteUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "nädogry ID")
 		return
 	}
+	actor := authutil.GetUser(r)
+	target, _ := h.db.GetUserByID(id)
+	if target != nil {
+		if n, err := h.db.CountAdmins(); err == nil && wouldRemoveLastAdmin(target.Role, "user", n) {
+			writeError(w, http.StatusConflict, "soňky admini pozup bolmaýar")
+			return
+		}
+	}
+	// Common/project-scope files and folders are this employee's
+	// contribution to shared work — they should survive the employee
+	// leaving, so ownership moves to the admin performing the deletion
+	// instead of being cascade-deleted along with the rest of the user's
+	// rows. Personal-scope files/folders stay theirs alone and are removed
+	// below.
+	if err := h.db.ReassignNonPersonalFiles(id, actor.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "pozup bolmady")
+		return
+	}
+	if err := h.db.ReassignNonPersonalFolders(id, actor.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "pozup bolmady")
+		return
+	}
+	h.abortUserUploadSessions(r.Context(), id)
 	if err := h.db.DeleteUser(id); err != nil {
 		writeError(w, http.StatusInternalServerError, "pozup bolmady")
 		return
 	}
+	h.wipePersonalBucket(r.Context(), id)
+	targetName := ""
+	if target != nil {
+		targetName = target.Username
+	}
+	h.logAction(r, "user.delete", "user", id, targetName, nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (h *Handler) AdminDeleteAllUsers(w http.ResponseWriter, r *http.Request) {
+	actor := authutil.GetUser(r)
+	ids, err := h.db.ListNonAdminUserIDs()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "pozup bolmady")
+		return
+	}
+	for _, id := range ids {
+		if err := h.db.ReassignNonPersonalFiles(id, actor.ID); err != nil {
+			writeError(w, http.StatusInternalServerError, "pozup bolmady")
+			return
+		}
+		if err := h.db.ReassignNonPersonalFolders(id, actor.ID); err != nil {
+			writeError(w, http.StatusInternalServerError, "pozup bolmady")
+			return
+		}
+		h.abortUserUploadSessions(r.Context(), id)
+	}
 	count, err := h.db.DeleteAllUsersExceptAdmin()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "pozup bolmady")
 		return
 	}
+	for _, id := range ids {
+		h.wipePersonalBucket(r.Context(), id)
+	}
+	h.logAction(r, "user.delete_all", "user", 0, "", map[string]any{"deleted": count})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "deleted": count})
+}
+
+// abortProjectUploadSessions cancels any multipart uploads in flight to a
+// project's bucket before it's deleted and wiped — see
+// ListUploadSessionsByProject for why this needs to happen explicitly
+// rather than relying on a cascade. Best-effort, same reasoning as
+// abortUserUploadSessions below.
+func (h *Handler) abortProjectUploadSessions(ctx context.Context, projectID int) {
+	sessions, err := h.db.ListUploadSessionsByProject(projectID)
+	if err != nil {
+		log.Printf("list upload sessions for project %d: %v", projectID, err)
+		return
+	}
+	for _, s := range sessions {
+		if err := h.minio.AbortMultipartUpload(ctx, s.Bucket, s.ObjectKey, s.MinioUploadID); err != nil {
+			log.Printf("abort upload session %s for deleted project %d: %v", s.ID, projectID, err)
+		}
+		if err := h.db.DeleteUploadSession(s.ID); err != nil {
+			log.Printf("delete upload session %s for deleted project %d: %v", s.ID, projectID, err)
+		}
+	}
+}
+
+// abortUserUploadSessions cancels any multipart uploads a user has in
+// progress before they're deleted. upload_sessions.owner_id cascades on
+// user delete, so without this the tracking row would vanish while the
+// MinIO-side parts it was the only reference to leak forever — the janitor
+// (and everyone else) would have no way left to find and reclaim them.
+// Best-effort, like wipePersonalBucket below: failures are logged, not
+// surfaced, since the deletion this precedes must still proceed.
+func (h *Handler) abortUserUploadSessions(ctx context.Context, userID int) {
+	sessions, err := h.db.ListUploadSessionsByOwner(userID)
+	if err != nil {
+		log.Printf("list upload sessions for user %d: %v", userID, err)
+		return
+	}
+	for _, s := range sessions {
+		if err := h.minio.AbortMultipartUpload(ctx, s.Bucket, s.ObjectKey, s.MinioUploadID); err != nil {
+			log.Printf("abort upload session %s for deleted user %d: %v", s.ID, userID, err)
+		}
+	}
+}
+
+// wipePersonalBucket removes the MinIO objects left behind once a user (and
+// their remaining personal-scope file rows, via ON DELETE CASCADE) has been
+// deleted — including the avatar image, which isn't tracked in the files
+// table. Best-effort: failures are logged, not surfaced, since the DB
+// delete this follows has already succeeded.
+func (h *Handler) wipePersonalBucket(ctx context.Context, userID int) {
+	bucket := storage.PersonalBucket(userID)
+	if err := h.minio.RemoveBucketAndAllObjects(ctx, bucket); err != nil {
+		log.Printf("cleanup personal bucket %s: %v", bucket, err)
+	}
 }
 
 func (h *Handler) AdminCreateUser(w http.ResponseWriter, r *http.Request) {
@@ -296,7 +453,7 @@ func (h *Handler) AdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		Password: req.Password,
 		FullName: strings.TrimSpace(req.FullName),
 	}
-	user, err := h.db.CreateUser(regReq, hash)
+	user, err := h.db.CreateUser(regReq, hash, true)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "ulanyjy döredip bolmady")
 		return
@@ -436,7 +593,7 @@ func (h *Handler) AdminImportUsers(w http.ResponseWriter, r *http.Request) {
 			Password: password,
 			FullName: fullName,
 		}
-		user, err := h.db.CreateUser(regReq, hash)
+		user, err := h.db.CreateUser(regReq, hash, true)
 		if err != nil {
 			results = append(results, importResult{Username: username, Error: "döredip bolmady"})
 			continue

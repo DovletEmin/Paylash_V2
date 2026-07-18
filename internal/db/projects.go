@@ -40,25 +40,29 @@ func (d *DB) ListAllProjects() ([]models.Project, error) {
 	return list, rows.Err()
 }
 
-func (d *DB) GetProject(id int) (*models.Project, error) {
-	p := &models.Project{}
-	err := d.QueryRow(
-		`SELECT id, name, quota_bytes, minio_bucket, created_at FROM projects WHERE id = $1`, id,
-	).Scan(&p.ID, &p.Name, &p.QuotaBytes, &p.MinioBucket, &p.CreatedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	return p, err
-}
-
 func (d *DB) UpdateProject(id int, name string, quotaBytes int64) error {
 	_, err := d.Exec(`UPDATE projects SET name = $1, quota_bytes = $2 WHERE id = $3`, name, quotaBytes, id)
 	return err
 }
 
+// DeleteProject removes a project along with its file rows. files.project_id
+// is ON DELETE SET NULL (not CASCADE), so without this the file rows would
+// survive as unreachable orphans — visible in no listing (scope='project'
+// with project_id=NULL never matches ListFiles) while their MinIO objects
+// leak forever. Folder rows do cascade automatically via project_id.
 func (d *DB) DeleteProject(id int) error {
-	_, err := d.Exec(`DELETE FROM projects WHERE id = $1`, id)
-	return err
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM files WHERE project_id = $1`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM projects WHERE id = $1`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // Project members — the ACL that grants employees access to a project folder.

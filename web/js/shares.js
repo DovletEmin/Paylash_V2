@@ -44,8 +44,7 @@ const SharesPage = {
             for (const g of Object.values(grouped)) {
                 const f = g.file;
                 const icon = UI.fileIcon(f.name, false);
-                const dbl = UI.isMediaPreviewable(f.name) ? `PreviewPage.open(${f.id},'${UI.esc(f.name)}')`
-                    : UI.isCollaboraViewable(f.name) ? `EditorPage.open(${f.id},'${UI.esc(f.name)}')` : `FilesPage.download(${f.id},'${UI.esc(f.name)}')`;
+                const dbl = `UI.openFile(${f.id},${UI.escJson(f.name)},${f.size_bytes || 0})`;
                 const names = g.recipients.map(r => r.name).filter(Boolean);
                 const countText = names.length === 1 ? names[0] : names.length + ' ulanyjy';
                 h += `<div class="file-card" ondblclick="${dbl}">
@@ -74,8 +73,7 @@ const SharesPage = {
             let h = '<div class="file-grid">';
             for (const f of files) {
                 const icon = UI.fileIcon(f.name, false);
-                const dbl = UI.isMediaPreviewable(f.name) ? `PreviewPage.open(${f.id},'${UI.esc(f.name)}')`
-                    : UI.isCollaboraViewable(f.name) ? `EditorPage.open(${f.id},'${UI.esc(f.name)}')` : `FilesPage.download(${f.id},'${UI.esc(f.name)}')`;
+                const dbl = `UI.openFile(${f.id},${UI.escJson(f.name)},${f.size_bytes || 0})`;
                 h += `<div class="file-card" ondblclick="${dbl}">
                     <div class="file-card-icon document">${icon}</div>
                     <div class="file-card-name" title="${UI.esc(f.name)}">${UI.esc(f.name)}</div>
@@ -154,7 +152,7 @@ const SharesPage = {
             const filtered = users.filter(u => !skipIds.has(u.id));
             if (!filtered.length) { r.innerHTML = '<div class="share-user-no-result">Tapylmady</div>'; return; }
             r.innerHTML = filtered.map(u => `
-                <div class="share-user-item" onclick="SharesPage.addRecipient(${u.id},'${UI.esc(u.full_name)}','${UI.esc(u.username)}')">
+                <div class="share-user-item" onclick="SharesPage.addRecipient(${u.id},${UI.escJson(u.full_name)},${UI.escJson(u.username)})">
                     <span class="share-user-avatar">${(u.full_name||'?').charAt(0).toUpperCase()}</span>
                     <div><div class="share-user-name">${UI.esc(u.full_name)}</div><div class="share-user-username">@${UI.esc(u.username)}</div></div>
                 </div>`).join('');

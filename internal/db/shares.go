@@ -142,69 +142,98 @@ func (d *DB) GetSharedByMe(userID int) ([]models.SharedByMeView, error) {
 	return list, rows.Err()
 }
 
+// fileAccessFacts holds everything decideFileAccess needs to reach a
+// decision, once fetched from the DB — separating the pure decision logic
+// from the queries that gather it lets the logic itself be unit tested
+// without a real Postgres connection.
+type fileAccessFacts struct {
+	ownerID       int
+	scope         string
+	visibility    string
+	projectID     *int
+	projectPerm   string // "" if not a project member (only set when scope == "project")
+	directShare   string // "" if no point-to-point share with this user
+	isPublicShare bool
+}
+
+// decideFileAccess is the single source of truth for file access decisions.
+// Rules, in priority order:
+//  1. admins and the owner always have full access.
+//  2. common scope (or a personal file explicitly marked visibility='common'):
+//     every authenticated employee gets full view+edit access.
+//  3. project scope: access is governed solely by project_members.
+//  4. otherwise: an explicit point-to-point share, or the public-share toggle
+//     (view-only), or no access at all.
+func decideFileAccess(f fileAccessFacts, userID int, isAdmin bool, requiredPerm string) bool {
+	if isAdmin || f.ownerID == userID {
+		return true
+	}
+	if f.scope == "common" || f.visibility == "common" {
+		return true
+	}
+	if f.scope == "project" && f.projectID != nil {
+		if f.projectPerm == "" {
+			return false
+		}
+		if requiredPerm == "view" {
+			return true
+		}
+		return f.projectPerm == "edit"
+	}
+	if f.directShare != "" {
+		if requiredPerm == "view" {
+			return true
+		}
+		return f.directShare == "edit"
+	}
+	if f.isPublicShare {
+		return requiredPerm == "view"
+	}
+	return false
+}
+
 // CanAccessFile decides whether userID may access fileID with at least requiredPerm ("view" or "edit").
-//
-// Three independent rules, in priority order:
-//  1. personal scope: only the owner, or someone the file was explicitly shared with.
-//  2. common scope (or a personal file explicitly marked visibility='common'): every
-//     authenticated employee gets full view+edit access — this is the shared company folder.
-//  3. project scope: access is governed solely by project_members (admin bypasses this).
+// It fetches the facts decideFileAccess needs and defers the actual decision to it.
 func (d *DB) CanAccessFile(fileID, userID int, isAdmin bool, requiredPerm string) (bool, error) {
 	if isAdmin {
 		return true, nil
 	}
 
-	var ownerID int
-	var scope, visibility string
-	var projectID *int
+	var f fileAccessFacts
 	err := d.QueryRow(`SELECT owner_id, scope, visibility, project_id FROM files WHERE id = $1`, fileID).
-		Scan(&ownerID, &scope, &visibility, &projectID)
+		Scan(&f.ownerID, &f.scope, &f.visibility, &f.projectID)
 	if err != nil {
 		return false, err
 	}
 
-	if ownerID == userID {
-		return true, nil
+	if f.ownerID == userID || f.scope == "common" || f.visibility == "common" {
+		return decideFileAccess(f, userID, false, requiredPerm), nil
 	}
 
-	if scope == "common" || visibility == "common" {
-		return true, nil
-	}
-
-	if scope == "project" && projectID != nil {
-		perm, err := d.GetProjectMemberPermission(*projectID, userID)
+	if f.scope == "project" && f.projectID != nil {
+		perm, err := d.GetProjectMemberPermission(*f.projectID, userID)
 		if err != nil {
 			return false, err
 		}
-		if perm == "" {
-			return false, nil
-		}
-		if requiredPerm == "view" {
-			return true, nil
-		}
-		return perm == "edit", nil
+		f.projectPerm = perm
+		return decideFileAccess(f, userID, false, requiredPerm), nil
 	}
 
 	// Explicit point-to-point share (personal files shared with a specific colleague).
-	var perm string
-	err = d.QueryRow(
+	var directPerm string
+	if err := d.QueryRow(
 		`SELECT permission FROM file_shares WHERE file_id = $1 AND shared_with = $2`, fileID, userID,
-	).Scan(&perm)
-	if err == nil {
-		if requiredPerm == "view" {
-			return true, nil
-		}
-		return perm == "edit", nil
+	).Scan(&directPerm); err == nil {
+		f.directShare = directPerm
 	}
 
 	// Shared with the whole company via the public-share toggle.
 	var isPublic bool
-	err = d.QueryRow(
+	if err := d.QueryRow(
 		`SELECT EXISTS(SELECT 1 FROM file_shares WHERE file_id = $1 AND is_public = TRUE)`, fileID,
-	).Scan(&isPublic)
-	if err == nil && isPublic {
-		return requiredPerm == "view", nil
+	).Scan(&isPublic); err == nil {
+		f.isPublicShare = isPublic
 	}
 
-	return false, nil
+	return decideFileAccess(f, userID, false, requiredPerm), nil
 }
