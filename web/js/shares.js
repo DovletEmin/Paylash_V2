@@ -21,6 +21,14 @@ const SharesPage = {
         this._activeShareTab = 'with-me';
         this._expandedUserId = null;
         this.loadSharedWithMe();
+        // Visiting this tab is the "I've seen it" signal — clear the badge
+        // immediately client-side rather than waiting for the next poll.
+        if (typeof App !== 'undefined') {
+            API.notifications.markSeen().then(() => {
+                App._lastNotifCount = 0;
+                App.renderNotifBadge(0);
+            }).catch(() => {});
+        }
     },
 
     switchShareTab(tab) {

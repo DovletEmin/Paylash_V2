@@ -3,6 +3,7 @@ package api
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -1100,9 +1101,6 @@ func (h *Handler) DeleteFolder(w http.ResponseWriter, r *http.Request) {
 // DownloadFolder streams a folder (and everything nested under it) as a zip,
 // built on the fly directly into the response — no temp file, no buffering
 // the archive in memory first, same streaming principle as DownloadFile.
-// Uses zip.Store (no compression): studio files are overwhelmingly already-
-// compressed CAD/image/render data, so skipping DEFLATE avoids burning CPU
-// for no space savings on what's likely to be a very large folder.
 func (h *Handler) DownloadFolder(w http.ResponseWriter, r *http.Request) {
 	user := authutil.GetUser(r)
 	id, err := strconv.Atoi(r.PathValue("id"))
@@ -1121,30 +1119,50 @@ func (h *Handler) DownloadFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	folderIDs, err := h.db.ListFolderAndDescendantIDs(id)
+	zipName := folder.Name + ".zip"
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, zipName))
+
+	zw := zip.NewWriter(w)
+	defer zw.Close()
+	// No wrapping directory: the folder's own contents go straight into the
+	// zip root, since it's the only thing in this archive.
+	if err := h.writeFolderTree(r.Context(), zw, folder, ""); err != nil {
+		log.Printf("folder download: %v", err)
+	}
+}
+
+// writeFolderTree streams every file nested under folder (recursively) into
+// zw, using zip.Store — studio files are overwhelmingly already-compressed
+// CAD/image/render data, so skipping DEFLATE avoids burning CPU for no space
+// savings on what's likely to be a very large folder. Every entry's path is
+// prefixed with rootPrefix: empty when the folder is the only thing in the
+// zip (DownloadFolder), or the folder's own name when it's one of several
+// files/folders bundled together (BulkDownload) — otherwise two folders in
+// the same bulk selection sharing a file name would collide.
+func (h *Handler) writeFolderTree(ctx context.Context, zw *zip.Writer, folder *models.Folder, rootPrefix string) error {
+	folderIDs, err := h.db.ListFolderAndDescendantIDs(folder.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "bukjany alyp bolmady")
-		return
+		return fmt.Errorf("list folder tree: %w", err)
 	}
 	allFolders, err := h.db.GetFoldersByIDs(folderIDs)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "bukjany alyp bolmady")
-		return
+		return fmt.Errorf("get folders: %w", err)
 	}
 	files, err := h.db.ListFilesInFolders(folderIDs)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "faýllary alyp bolmady")
-		return
+		return fmt.Errorf("list files: %w", err)
 	}
 
-	// Every id in folderIDs is `id` itself or one of its descendants, so its
-	// whole ancestor chain up to `id` is guaranteed to be in allFolders too —
-	// resolving in repeated passes handles allFolders arriving in any order
-	// (a child can appear before its parent) without needing a sort first.
-	relPath := map[int]string{id: ""}
+	// Every id in folderIDs is folder.ID itself or one of its descendants, so
+	// its whole ancestor chain up to folder.ID is guaranteed to be in
+	// allFolders too — resolving in repeated passes handles allFolders
+	// arriving in any order (a child can appear before its parent) without
+	// needing a sort first.
+	relPath := map[int]string{folder.ID: rootPrefix}
 	remaining := make([]models.Folder, 0, len(allFolders))
 	for _, f := range allFolders {
-		if f.ID != id {
+		if f.ID != folder.ID {
 			remaining = append(remaining, f)
 		}
 	}
@@ -1153,7 +1171,7 @@ func (h *Handler) DownloadFolder(w http.ResponseWriter, r *http.Request) {
 		progressed := false
 		for _, f := range remaining {
 			if f.ParentID == nil {
-				continue // can't happen for a real descendant of `id`; drop defensively
+				continue // can't happen for a real descendant of folder.ID; drop defensively
 			}
 			parentPath, ok := relPath[*f.ParentID]
 			if !ok {
@@ -1169,21 +1187,14 @@ func (h *Handler) DownloadFolder(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	zipName := folder.Name + ".zip"
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, zipName))
-
-	zw := zip.NewWriter(w)
-	defer zw.Close()
-
 	// Explicit directory entries so empty subfolders still show up once
 	// extracted, even though they carry no files of their own.
 	for fID, rp := range relPath {
-		if fID == id {
+		if fID == folder.ID && rootPrefix == "" {
 			continue // the root folder itself isn't a path inside its own zip
 		}
 		if _, err := zw.CreateHeader(&zip.FileHeader{Name: rp + "/", Method: zip.Store}); err != nil {
-			log.Printf("folder download: create dir entry %s: %v", rp, err)
+			log.Printf("zip folder tree: create dir entry %s: %v", rp, err)
 		}
 	}
 
@@ -1198,17 +1209,108 @@ func (h *Handler) DownloadFolder(w http.ResponseWriter, r *http.Request) {
 		entryName := path.Join(parentPath, f.Name)
 		fw, err := zw.CreateHeader(&zip.FileHeader{Name: entryName, Method: zip.Store, Modified: f.UpdatedAt})
 		if err != nil {
-			log.Printf("folder download: create entry %s: %v", entryName, err)
+			log.Printf("zip folder tree: create entry %s: %v", entryName, err)
+			continue
+		}
+		obj, err := h.minio.Download(ctx, f.MinioBucket, f.MinioKey)
+		if err != nil {
+			log.Printf("zip folder tree: open %s/%s: %v", f.MinioBucket, f.MinioKey, err)
+			continue
+		}
+		if _, err := io.Copy(fw, obj); err != nil {
+			log.Printf("zip folder tree: copy %s: %v", entryName, err)
+		}
+		obj.Close()
+	}
+	return nil
+}
+
+// BulkDownload zips an arbitrary set of files and/or folders together —
+// exactly what the files-page multi-select bulk action bar needs, since
+// downloading each selected item as its own separate browser download was
+// clunky for anything more than a couple of files. IDs arrive as repeated
+// query params (?file_id=1&file_id=2&folder_id=7) rather than a JSON body so
+// the frontend can still trigger it with a plain same-origin <a download>
+// link — consistent with every other download endpoint in this file — and
+// never has to buffer the response as a blob in page memory.
+func (h *Handler) BulkDownload(w http.ResponseWriter, r *http.Request) {
+	user := authutil.GetUser(r)
+	isAdmin := user.Role == "admin"
+	fileIDs := parseIDList(r.URL.Query()["file_id"])
+	folderIDs := parseIDList(r.URL.Query()["folder_id"])
+	if len(fileIDs) == 0 && len(folderIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "hiç zat saýlanmady")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="paylash-files.zip"`)
+	zw := zip.NewWriter(w)
+	defer zw.Close()
+
+	// Top-level entries (loose files, and each selected folder's own name)
+	// share one namespace in this combined zip, unlike a single-folder
+	// download — dedup so e.g. two folders both containing "render.png"
+	// don't collide, the same way uniqueFileName avoids upload collisions.
+	used := map[string]int{}
+	uniqueName := func(name string) string {
+		used[name]++
+		if used[name] == 1 {
+			return name
+		}
+		ext := filepath.Ext(name)
+		base := strings.TrimSuffix(name, ext)
+		return fmt.Sprintf("%s (%d)%s", base, used[name]-1, ext)
+	}
+
+	for _, id := range fileIDs {
+		f, err := h.db.GetFile(id)
+		if err != nil || f == nil {
+			continue
+		}
+		if ok, _ := h.db.CanAccessFile(f.ID, user.ID, isAdmin, "view"); !ok {
+			continue
+		}
+		entryName := uniqueName(f.Name)
+		fw, err := zw.CreateHeader(&zip.FileHeader{Name: entryName, Method: zip.Store, Modified: f.UpdatedAt})
+		if err != nil {
+			log.Printf("bulk download: create entry %s: %v", entryName, err)
 			continue
 		}
 		obj, err := h.minio.Download(r.Context(), f.MinioBucket, f.MinioKey)
 		if err != nil {
-			log.Printf("folder download: open %s/%s: %v", f.MinioBucket, f.MinioKey, err)
+			log.Printf("bulk download: open %s/%s: %v", f.MinioBucket, f.MinioKey, err)
 			continue
 		}
 		if _, err := io.Copy(fw, obj); err != nil {
-			log.Printf("folder download: copy %s: %v", entryName, err)
+			log.Printf("bulk download: copy %s: %v", entryName, err)
 		}
 		obj.Close()
 	}
+
+	for _, id := range folderIDs {
+		folder, err := h.db.GetFolder(id)
+		if err != nil || folder == nil {
+			continue
+		}
+		if !h.canViewFolder(user, folder) {
+			continue
+		}
+		if err := h.writeFolderTree(r.Context(), zw, folder, uniqueName(folder.Name)); err != nil {
+			log.Printf("bulk download: folder %d: %v", folder.ID, err)
+		}
+	}
+}
+
+// parseIDList parses a slice of decimal-string query values into ints,
+// silently dropping anything that doesn't parse — a stray malformed id
+// shouldn't fail the whole bulk request when the rest are valid.
+func parseIDList(vals []string) []int {
+	ids := make([]int, 0, len(vals))
+	for _, v := range vals {
+		if n, err := strconv.Atoi(v); err == nil {
+			ids = append(ids, n)
+		}
+	}
+	return ids
 }

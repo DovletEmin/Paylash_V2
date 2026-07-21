@@ -157,6 +157,7 @@ window.PAYLASH_LOCALE_TR = {
     'files.file_name_required': 'Bir dosya adı girin',
     'files.download_folder_title': 'Klasörü indir',
     'files.folder_zip_preparing': '"{name}.zip" hazırlanıyor…',
+    'files.bulk_zip_preparing': 'Arşiv hazırlanıyor…',
 
     // yükleme motoru (upload.js)
     'upload.part_failed': '{n}. parça yüklenemedi (HTTP {status})',
@@ -179,9 +180,20 @@ window.PAYLASH_LOCALE_TR = {
     'preview.unsupported_type': 'Bu dosya önizlenemiyor',
     'preview.nav_prev': 'Önceki fotoğraf',
     'preview.nav_next': 'Sonraki fotoğraf',
+    'comments.toggle': 'Yorumlar',
+    'comments.title': 'Yorumlar',
+    'comments.empty': 'Henüz yorum yok — ilk yorumu siz yazın.',
+    'comments.add_pin': 'Görselde bir noktaya yorum iğnele',
+    'comments.pin_placed': 'İğne kondu — yorumunuzu aşağıya yazın.',
+    'comments.pinned': 'İğnelenmiş yorum',
+    'comments.placeholder': 'Bir yorum yazın…',
+    'comments.post': 'Gönder',
+    'comments.delete_title': 'Yorumu sil',
+    'comments.delete_body': 'Bu yorum silinsin mi? Bu işlem geri alınamaz.',
 
     // paylaşımlar sayfası + paylaşım penceresi
     'shares.tab_with_me': 'Benimle paylaşılanlar',
+    'notifications.new_shares_toast': { other: 'Sizinle {count} yeni dosya paylaşıldı' },
     'shares.tab_by_me': 'Paylaşımlarım',
     'shares.empty_by_me': 'Henüz kimseyle dosya paylaşmadınız',
     'shares.empty_with_me': 'Henüz kimse sizinle dosya paylaşmadı',

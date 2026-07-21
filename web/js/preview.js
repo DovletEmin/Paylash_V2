@@ -15,12 +15,16 @@ const PreviewPage = {
                 <button class="btn btn-ghost btn-sm" onclick="App.navigate('files')">${I18N.t('editor.back')}</button>
                 <span class="editor-filename" id="preview-filename">${UI.esc(this.currentFileName)}</span>
                 <div class="editor-toolbar-right">
+                    <button class="btn btn-ghost btn-sm" id="comments-toggle-btn" onclick="PreviewPage.toggleComments()">💬 ${I18N.t('comments.toggle')}</button>
                     <button class="btn btn-ghost btn-sm" onclick="PreviewPage.download()">${UI.icons.download} ${I18N.t('files.action_download')}</button>
                     <button class="btn btn-ghost btn-sm" onclick="SharesPage.showShareModal({id:PreviewPage.currentFileId,name:PreviewPage.currentFileName})">${UI.icons.share} ${I18N.t('files.action_share')}</button>
                 </div>
             </div>
-            <div class="preview-container" id="preview-container">
-                <div class="editor-loading"><div class="spinner"></div><p>${I18N.t('common.loading')}</p></div>
+            <div class="preview-body">
+                <div class="preview-container" id="preview-container">
+                    <div class="editor-loading"><div class="spinner"></div><p>${I18N.t('common.loading')}</p></div>
+                </div>
+                <div class="comments-panel hidden" id="comments-panel"></div>
             </div>
         </div>`;
     },
@@ -29,6 +33,7 @@ const PreviewPage = {
         this.currentFileId = fileId;
         this.currentFileName = fileName;
         this.currentFileSize = size || 0;
+        this._pendingPin = null;
         App.navigate('preview');
     },
 
@@ -73,6 +78,7 @@ const PreviewPage = {
         this.currentFileId = next.id;
         this.currentFileName = next.name;
         this.currentFileSize = next.size_bytes || 0;
+        this._pendingPin = null;
         this.init();
     },
 
@@ -101,9 +107,10 @@ const PreviewPage = {
         const url = `/api/files/${this.currentFileId}/download`;
 
         if (type === 'image') {
-            c.innerHTML = `<div class="preview-media preview-image">
+            c.innerHTML = `<div class="preview-media preview-image" id="preview-image-wrap">
                 ${this.navArrowHTML('prev')}
-                <img src="${url}" alt="${UI.esc(this.currentFileName)}" onclick="PreviewPage.toggleZoom(this)">
+                <img src="${url}" alt="${UI.esc(this.currentFileName)}" onclick="PreviewPage.onImageClick(event,this)">
+                <div class="comment-pins" id="comment-pins"></div>
                 ${this.navArrowHTML('next')}
             </div>`;
         } else if (type === 'audio') {
@@ -130,6 +137,8 @@ const PreviewPage = {
         } else {
             c.innerHTML = `<div class="empty-state"><p>${I18N.t('preview.unsupported_type')}</p></div>`;
         }
+
+        if (this._commentsOpen) this.loadComments();
     },
 
     guessMime() {
@@ -142,5 +151,141 @@ const PreviewPage = {
         img.classList.toggle('zoomed');
     },
 
-    download() { if (this.currentFileId) FilesPage.download(this.currentFileId, this.currentFileName); }
+    // Clicking the image normally zooms it — but while placing a pinned
+    // comment (see togglePinMode), the same click instead records where on
+    // the image the pin should sit.
+    onImageClick(ev, img) {
+        if (this._pinMode) {
+            const rect = img.getBoundingClientRect();
+            const xPct = Math.max(0, Math.min(100, ((ev.clientX - rect.left) / rect.width) * 100));
+            const yPct = Math.max(0, Math.min(100, ((ev.clientY - rect.top) / rect.height) * 100));
+            this._pendingPin = { x: xPct, y: yPct };
+            this._pinMode = false;
+            img.classList.remove('pin-mode');
+            this.renderPins();
+            this.renderCommentsPanel();
+            document.getElementById('comment-body-input')?.focus();
+            return;
+        }
+        this.toggleZoom(img);
+    },
+
+    download() { if (this.currentFileId) FilesPage.download(this.currentFileId, this.currentFileName); },
+
+    /* ── Comments (review notes, optionally pinned to a point on an image) ── */
+
+    _commentsOpen: false,
+    _comments: [],
+    _pinMode: false,
+    _pendingPin: null,
+
+    toggleComments() {
+        this._commentsOpen = !this._commentsOpen;
+        const panel = document.getElementById('comments-panel');
+        const btn = document.getElementById('comments-toggle-btn');
+        if (!panel) return;
+        panel.classList.toggle('hidden', !this._commentsOpen);
+        if (btn) btn.classList.toggle('active', this._commentsOpen);
+        if (this._commentsOpen) this.loadComments();
+    },
+
+    async loadComments() {
+        if (!this.currentFileId) return;
+        try { this._comments = (await API.files.comments.list(this.currentFileId)) || []; }
+        catch { this._comments = []; }
+        this.renderCommentsPanel();
+        this.renderPins();
+    },
+
+    renderCommentsPanel() {
+        const panel = document.getElementById('comments-panel');
+        if (!panel || !this._commentsOpen) return;
+        const isImage = UI.mediaType(this.currentFileName) === 'image';
+        const list = this._comments.map((c, i) => this.commentItemHTML(c, i)).join('')
+            || `<p class="text-muted comments-empty">${I18N.t('comments.empty')}</p>`;
+        const pinHint = this._pendingPin
+            ? `<div class="comment-pin-hint">📍 ${I18N.t('comments.pin_placed')} <button class="btn btn-ghost btn-sm" onclick="PreviewPage.cancelPin()">${I18N.t('common.cancel')}</button></div>`
+            : '';
+        panel.innerHTML = `
+            <div class="comments-panel-header">
+                <h4>${I18N.t('comments.title')} (${this._comments.length})</h4>
+                ${isImage ? `<button class="btn btn-icon btn-ghost btn-sm ${this._pinMode ? 'active' : ''}" onclick="PreviewPage.togglePinMode()" title="${I18N.t('comments.add_pin')}" aria-label="${I18N.t('comments.add_pin')}">📍</button>` : ''}
+            </div>
+            <div class="comments-list">${list}</div>
+            <div class="comment-composer">
+                ${pinHint}
+                <textarea id="comment-body-input" class="form-control" rows="2" placeholder="${I18N.t('comments.placeholder')}"></textarea>
+                <button class="btn btn-primary btn-sm" onclick="PreviewPage.submitComment()">${I18N.t('comments.post')}</button>
+            </div>`;
+    },
+
+    commentItemHTML(c, i) {
+        const canDelete = App.user && (App.user.id === c.user_id || App.user.role === 'admin');
+        const pinBadge = c.x_pct != null ? `<span class="comment-pin-badge" title="${I18N.t('comments.pinned')}">${i + 1}</span>` : '';
+        return `<div class="comment-item" id="comment-item-${c.id}" ${c.x_pct != null ? `onclick="PreviewPage.highlightPin(${c.id})"` : ''}>
+            ${UI.avatarHTML(c.user_id, c.user_name, 'share-user-avatar-sm')}
+            <div class="comment-item-body">
+                <div class="comment-item-head"><strong>${UI.esc(c.user_name)}</strong>${pinBadge} <span class="text-muted">${UI.formatDate(c.created_at)}</span></div>
+                <div class="comment-item-text">${UI.esc(c.body)}</div>
+            </div>
+            ${canDelete ? `<button class="btn btn-icon btn-sm comment-delete" onclick="event.stopPropagation();PreviewPage.deleteComment(${c.id})" title="${I18N.t('common.delete')}" aria-label="${I18N.t('common.delete')}">✕</button>` : ''}
+        </div>`;
+    },
+
+    renderPins() {
+        const el = document.getElementById('comment-pins');
+        if (!el) return;
+        const pinned = this._comments
+            .map((c, i) => ({ ...c, num: i + 1 }))
+            .filter(c => c.x_pct != null && c.y_pct != null);
+        el.innerHTML = pinned.map(c => `
+            <button class="comment-pin" style="left:${c.x_pct}%;top:${c.y_pct}%" onclick="PreviewPage.highlightPin(${c.id})" title="${UI.esc(c.user_name)}">${c.num}</button>
+        `).join('') + (this._pendingPin ? `<span class="comment-pin comment-pin-pending" style="left:${this._pendingPin.x}%;top:${this._pendingPin.y}%"></span>` : '');
+    },
+
+    highlightPin(commentId) {
+        if (!this._commentsOpen) this.toggleComments();
+        const el = document.getElementById('comment-item-' + commentId);
+        if (!el) return;
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.add('flash');
+        setTimeout(() => el.classList.remove('flash'), 900);
+    },
+
+    togglePinMode() {
+        this._pinMode = !this._pinMode;
+        document.querySelector('#preview-image-wrap img')?.classList.toggle('pin-mode', this._pinMode);
+        this.renderCommentsPanel();
+    },
+
+    cancelPin() {
+        this._pendingPin = null;
+        this.renderPins();
+        this.renderCommentsPanel();
+    },
+
+    async submitComment() {
+        const ta = document.getElementById('comment-body-input');
+        const body = ta ? ta.value.trim() : '';
+        if (!body) return;
+        try {
+            const pin = this._pendingPin;
+            const created = await API.files.comments.create(this.currentFileId, body, pin ? pin.x : null, pin ? pin.y : null);
+            this._comments.push(created);
+            this._pendingPin = null;
+            this.renderCommentsPanel();
+            this.renderPins();
+        } catch (e) { UI.toast(e.message, 'error'); }
+    },
+
+    deleteComment(id) {
+        UI.confirmAction(I18N.t('comments.delete_title'), I18N.t('comments.delete_body'), I18N.t('common.delete'), async () => {
+            try {
+                await API.files.comments.delete(this.currentFileId, id);
+                this._comments = this._comments.filter(c => c.id !== id);
+                this.renderCommentsPanel();
+                this.renderPins();
+            } catch (e) { UI.toast(e.message, 'error'); }
+        });
+    },
 };

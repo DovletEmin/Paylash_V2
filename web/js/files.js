@@ -241,11 +241,25 @@ const FilesPage = {
             </div>`;
     },
 
+    // A single combined zip instead of one browser download per selected
+    // item — much nicer once more than a couple of files are selected, and
+    // for a single lone file, skips the zip step entirely and just downloads
+    // it directly (no reason to zip one file).
     bulkDownload() {
-        for (const item of this.selectedItems()) {
-            if (item.isFolder) this.downloadFolder(item.id, item.name);
-            else this.download(item.id, item.name);
+        const items = this.selectedItems();
+        if (items.length === 1) {
+            const only = items[0];
+            if (only.isFolder) this.downloadFolder(only.id, only.name);
+            else this.download(only.id, only.name);
+            return;
         }
+        const fileIds = items.filter(i => !i.isFolder).map(i => i.id);
+        const folderIds = items.filter(i => i.isFolder).map(i => i.id);
+        UI.toast(I18N.t('files.bulk_zip_preparing'), 'info');
+        const a = document.createElement('a');
+        a.href = API.files.bulkDownloadURL(fileIds, folderIds);
+        a.download = 'paylash-files.zip';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
     },
 
     bulkShare() {

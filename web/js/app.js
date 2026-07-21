@@ -41,6 +41,45 @@ const App = {
 
     async checkAuth() {
         try { this.user = await API.auth.me(); } catch { this.user = null; }
+        if (this.user) this.startNotifPolling(); else this.stopNotifPolling();
+    },
+
+    /* ── Shared-file notifications ──
+       No WebSocket/SSE push in this app, so "new share" notifications are
+       just periodic polling of a cheap unread-count endpoint — good enough
+       for a small internal tool, and much simpler/more robust than holding
+       a live connection open per user. */
+    _lastNotifCount: 0,
+    _notifPollHandle: null,
+
+    startNotifPolling() {
+        if (this._notifPollHandle) return;
+        this.checkNotifications(true);
+        this._notifPollHandle = setInterval(() => this.checkNotifications(false), 30000);
+    },
+
+    stopNotifPolling() {
+        if (this._notifPollHandle) { clearInterval(this._notifPollHandle); this._notifPollHandle = null; }
+        this._lastNotifCount = 0;
+    },
+
+    async checkNotifications(isInitial) {
+        try {
+            const { count } = await API.notifications.unreadCount();
+            if (!isInitial && count > this._lastNotifCount) {
+                const delta = count - this._lastNotifCount;
+                UI.toast(I18N.tn('notifications.new_shares_toast', delta), 'info');
+            }
+            this._lastNotifCount = count;
+            this.renderNotifBadge(count);
+        } catch { /* transient network hiccup — next poll tries again */ }
+    },
+
+    renderNotifBadge(count) {
+        const el = document.getElementById('shared-notif-badge');
+        if (!el) return;
+        el.textContent = count > 99 ? '99+' : String(count);
+        el.classList.toggle('hidden', count <= 0);
     },
 
     async loadProjects() {
@@ -92,6 +131,7 @@ const App = {
         app.innerHTML = this.renderShell(page);
         this.initPage(page);
         this.loadStorageUsage();
+        this.renderNotifBadge(this._lastNotifCount);
     },
 
     renderShell(page) {
@@ -120,6 +160,7 @@ const App = {
                     </a>`).join('')}
                     <a class="nav-item ${page === 'shared' ? 'active' : ''}" onclick="App.navigate('shared')">
                         ${UI.icons.share} <span>${I18N.t('app.nav_shared')}</span>
+                        <span class="nav-badge hidden" id="shared-notif-badge"></span>
                     </a>
                     <a class="nav-item ${page === 'trash' ? 'active' : ''}" onclick="App.navigate('trash')">
                         ${UI.icons.trash} <span>${I18N.t('app.nav_trash')}</span>
@@ -178,6 +219,7 @@ const App = {
     async logout() {
         try { await API.auth.logout(); } catch {}
         this.user = null;
+        this.stopNotifPolling();
         this.navigate('login', true);
         UI.toast(I18N.t('app.logged_out'), 'info');
     },

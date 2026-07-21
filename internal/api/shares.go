@@ -252,6 +252,30 @@ func (h *Handler) SharedByMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, list)
 }
 
+// UnreadShareCount backs the Shared-page sidebar badge, polled periodically
+// by the frontend (see App.checkNotifications) — this app has no
+// WebSocket/SSE push infrastructure, so "near real-time" here means polling
+// a cheap COUNT query rather than holding a long-lived connection open per
+// user.
+func (h *Handler) UnreadShareCount(w http.ResponseWriter, r *http.Request) {
+	user := authutil.GetUser(r)
+	n, err := h.db.UnreadShareCount(user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "hasaplap bolmady")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"count": n})
+}
+
+func (h *Handler) MarkNotificationsSeen(w http.ResponseWriter, r *http.Request) {
+	user := authutil.GetUser(r)
+	if err := h.db.MarkNotificationsSeen(user.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "üýtgedip bolmady")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 func (h *Handler) GetSharesForFile(w http.ResponseWriter, r *http.Request) {
 	user := authutil.GetUser(r)
 	fileID, err := strconv.Atoi(r.PathValue("id"))

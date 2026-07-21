@@ -157,6 +157,7 @@ window.PAYLASH_LOCALE_RU = {
     'files.file_name_required': 'Введите имя файла',
     'files.download_folder_title': 'Скачать папку',
     'files.folder_zip_preparing': 'Подготовка «{name}.zip»…',
+    'files.bulk_zip_preparing': 'Подготовка архива…',
 
     // движок загрузки (upload.js)
     'upload.part_failed': 'Не удалось загрузить часть {n} (HTTP {status})',
@@ -179,9 +180,20 @@ window.PAYLASH_LOCALE_RU = {
     'preview.unsupported_type': 'Этот файл нельзя просмотреть',
     'preview.nav_prev': 'Предыдущее фото',
     'preview.nav_next': 'Следующее фото',
+    'comments.toggle': 'Комментарии',
+    'comments.title': 'Комментарии',
+    'comments.empty': 'Пока нет комментариев — оставьте первый.',
+    'comments.add_pin': 'Прикрепить комментарий к точке на изображении',
+    'comments.pin_placed': 'Метка поставлена — напишите комментарий ниже.',
+    'comments.pinned': 'Комментарий с меткой',
+    'comments.placeholder': 'Написать комментарий…',
+    'comments.post': 'Отправить',
+    'comments.delete_title': 'Удалить комментарий',
+    'comments.delete_body': 'Удалить этот комментарий? Это нельзя отменить.',
 
     // страница «Общий доступ» + окно шаринга
     'shares.tab_with_me': 'Доступно мне',
+    'notifications.new_shares_toast': { one: '{count} новый файл в общем доступе', few: '{count} новых файла в общем доступе', many: '{count} новых файлов в общем доступе' },
     'shares.tab_by_me': 'Мои расшаривания',
     'shares.empty_by_me': 'Вы пока ни с кем не поделились файлами',
     'shares.empty_with_me': 'С вами пока никто не поделился файлами',

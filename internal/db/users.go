@@ -172,6 +172,33 @@ func (d *DB) SetAllProjectsQuota(quotaBytes int64) error {
 	return err
 }
 
+// UnreadShareCount counts point-to-point shares made to userID since they
+// last checked the Shared page (see notifications_seen_at) — the number the
+// sidebar badge shows. Mirrors GetSharedWithMe's own filtering (deleted
+// files excluded) so the badge count never disagrees with what the page
+// itself actually lists.
+func (d *DB) UnreadShareCount(userID int) (int, error) {
+	var n int
+	err := d.QueryRow(
+		`SELECT COUNT(*) FROM file_shares fs
+		 JOIN files f ON f.id = fs.file_id
+		 JOIN users u ON u.id = fs.shared_with
+		 WHERE fs.shared_with = $1 AND f.deleted_at IS NULL AND fs.created_at > u.notifications_seen_at`,
+		userID,
+	).Scan(&n)
+	return n, err
+}
+
+// MarkNotificationsSeen resets userID's checkpoint to now — called when they
+// open the "shared with me" tab, clearing the badge for everything that
+// exists as of that moment (including anything that arrived between the
+// last poll and this call, which is the correct behavior: they're looking
+// at the page right now).
+func (d *DB) MarkNotificationsSeen(userID int) error {
+	_, err := d.Exec(`UPDATE users SET notifications_seen_at = NOW() WHERE id = $1`, userID)
+	return err
+}
+
 func (d *DB) UserExists(username string) (bool, error) {
 	var exists bool
 	err := d.QueryRow(`SELECT EXISTS(SELECT 1 FROM users WHERE username = $1)`, username).Scan(&exists)

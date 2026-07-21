@@ -160,6 +160,7 @@ window.PAYLASH_LOCALE_TK = {
     'files.file_name_required': 'Faýl adyny giriziň',
     'files.download_folder_title': 'Papkany ýükläp al',
     'files.folder_zip_preparing': '"{name}.zip" taýýarlanýar…',
+    'files.bulk_zip_preparing': 'Arhiw taýýarlanýar…',
 
     // ýükleme ulgamy (upload.js)
     'upload.part_failed': 'Bölek {n} ýüklenmedi (HTTP {status})',
@@ -182,9 +183,20 @@ window.PAYLASH_LOCALE_TK = {
     'preview.unsupported_type': 'Bu faýly görkezip bolmaýar',
     'preview.nav_prev': 'Öňki surat',
     'preview.nav_next': 'Indiki surat',
+    'comments.toggle': 'Teswirler',
+    'comments.title': 'Teswirler',
+    'comments.empty': 'Entek teswir ýok — ilkinji bolup ýazyň.',
+    'comments.add_pin': 'Suratyň bir nokadyna teswir belläň',
+    'comments.pin_placed': 'Belgi goýuldy — aşakda teswiriňizi ýazyň.',
+    'comments.pinned': 'Bellenen teswir',
+    'comments.placeholder': 'Teswir ýazyň…',
+    'comments.post': 'Ugrat',
+    'comments.delete_title': 'Teswiri poz',
+    'comments.delete_body': 'Bu teswir pozulsynmy? Bu yzyna gaýtaryp bolmaýar.',
 
     // paýlaşylanlar sahypasy + paýlaşmak penjiresi
     'shares.tab_with_me': 'Men bilen paýlaşylanlar',
+    'notifications.new_shares_toast': { other: 'Siz bilen {count} täze faýl paýlaşyldy' },
     'shares.tab_by_me': 'Meniň paýlaşanlarym',
     'shares.empty_by_me': 'Heniz hiç kime faýl paýlaşmadyňyz',
     'shares.empty_with_me': 'Heniz hiç kim size faýl paýlaşmady',

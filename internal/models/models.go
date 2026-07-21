@@ -196,6 +196,20 @@ type SharedFileView struct {
 	SharedAt     time.Time `json:"shared_at"`
 }
 
+// FileComment is a review note on a file, optionally pinned to a point on an
+// image/drawing (XPct/YPct, both 0–100, nil for a plain unpinned comment) —
+// backs the comments panel on the media preview page.
+type FileComment struct {
+	ID        int       `json:"id"`
+	FileID    int       `json:"file_id"`
+	UserID    int       `json:"user_id"`
+	UserName  string    `json:"user_name"`
+	Body      string    `json:"body"`
+	XPct      *float64  `json:"x_pct,omitempty"`
+	YPct      *float64  `json:"y_pct,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type SharedByMeView struct {
 	File
 	SharedWithID   int       `json:"shared_with_id"`

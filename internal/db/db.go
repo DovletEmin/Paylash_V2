@@ -186,6 +186,22 @@ func (d *DB) Migrate() error {
 			value TEXT NOT NULL DEFAULT ''
 		)`,
 		`INSERT INTO settings (key, value) VALUES ('public_quota_bytes', '53687091200') ON CONFLICT DO NOTHING`,
+		// Single per-user checkpoint rather than a per-share read flag: the
+		// Shared page badge only ever needs "how many arrived since I last
+		// looked", not which individual shares were seen. Defaults to NOW()
+		// so migrating an existing database doesn't suddenly flood everyone
+		// with a badge for every share that already existed.
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS notifications_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
+		`CREATE TABLE IF NOT EXISTS file_comments (
+			id         SERIAL PRIMARY KEY,
+			file_id    INT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+			user_id    INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			body       TEXT NOT NULL,
+			x_pct      DOUBLE PRECISION,
+			y_pct      DOUBLE PRECISION,
+			created_at TIMESTAMPTZ DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_file_comments_file ON file_comments(file_id)`,
 	}
 
 	for _, m := range migrations {

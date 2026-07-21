@@ -58,6 +58,7 @@ func (s *Server) routes(webFS embed.FS) {
 	s.mux.Handle("PATCH /api/files/{id}/move", auth(http.HandlerFunc(h.MoveFile)))
 	s.mux.Handle("DELETE /api/files/{id}", auth(http.HandlerFunc(h.DeleteFile)))
 	s.mux.Handle("GET /api/search", auth(http.HandlerFunc(h.SearchFiles)))
+	s.mux.Handle("GET /api/files/bulk-download", auth(http.HandlerFunc(h.BulkDownload)))
 	s.mux.Handle("GET /api/storage/usage", auth(http.HandlerFunc(h.StorageUsage)))
 
 	// File versions (MinIO bucket versioning)
@@ -90,6 +91,13 @@ func (s *Server) routes(webFS embed.FS) {
 	s.mux.Handle("GET /api/shared-by-me", auth(http.HandlerFunc(h.SharedByMe)))
 	s.mux.Handle("GET /api/files/{id}/shares", auth(http.HandlerFunc(h.GetSharesForFile)))
 	s.mux.Handle("GET /api/users/search", auth(http.HandlerFunc(h.SearchUsers)))
+	s.mux.Handle("GET /api/notifications/unread-count", auth(http.HandlerFunc(h.UnreadShareCount)))
+	s.mux.Handle("POST /api/notifications/mark-seen", auth(http.HandlerFunc(h.MarkNotificationsSeen)))
+
+	// File comments (annotations on previewed images/drawings)
+	s.mux.Handle("GET /api/files/{id}/comments", auth(http.HandlerFunc(h.ListFileComments)))
+	s.mux.Handle("POST /api/files/{id}/comments", auth(http.HandlerFunc(h.CreateFileComment)))
+	s.mux.Handle("DELETE /api/files/{id}/comments/{commentId}", auth(http.HandlerFunc(h.DeleteFileComment)))
 
 	// Trash (soft-delete)
 	s.mux.Handle("GET /api/trash", auth(http.HandlerFunc(h.ListTrash)))

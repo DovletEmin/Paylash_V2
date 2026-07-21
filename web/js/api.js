@@ -105,6 +105,31 @@ const API = {
         versions(id) { return API._request('GET', `/api/files/${id}/versions`); },
         restoreVersion(id, versionId) { return API._request('POST', `/api/files/${id}/versions/${encodeURIComponent(versionId)}/restore`); },
         downloadVersion(id, versionId) { window.open(`/api/files/${id}/versions/${encodeURIComponent(versionId)}/download`, '_blank'); },
+        // fileIds/folderIds -> a single combined zip, streamed straight to
+        // disk via a same-origin <a download> click (see FilesPage.bulkDownload)
+        // rather than fetched as a blob, so it stays cheap regardless of size.
+        bulkDownloadURL(fileIds, folderIds) {
+            const params = [
+                ...fileIds.map(id => `file_id=${id}`),
+                ...folderIds.map(id => `folder_id=${id}`),
+            ];
+            return `/api/files/bulk-download?${params.join('&')}`;
+        },
+        comments: {
+            list(fileId) { return API._request('GET', `/api/files/${fileId}/comments`); },
+            create(fileId, body, xPct, yPct) {
+                const payload = { body };
+                if (xPct != null) payload.x_pct = xPct;
+                if (yPct != null) payload.y_pct = yPct;
+                return API._request('POST', `/api/files/${fileId}/comments`, payload);
+            },
+            delete(fileId, commentId) { return API._request('DELETE', `/api/files/${fileId}/comments/${commentId}`); },
+        },
+    },
+
+    notifications: {
+        unreadCount() { return API._request('GET', '/api/notifications/unread-count'); },
+        markSeen() { return API._request('POST', '/api/notifications/mark-seen'); },
     },
 
     folders: {

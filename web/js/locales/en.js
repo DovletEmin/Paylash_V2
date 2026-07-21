@@ -157,6 +157,7 @@ window.PAYLASH_LOCALE_EN = {
     'files.file_name_required': 'Enter a file name',
     'files.download_folder_title': 'Download folder',
     'files.folder_zip_preparing': 'Preparing "{name}.zip"…',
+    'files.bulk_zip_preparing': 'Preparing your zip…',
 
     // upload engine (upload.js)
     'upload.part_failed': 'Part {n} failed to upload (HTTP {status})',
@@ -179,9 +180,20 @@ window.PAYLASH_LOCALE_EN = {
     'preview.unsupported_type': "This file can't be previewed",
     'preview.nav_prev': 'Previous photo',
     'preview.nav_next': 'Next photo',
+    'comments.toggle': 'Comments',
+    'comments.title': 'Comments',
+    'comments.empty': 'No comments yet — leave the first one.',
+    'comments.add_pin': 'Pin a comment to a point on the image',
+    'comments.pin_placed': 'Pin placed — write your comment below.',
+    'comments.pinned': 'Pinned comment',
+    'comments.placeholder': 'Write a comment…',
+    'comments.post': 'Post',
+    'comments.delete_title': 'Delete comment',
+    'comments.delete_body': 'Delete this comment? This can\'t be undone.',
 
     // shares page + share modal
     'shares.tab_with_me': 'Shared with me',
+    'notifications.new_shares_toast': { other: '{count} new files shared with you' },
     'shares.tab_by_me': 'My shares',
     'shares.empty_by_me': "You haven't shared any files yet",
     'shares.empty_with_me': "No one has shared any files with you yet",
