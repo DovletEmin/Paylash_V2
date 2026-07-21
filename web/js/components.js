@@ -16,7 +16,7 @@ const UI = {
         o.innerHTML = `<div class="modal">
             <div class="modal-header">
                 <h3 class="modal-title">${this.esc(title)}</h3>
-                ${hideClose ? '' : '<button class="modal-close" onclick="UI.closeModal()">✕</button>'}
+                ${hideClose ? '' : `<button class="modal-close" onclick="UI.closeModal()" aria-label="${this.esc(I18N.t('common.close'))}">✕</button>`}
             </div>
             <div class="modal-body">${bodyHTML}</div>
             ${footerHTML ? `<div class="modal-footer">${footerHTML}</div>` : ''}
@@ -29,6 +29,19 @@ const UI = {
         const o = document.getElementById('modal-overlay');
         o.classList.remove('visible');
         setTimeout(() => { o.classList.add('hidden'); o.innerHTML = ''; }, 200);
+    },
+
+    // Generic destructive-action confirmation — replaces window.confirm()
+    // call sites so the prompt is styled and translatable like the rest of
+    // the app instead of a browser-native dialog the app has no control
+    // over. onConfirm may be async; the modal closes first so a slow
+    // request doesn't leave the confirm button looking stuck.
+    _confirmActionSeq: 0,
+    confirmAction(title, bodyHTML, confirmLabel, onConfirm) {
+        const cbName = '_confirmActionCb' + (this._confirmActionSeq++);
+        this[cbName] = async () => { UI.closeModal(); delete UI[cbName]; await onConfirm(); };
+        this.showModal(title, bodyHTML,
+            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-danger" onclick="UI.${cbName}()">${confirmLabel}</button>`);
     },
 
     showContextMenu(x, y, items) {
@@ -135,13 +148,22 @@ const UI = {
     formatDate(d) {
         if (!d) return '';
         const dt = new Date(d), now = new Date(), diff = Math.floor((now - dt) / 60000);
-        if (diff < 1) return 'şu wagt';
-        if (diff < 60) return diff + ' min öň';
+        if (diff < 1) return I18N.t('common.just_now');
+        if (diff < 60) return I18N.t('common.minutes_ago', { n: diff });
         const h = Math.floor(diff / 60);
-        if (h < 24) return h + ' sag öň';
+        if (h < 24) return I18N.t('common.hours_ago', { n: h });
         const days = Math.floor(h / 24);
-        if (days < 7) return days + ' gün öň';
-        return dt.toLocaleDateString('tk-TM');
+        if (days < 7) return I18N.t('common.days_ago', { n: days });
+        return dt.toLocaleDateString(I18N.dateLocale());
+    },
+
+    // Compact EN/RU/TK/TR switcher — used in the topbar (post-login shell)
+    // and on the login/register screens (which render before App exists).
+    langSwitcher() {
+        const codes = I18N.SUPPORTED;
+        return `<div class="lang-switcher" role="group" aria-label="${this.esc(I18N.t('app.language'))}">
+            ${codes.map(c => `<button type="button" class="lang-btn ${I18N.lang === c ? 'active' : ''}" onclick="I18N.setLang('${c}')">${c.toUpperCase()}</button>`).join('')}
+        </div>`;
     },
 
     fileIcon(name, isFolder) {

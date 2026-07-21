@@ -4,8 +4,10 @@ import (
 	"archive/zip"
 	"bytes"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"path"
 	"path/filepath"
 	"paylash/internal/authutil"
 	"paylash/internal/db"
@@ -17,12 +19,6 @@ import (
 
 	"github.com/xuri/excelize/v2"
 )
-
-// largeDownloadThreshold is the size at/above which DownloadFile redirects
-// to a presigned MinIO URL instead of streaming through the app process —
-// the download counterpart to Uploader.LARGE_FILE_THRESHOLD in
-// web/js/upload.js, so big transfers bypass the server in both directions.
-const largeDownloadThreshold = 50 << 20
 
 // uniqueFileName returns a name like "file (1).docx" if "file.docx" already exists.
 func uniqueFileName(store *db.DB, name string, ownerID int, scope string, folderID *int, projectID *int) string {
@@ -131,6 +127,33 @@ func canEditFolderWith(lookup projectPermLookup, role string, userID int, folder
 		}
 		perm, err := lookup.GetProjectMemberPermission(*folder.ProjectID, userID)
 		return err == nil && perm == "edit"
+	}
+	return false
+}
+
+// canViewFolder reports whether the user may read/download an existing
+// folder — the view-level counterpart to canEditFolder (any project
+// membership qualifies, not just "edit"), matching the access level
+// ListFiles/ListFolderTree already require for the same scopes.
+func (h *Handler) canViewFolder(user *models.User, folder *models.Folder) bool {
+	return canViewFolderWith(h.db, user.Role, user.ID, folder)
+}
+
+func canViewFolderWith(lookup projectPermLookup, role string, userID int, folder *models.Folder) bool {
+	if role == "admin" {
+		return true
+	}
+	switch folder.Scope {
+	case "personal":
+		return folder.OwnerID == userID
+	case "common":
+		return true
+	case "project":
+		if folder.ProjectID == nil {
+			return false
+		}
+		perm, err := lookup.GetProjectMemberPermission(*folder.ProjectID, userID)
+		return err == nil && perm != ""
 	}
 	return false
 }
@@ -343,23 +366,15 @@ func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Large files: redirect to a short-lived presigned MinIO URL so the
-	// bytes never transit through this process at all — symmetric with how
-	// large uploads already bypass the server. It's a browser navigation
-	// (window.open/<img>/<video> src), not a fetch, so this works with no
-	// CORS involvement; PreviewPage's fetch() path for text files is
-	// already covered by the MinIO CORS config the upload feature needs.
-	// Small files, and any file when the public endpoint isn't configured,
-	// keep streaming straight through here.
-	if f.SizeBytes >= largeDownloadThreshold && h.minio.PublicEndpointConfigured() {
-		url, err := h.minio.PresignDownload(r.Context(), f.MinioBucket, f.MinioKey, f.Name, 15*time.Minute)
-		if err == nil {
-			http.Redirect(w, r, url, http.StatusFound)
-			return
-		}
-		// fall through to the proxied download below if presigning fails
-	}
-
+	// Every download (any size) streams straight through this process via
+	// ServeContent below — it used to redirect files ≥50MB to a presigned
+	// MinIO URL instead, but that URL was always http:// while the app
+	// itself is served over https:// via Caddy, and browsers silently
+	// block/warn on downloads that resolve to http from an https page. That
+	// made every large-file download fail while small ones (served here)
+	// worked fine. Streaming through the app avoids the mismatch entirely —
+	// ServeContent doesn't buffer the object in memory either way (see
+	// below), so this isn't a meaningful cost for a LAN tool.
 	obj, err := h.minio.Download(r.Context(), f.MinioBucket, f.MinioKey)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "faýly alyp bolmady")
@@ -968,4 +983,120 @@ func (h *Handler) DeleteFolder(w http.ResponseWriter, r *http.Request) {
 	}
 	h.logAction(r, "folder.delete", "folder", folder.ID, folder.Name, nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// DownloadFolder streams a folder (and everything nested under it) as a zip,
+// built on the fly directly into the response — no temp file, no buffering
+// the archive in memory first, same streaming principle as DownloadFile.
+// Uses zip.Store (no compression): studio files are overwhelmingly already-
+// compressed CAD/image/render data, so skipping DEFLATE avoids burning CPU
+// for no space savings on what's likely to be a very large folder.
+func (h *Handler) DownloadFolder(w http.ResponseWriter, r *http.Request) {
+	user := authutil.GetUser(r)
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry ID")
+		return
+	}
+
+	folder, err := h.db.GetFolder(id)
+	if err != nil || folder == nil {
+		writeError(w, http.StatusNotFound, "bukja tapylmady")
+		return
+	}
+	if !h.canViewFolder(user, folder) {
+		writeError(w, http.StatusForbidden, "rugsat ýok")
+		return
+	}
+
+	folderIDs, err := h.db.ListFolderAndDescendantIDs(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "bukjany alyp bolmady")
+		return
+	}
+	allFolders, err := h.db.GetFoldersByIDs(folderIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "bukjany alyp bolmady")
+		return
+	}
+	files, err := h.db.ListFilesInFolders(folderIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "faýllary alyp bolmady")
+		return
+	}
+
+	// Every id in folderIDs is `id` itself or one of its descendants, so its
+	// whole ancestor chain up to `id` is guaranteed to be in allFolders too —
+	// resolving in repeated passes handles allFolders arriving in any order
+	// (a child can appear before its parent) without needing a sort first.
+	relPath := map[int]string{id: ""}
+	remaining := make([]models.Folder, 0, len(allFolders))
+	for _, f := range allFolders {
+		if f.ID != id {
+			remaining = append(remaining, f)
+		}
+	}
+	for len(remaining) > 0 {
+		next := remaining[:0]
+		progressed := false
+		for _, f := range remaining {
+			if f.ParentID == nil {
+				continue // can't happen for a real descendant of `id`; drop defensively
+			}
+			parentPath, ok := relPath[*f.ParentID]
+			if !ok {
+				next = append(next, f)
+				continue
+			}
+			relPath[f.ID] = path.Join(parentPath, f.Name)
+			progressed = true
+		}
+		remaining = next
+		if !progressed {
+			break
+		}
+	}
+
+	zipName := folder.Name + ".zip"
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, zipName))
+
+	zw := zip.NewWriter(w)
+	defer zw.Close()
+
+	// Explicit directory entries so empty subfolders still show up once
+	// extracted, even though they carry no files of their own.
+	for fID, rp := range relPath {
+		if fID == id {
+			continue // the root folder itself isn't a path inside its own zip
+		}
+		if _, err := zw.CreateHeader(&zip.FileHeader{Name: rp + "/", Method: zip.Store}); err != nil {
+			log.Printf("folder download: create dir entry %s: %v", rp, err)
+		}
+	}
+
+	for _, f := range files {
+		if f.FolderID == nil {
+			continue
+		}
+		parentPath, ok := relPath[*f.FolderID]
+		if !ok {
+			continue
+		}
+		entryName := path.Join(parentPath, f.Name)
+		fw, err := zw.CreateHeader(&zip.FileHeader{Name: entryName, Method: zip.Store, Modified: f.UpdatedAt})
+		if err != nil {
+			log.Printf("folder download: create entry %s: %v", entryName, err)
+			continue
+		}
+		obj, err := h.minio.Download(r.Context(), f.MinioBucket, f.MinioKey)
+		if err != nil {
+			log.Printf("folder download: open %s/%s: %v", f.MinioBucket, f.MinioKey, err)
+			continue
+		}
+		if _, err := io.Copy(fw, obj); err != nil {
+			log.Printf("folder download: copy %s: %v", entryName, err)
+		}
+		obj.Close()
+	}
 }

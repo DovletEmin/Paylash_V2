@@ -481,6 +481,32 @@ func (d *DB) ListFilesInFolders(folderIDs []int) ([]models.File, error) {
 	return files, rows.Err()
 }
 
+// GetFoldersByIDs returns the full Folder rows for an arbitrary set of ids —
+// unlike ListFolderAndDescendantIDs (bare ids only), used where the caller
+// needs each folder's name/parent_id, e.g. to reconstruct a subtree's
+// relative paths for a zip download.
+func (d *DB) GetFoldersByIDs(ids []int) ([]models.Folder, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := d.Query(
+		`SELECT id, name, parent_id, owner_id, project_id, scope, created_at FROM folders WHERE id = ANY($1)`, pq.Array(ids),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var folders []models.Folder
+	for rows.Next() {
+		var f models.Folder
+		if err := rows.Scan(&f.ID, &f.Name, &f.ParentID, &f.OwnerID, &f.ProjectID, &f.Scope, &f.CreatedAt); err != nil {
+			return nil, err
+		}
+		folders = append(folders, f)
+	}
+	return folders, rows.Err()
+}
+
 // DeleteFilesInFolders removes every file row whose folder_id is one of
 // folderIDs. Callers must delete the corresponding MinIO objects first.
 func (d *DB) DeleteFilesInFolders(folderIDs []int) error {

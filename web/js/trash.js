@@ -7,10 +7,10 @@ const TrashPage = {
         <div class="files-page">
             <div class="files-toolbar">
                 <div class="files-toolbar-left">
-                    <p class="text-muted" style="font-size:.8rem">Pozulan faýllar 30 günden soň awtomatik hemişelik pozulýar</p>
+                    <p class="text-muted" style="font-size:.8rem">${I18N.t('trash.auto_purge_notice')}</p>
                 </div>
                 <div class="files-toolbar-right">
-                    <button class="btn btn-danger btn-sm" onclick="TrashPage.confirmEmpty()">${UI.icons.trash} Çöpi boşat</button>
+                    <button class="btn btn-danger btn-sm" onclick="TrashPage.confirmEmpty()">${UI.icons.trash} ${I18N.t('trash.empty_button')}</button>
                 </div>
             </div>
             <div id="trash-content">${UI.skeletonCards(6)}</div>
@@ -31,7 +31,7 @@ const TrashPage = {
             ];
             this.renderItems();
         } catch (err) {
-            c.innerHTML = `<div class="empty-state"><p>Çöpi ýükläp bolmady</p><p class="text-muted">${UI.esc(err.message)}</p></div>`;
+            c.innerHTML = `<div class="empty-state"><p>${I18N.t('trash.load_failed')}</p><p class="text-muted">${UI.esc(err.message)}</p></div>`;
         }
     },
 
@@ -39,7 +39,7 @@ const TrashPage = {
         const c = document.getElementById('trash-content');
         if (!c) return;
         if (!this.items.length) {
-            c.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🗑</div><p>Çöp gutusy boş</p></div>';
+            c.innerHTML = `<div class="empty-state"><div class="empty-state-icon">🗑</div><p>${I18N.t('trash.empty_state')}</p></div>`;
             return;
         }
         c.innerHTML = '<div class="file-grid">' + this.items.map(i => this.card(i)).join('') + '</div>';
@@ -52,10 +52,10 @@ const TrashPage = {
         return `<div class="file-card">
             <div class="file-card-icon ${cls}">${icon}</div>
             <div class="file-card-name" title="${UI.esc(item.name)}">${UI.esc(item.name)}</div>
-            <div class="file-card-meta">${UI.formatDate(item.deleted_at)} pozuldy</div>
+            <div class="file-card-meta">${I18N.t('trash.deleted_suffix', { date: UI.formatDate(item.deleted_at) })}</div>
             <div style="display:flex;gap:6px;margin-top:8px">
-                <button class="btn btn-sm btn-ghost" style="flex:1" onclick="TrashPage.restore(${isFolder},${item.id})" title="Dikelt">↩ Dikelt</button>
-                <button class="btn btn-sm btn-danger" onclick="TrashPage.confirmPurge(${isFolder},${item.id},${UI.escJson(item.name)})" title="Ebedilik poz">🗑</button>
+                <button class="btn btn-sm btn-ghost" style="flex:1" onclick="TrashPage.restore(${isFolder},${item.id})" title="${I18N.t('trash.restore_title')}">↩ ${I18N.t('trash.restore_title')}</button>
+                <button class="btn btn-sm btn-danger" onclick="TrashPage.confirmPurge(${isFolder},${item.id},${UI.escJson(item.name)})" title="${I18N.t('trash.purge_title')}">🗑</button>
             </div>
         </div>`;
     },
@@ -64,15 +64,15 @@ const TrashPage = {
         try {
             if (isFolder) await API.trash.restoreFolder(id);
             else await API.trash.restoreFile(id);
-            UI.toast('Dikeldildi', 'success');
+            UI.toast(I18N.t('trash.restored'), 'success');
             this.load();
         } catch (e) { UI.toast(e.message, 'error'); }
     },
 
     confirmPurge(isFolder, id, name) {
-        UI.showModal('Ebedilik pozmak',
-            `<p>"<strong>${UI.esc(name)}</strong>" ebedilik pozulsynmy?</p><p class="text-muted">Bu yzyna gaýtaryp bolmaýar.</p>`,
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">Ýatyrmak</button><button class="btn btn-danger" onclick="TrashPage.doPurge(${isFolder},${id})">Poz</button>`);
+        UI.showModal(I18N.t('trash.purge_confirm_title'),
+            I18N.t('trash.purge_confirm_body', { name: UI.esc(name) }),
+            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-danger" onclick="TrashPage.doPurge(${isFolder},${id})">${I18N.t('common.delete')}</button>`);
     },
 
     async doPurge(isFolder, id) {
@@ -80,23 +80,23 @@ const TrashPage = {
             if (isFolder) await API.trash.purgeFolder(id);
             else await API.trash.purgeFile(id);
             UI.closeModal();
-            UI.toast('Ebedilik pozuldy', 'success');
+            UI.toast(I18N.t('trash.purged'), 'success');
             this.load();
         } catch (e) { UI.toast(e.message, 'error'); }
     },
 
     confirmEmpty() {
-        if (!this.items.length) { UI.toast('Çöp gutusy eýýäm boş', 'info'); return; }
-        UI.showModal('Çöpi boşatmak',
-            `<p>Çöp gutusyndaky ähli faýllar we bukjalar ebedilik pozulsynmy?</p><p class="text-muted">Bu yzyna gaýtaryp bolmaýar.</p>`,
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">Ýatyrmak</button><button class="btn btn-danger" onclick="TrashPage.doEmpty()">Boşat</button>`);
+        if (!this.items.length) { UI.toast(I18N.t('trash.already_empty'), 'info'); return; }
+        UI.showModal(I18N.t('trash.empty_confirm_title'),
+            I18N.t('trash.empty_confirm_body'),
+            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-danger" onclick="TrashPage.doEmpty()">${I18N.t('trash.empty_button')}</button>`);
     },
 
     async doEmpty() {
         try {
             await API.trash.empty();
             UI.closeModal();
-            UI.toast('Çöp gutusy boşadyldy', 'success');
+            UI.toast(I18N.t('trash.emptied'), 'success');
             this.load();
         } catch (e) { UI.toast(e.message, 'error'); }
     },

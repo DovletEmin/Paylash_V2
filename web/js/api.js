@@ -1,4 +1,4 @@
-// Paylash API Client — Turkmen UI
+// Paylash API Client
 const API = {
     async _request(method, url, body) {
         const opts = {
@@ -10,10 +10,10 @@ const API = {
         const res = await fetch(url, opts);
         if (res.status === 401 && !url.includes('/auth/me')) {
             if (typeof App !== 'undefined') App.navigate('login');
-            throw new Error('Sessiýa gutardy');
+            throw new Error(I18N.t('common.session_expired'));
         }
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Näsazlyk ýüze çykdy');
+        if (!res.ok) throw new Error(data.error || I18N.t('common.error_generic'));
         return data;
     },
 
@@ -39,7 +39,7 @@ const API = {
             const form = new FormData();
             form.append('avatar', file);
             return fetch('/api/auth/avatar', { method: 'POST', body: form, credentials: 'same-origin' })
-                .then(r => r.json().then(d => r.ok ? d : Promise.reject(new Error(d.error || 'Ýalňyşlyk'))));
+                .then(r => r.json().then(d => r.ok ? d : Promise.reject(new Error(d.error || I18N.t('common.error_short')))));
         },
     },
 
@@ -80,10 +80,10 @@ const API = {
                         resolve(JSON.parse(xhr.responseText));
                     } else {
                         try { reject(new Error(JSON.parse(xhr.responseText).error)); }
-                        catch { reject(new Error('Ýükläp bolmady')); }
+                        catch { reject(new Error(I18N.t('common.upload_failed'))); }
                     }
                 };
-                xhr.onerror = () => reject(new Error('Tor näsazlygy'));
+                xhr.onerror = () => reject(new Error(I18N.t('common.network_error')));
                 xhr.send(form);
             });
         },
@@ -121,6 +121,7 @@ const API = {
         rename(id, name) { return API._request('PATCH', `/api/folders/${id}`, { name }); },
         move(id, parentId) { return API._request('PATCH', `/api/folders/${id}/move`, { parent_id: parentId || null }); },
         delete(id) { return API._request('DELETE', `/api/folders/${id}`); },
+        downloadURL(id) { return `/api/folders/${id}/download`; },
     },
 
     uploads: {
@@ -212,7 +213,7 @@ const API = {
                 const form = new FormData();
                 form.append('file', file);
                 return fetch('/api/admin/users/import', { method: 'POST', body: form, credentials: 'same-origin' })
-                    .then(r => r.json().then(d => r.ok ? d : Promise.reject(new Error(d.error || 'Ýalňyşlyk'))));
+                    .then(r => r.json().then(d => r.ok ? d : Promise.reject(new Error(d.error || I18N.t('common.error_short')))));
             },
         },
     },

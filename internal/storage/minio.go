@@ -254,23 +254,6 @@ func (m *MinioClient) PublicEndpointConfigured() bool {
 	return m.publicClient != nil
 }
 
-// PresignDownload signs a URL the browser can GET a file's bytes from
-// directly, bypassing the app server for the transfer — the download
-// counterpart to PresignPartUpload. filename is set as the response's
-// Content-Disposition so the browser saves it under the right name.
-func (m *MinioClient) PresignDownload(ctx context.Context, bucket, key, filename string, expiry time.Duration) (string, error) {
-	if m.publicClient == nil {
-		return "", fmt.Errorf("PAYLASH_MINIO_PUBLIC_ENDPOINT is not configured")
-	}
-	reqParams := url.Values{}
-	reqParams.Set("response-content-disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-	u, err := m.publicClient.Presign(ctx, http.MethodGet, bucket, key, expiry, reqParams)
-	if err != nil {
-		return "", fmt.Errorf("presign download %s/%s: %w", bucket, key, err)
-	}
-	return u.String(), nil
-}
-
 // UploadedPart describes one part MinIO has already received for an
 // in-progress multipart upload.
 type UploadedPart struct {

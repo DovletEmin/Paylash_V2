@@ -7,16 +7,16 @@ const EditorPage = {
         return `
         <div class="editor-page">
             <div class="editor-toolbar">
-                <button class="btn btn-ghost btn-sm" onclick="App.navigate('files')">← Yza</button>
+                <button class="btn btn-ghost btn-sm" onclick="App.navigate('files')">${I18N.t('editor.back')}</button>
                 <span class="editor-filename">${UI.esc(this.currentFileName)}</span>
                 <div class="editor-toolbar-right">
-                    <button class="btn btn-ghost btn-sm" onclick="EditorPage.download()">${UI.icons.download} Ýükle</button>
-                    <button class="btn btn-ghost btn-sm" onclick="FilesPage.showVersionsModal({id:EditorPage.currentFileId,name:EditorPage.currentFileName})">🕓 Wersiýalar</button>
-                    <button class="btn btn-ghost btn-sm" onclick="SharesPage.showShareModal({id:EditorPage.currentFileId,name:EditorPage.currentFileName})">${UI.icons.share} Paýlaş</button>
+                    <button class="btn btn-ghost btn-sm" onclick="EditorPage.download()">${UI.icons.download} ${I18N.t('files.action_download')}</button>
+                    <button class="btn btn-ghost btn-sm" onclick="FilesPage.showVersionsModal({id:EditorPage.currentFileId,name:EditorPage.currentFileName})">🕓 ${I18N.t('files.action_versions')}</button>
+                    <button class="btn btn-ghost btn-sm" onclick="SharesPage.showShareModal({id:EditorPage.currentFileId,name:EditorPage.currentFileName})">${UI.icons.share} ${I18N.t('files.action_share')}</button>
                 </div>
             </div>
             <div class="editor-container" id="editor-container">
-                <div class="editor-loading"><div class="spinner"></div><p>Redaktor ýüklenýär…</p></div>
+                <div class="editor-loading"><div class="spinner"></div><p>${I18N.t('editor.loading')}</p></div>
             </div>
         </div>`;
     },
@@ -35,10 +35,10 @@ const EditorPage = {
             if (data.editor_url) {
                 c.innerHTML = `<iframe src="${data.editor_url}" class="editor-iframe" allowfullscreen></iframe>`;
             } else {
-                c.innerHTML = '<div class="empty-state"><p>Redaktor elýeterli däl</p><p class="text-muted">Collabora Online işleýändigini barlaň</p></div>';
+                c.innerHTML = `<div class="empty-state"><p>${I18N.t('editor.unavailable')}</p><p class="text-muted">${I18N.t('editor.unavailable_hint')}</p></div>`;
             }
         } catch (err) {
-            c.innerHTML = `<div class="empty-state"><p>Redaktory açyp bolmady</p><p class="text-muted">${UI.esc(err.message)}</p></div>`;
+            c.innerHTML = `<div class="empty-state"><p>${I18N.t('editor.open_failed')}</p><p class="text-muted">${UI.esc(err.message)}</p></div>`;
         }
     },
 

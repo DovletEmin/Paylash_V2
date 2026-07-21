@@ -24,6 +24,7 @@
   --r: 8px;
   --r-lg: 12px;
   --font: 'Inter',system-ui,-apple-system,sans-serif;
+  --font-mono: 'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
   --tr: .15s ease;
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -36,6 +37,13 @@ input,select,textarea{font-family:var(--font);outline:none}
 ::-webkit-scrollbar{width:5px;height:5px}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+/* Keyboard-focus ring — buttons/inputs strip the default outline above for
+   a cleaner look with the mouse, but keyboard users still need a visible
+   focus indicator; :focus-visible restores one only for keyboard/programmatic
+   focus, not mouse clicks, so both needs are met at once. */
+:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.form-control:focus-visible,.form-input:focus-visible{outline-offset:0}
 
 /* ─── Layout ─── */
 .app-layout{display:flex;min-height:100vh}
@@ -98,6 +106,17 @@ html.light .theme-icon-light{display:inline}
 .sidebar-toggle svg{width:18px;height:18px}
 .page-content{flex:1;padding:24px}
 
+/* ─── Language Switcher ─── */
+.lang-switcher{display:flex;border:1px solid var(--border);border-radius:var(--r);overflow:hidden}
+.lang-btn{
+  padding:5px 8px;font-size:.68rem;font-weight:600;letter-spacing:.03em;color:var(--text-3);
+  background:var(--surface);transition:all var(--tr);border-right:1px solid var(--border);
+}
+.lang-btn:last-child{border-right:none}
+.lang-btn:hover{background:var(--surface-2);color:var(--text)}
+.lang-btn.active{background:var(--primary-bg);color:var(--primary)}
+.auth-lang-switcher{position:absolute;top:20px;right:20px}
+
 /* ─── Buttons ─── */
 .btn{
   display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:var(--r);
@@ -129,7 +148,7 @@ select.form-control,select.form-input{appearance:none;cursor:pointer;background-
 /* ─── Auth Pages ─── */
 .auth-container{
   min-height:100vh;display:flex;align-items:center;justify-content:center;
-  background:var(--bg);padding:20px;
+  background:var(--bg);padding:20px;position:relative;
 }
 .auth-card{
   background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);
@@ -242,8 +261,9 @@ select.form-control,select.form-input{appearance:none;cursor:pointer;background-
   backdrop-filter:blur(2px);transition:opacity .15s;
 }
 .drop-overlay.hidden{display:none}
-.drop-overlay-content{display:flex;flex-direction:column;align-items:center;gap:8px;color:var(--primary);font-weight:600;font-size:.95rem}
+.drop-overlay-content{display:flex;flex-direction:column;align-items:center;gap:8px;color:var(--primary);font-weight:600;font-size:.95rem;text-align:center}
 .drop-overlay-content svg{width:36px;height:36px}
+.drop-overlay-hint{font-weight:400;font-size:.78rem;color:var(--text-2);margin-top:-4px}
 
 /* ─── Upload Progress ─── */
 .upload-progress{
@@ -527,6 +547,15 @@ html.light .context-menu{box-shadow:0 8px 32px rgba(0,0,0,.1)}
 .mb-16{margin-bottom:16px}
 
 /* ─── Responsive ─── */
+/* Tablet: sidebar stays put (still plenty of width) but content density
+   trims down a notch — grids/stat-cards drop a column or two rather than
+   jumping straight to the phone layout below. */
+@media(max-width:1024px){
+  .file-grid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr))}
+  .stat-cards{grid-template-columns:repeat(2,1fr)}
+  .search-box input{width:150px}
+  .search-box input:focus{width:180px}
+}
 @media(max-width:768px){
   .sidebar{transform:translateX(-100%)}
   .sidebar.open{transform:translateX(0)}
@@ -539,4 +568,8 @@ html.light .context-menu{box-shadow:0 8px 32px rgba(0,0,0,.1)}
   .admin-nav{flex-direction:row;flex-wrap:wrap;gap:4px}
   .topbar-title{font-size:.82rem}
   .search-box input{width:140px}
+  .topbar{padding:0 12px;gap:8px}
+  .lang-btn{padding:4px 6px;font-size:.62rem}
+  .files-actions{flex-wrap:wrap}
+  .auth-lang-switcher{top:12px;right:12px}
 }

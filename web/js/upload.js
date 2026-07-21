@@ -110,9 +110,9 @@ const Uploader = {
             try {
                 const { url } = await API.uploads.partURL(sessionId, partNumber);
                 const res = await fetch(url, { method: 'PUT', body: blob });
-                if (!res.ok) throw new Error(`Bölek ${partNumber} ýüklenmedi (HTTP ${res.status})`);
+                if (!res.ok) throw new Error(I18N.t('upload.part_failed', { n: partNumber, status: res.status }));
                 const etag = res.headers.get('ETag');
-                if (!etag) throw new Error(`Bölek ${partNumber}: ETag alynmady`);
+                if (!etag) throw new Error(I18N.t('upload.part_no_etag', { n: partNumber }));
                 return etag;
             } catch (e) {
                 lastErr = e;
@@ -120,5 +120,48 @@ const Uploader = {
             }
         }
         throw lastErr;
+    },
+
+    // Given a batch of {file, relativePath} entries (from a <input
+    // webkitdirectory> selection or a dropped folder tree), recreates the
+    // directory structure server-side via the existing folder endpoints and
+    // resolves each entry to the destination folder id its file belongs in.
+    // Folders are found-or-created top-down, memoizing in-flight creations
+    // per path so concurrent entries destined for the same new subfolder
+    // await one API.folders.create call instead of racing duplicates.
+    async resolveFolderPaths(entries, scope, rootFolderId, projectId) {
+        const existing = await API.folders.tree(scope, projectId);
+        // key: `${parentId||'root'}::${name}` -> folder id, seeded from what's
+        // already there so re-uploading into an existing tree doesn't create
+        // duplicate folders with the same name.
+        const byParentAndName = new Map();
+        for (const f of existing) byParentAndName.set(`${f.parent_id || 'root'}::${f.name}`, f.id);
+
+        const creating = new Map(); // pathKey -> Promise<folderId>, in-flight de-dup
+        const resolveDir = async (parentId, name) => {
+            const parentKey = parentId || 'root';
+            const mapKey = `${parentKey}::${name}`;
+            const known = byParentAndName.get(mapKey);
+            if (known !== undefined) return known;
+            if (creating.has(mapKey)) return creating.get(mapKey);
+            const p = API.folders.create(name, scope, parentId, projectId).then(f => {
+                byParentAndName.set(mapKey, f.id);
+                return f.id;
+            });
+            creating.set(mapKey, p);
+            return p;
+        };
+
+        const resolved = [];
+        for (const { file, relativePath } of entries) {
+            const segments = relativePath.split('/').filter(Boolean);
+            segments.pop(); // drop the filename itself
+            let folderId = rootFolderId || null;
+            for (const segment of segments) {
+                folderId = await resolveDir(folderId, segment);
+            }
+            resolved.push({ file, folderId });
+        }
+        return resolved;
     },
 };

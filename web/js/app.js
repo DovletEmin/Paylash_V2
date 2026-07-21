@@ -19,23 +19,23 @@ const App = {
     },
 
     showForcePasswordModal() {
-        UI.showModal('Paroly çalyşmaly', `
-            <p class="text-muted" style="margin-bottom:12px">Ilkinji giriş — dowam etmezden ozal parolyňyzy üýtgediň.</p>
-            <div class="form-group"><label>Köne parol</label>${UI.passwordField('force-old-pw', 'Häzirki parol')}</div>
-            <div class="form-group"><label>Täze parol</label>${UI.passwordField('force-new-pw', 'Azyndan 6 simwol')}</div>`,
-            `<button class="btn btn-primary btn-block" onclick="App.saveForcedPassword()">Ýatda sakla</button>`,
+        UI.showModal(I18N.t('app.change_password_title'), `
+            <p class="text-muted" style="margin-bottom:12px">${I18N.t('app.change_password_subtitle')}</p>
+            <div class="form-group"><label>${I18N.t('app.old_password_label')}</label>${UI.passwordField('force-old-pw', I18N.t('app.old_password_placeholder'))}</div>
+            <div class="form-group"><label>${I18N.t('app.new_password_label')}</label>${UI.passwordField('force-new-pw', I18N.t('auth.password_min_placeholder'))}</div>`,
+            `<button class="btn btn-primary btn-block" onclick="App.saveForcedPassword()">${I18N.t('common.save')}</button>`,
             true);
     },
 
     async saveForcedPassword() {
         const oldPw = document.getElementById('force-old-pw').value;
         const newPw = document.getElementById('force-new-pw').value;
-        if (!oldPw || newPw.length < 6) { UI.toast('Köne parol we azyndan 6 simwollyk täze parol giriziň', 'error'); return; }
+        if (!oldPw || newPw.length < 6) { UI.toast(I18N.t('app.old_new_required'), 'error'); return; }
         try {
             const updated = await API.auth.updateProfile(this.user.full_name, oldPw, newPw);
             this.user = updated;
             UI.closeModal();
-            UI.toast('Parol üýtgedildi', 'success');
+            UI.toast(I18N.t('app.password_changed'), 'success');
         } catch (e) { UI.toast(e.message, 'error'); }
     },
 
@@ -104,30 +104,30 @@ const App = {
                     <div class="sidebar-logo">${UI.icons.cloud} Paýlaş</div>
                 </div>
                 <nav class="sidebar-nav">
-                    <div class="sidebar-section">Esasy</div>
+                    <div class="sidebar-section">${I18N.t('app.nav_main')}</div>
                     <a class="nav-item ${page === 'files' ? 'active' : ''}" onclick="App.navigate('files')">
-                        ${UI.icons.folder} <span>Faýllar</span>
+                        ${UI.icons.folder} <span>${I18N.t('app.nav_files')}</span>
                     </a>
                     <a class="nav-item nav-sub ${page === 'files' && FilesPage.currentScope === 'personal' ? 'active' : ''}" onclick="FilesPage.setScope('personal');App.navigate('files')">
-                        <span>🔒</span> <span>Şahsy</span>
+                        <span>🔒</span> <span>${I18N.t('app.nav_personal')}</span>
                     </a>
                     <a class="nav-item nav-sub ${page === 'files' && FilesPage.currentScope === 'common' ? 'active' : ''}" onclick="FilesPage.setScope('common');App.navigate('files')">
-                        <span>🌐</span> <span>Umumy</span>
+                        <span>🌐</span> <span>${I18N.t('app.nav_common')}</span>
                     </a>
                     ${this.projects.map(p => `
                     <a class="nav-item nav-sub ${page === 'files' && FilesPage.currentScope === 'project' && FilesPage.currentProjectId === p.id ? 'active' : ''}" onclick="FilesPage.setScope('project',${p.id},${UI.escJson(p.name)},${UI.escJson(p.permission)});App.navigate('files')">
                         <span>${p.permission === 'view' ? '👁' : '📁'}</span> <span>${UI.esc(p.name)}</span>
                     </a>`).join('')}
                     <a class="nav-item ${page === 'shared' ? 'active' : ''}" onclick="App.navigate('shared')">
-                        ${UI.icons.share} <span>Paýlaşylanlar</span>
+                        ${UI.icons.share} <span>${I18N.t('app.nav_shared')}</span>
                     </a>
                     <a class="nav-item ${page === 'trash' ? 'active' : ''}" onclick="App.navigate('trash')">
-                        ${UI.icons.trash} <span>Çöp gutusy</span>
+                        ${UI.icons.trash} <span>${I18N.t('app.nav_trash')}</span>
                     </a>
                     ${isAdmin ? `
-                    <div class="sidebar-section">Dolandyryş</div>
+                    <div class="sidebar-section">${I18N.t('app.nav_admin_section')}</div>
                     <a class="nav-item admin-item ${page === 'admin' ? 'active' : ''}" onclick="App.navigate('admin')">
-                        ${UI.icons.settings} <span>Admin panel</span>
+                        ${UI.icons.settings} <span>${I18N.t('app.nav_admin_panel')}</span>
                     </a>` : ''}
                 </nav>
                 <div id="storage-bar" class="storage-bar"></div>
@@ -136,18 +136,19 @@ const App = {
                         ${u.avatar_url ? `<img class="sidebar-avatar-img" src="/api/avatar/${u.id}?v=${Date.now()}" alt="">` : `<div class="sidebar-avatar">${(u.full_name || 'U').charAt(0).toUpperCase()}</div>`}
                         <div class="sidebar-user-info">
                             <div class="sidebar-user-name">${UI.esc(u.full_name)}</div>
-                            <div class="sidebar-user-role">${u.role === 'admin' ? 'Admin' : 'Ulanyjy'}</div>
+                            <div class="sidebar-user-role">${u.role === 'admin' ? I18N.t('app.role_admin') : I18N.t('app.role_user')}</div>
                         </div>
-                        <button class="sidebar-logout" onclick="event.stopPropagation();App.logout()" title="Çykyş">${UI.icons.logout}</button>
+                        <button class="sidebar-logout" onclick="event.stopPropagation();App.logout()" title="${I18N.t('app.logout')}" aria-label="${I18N.t('app.logout')}">${UI.icons.logout}</button>
                     </div>
                 </div>
             </aside>
             <main class="main-content">
                 <header class="topbar">
-                    <button class="sidebar-toggle" onclick="document.getElementById('sidebar').classList.toggle('open')">${UI.icons.menu}</button>
+                    <button class="sidebar-toggle" onclick="document.getElementById('sidebar').classList.toggle('open')" aria-label="${I18N.t('app.menu_label')}">${UI.icons.menu}</button>
                     <div class="topbar-title">${this.pageTitle(page)}</div>
                     <div class="topbar-right">
-                        <button class="btn btn-icon btn-ghost" id="theme-toggle" onclick="App.toggleTheme()" title="Tema">
+                        ${UI.langSwitcher()}
+                        <button class="btn btn-icon btn-ghost" id="theme-toggle" onclick="App.toggleTheme()" title="${I18N.t('app.theme')}" aria-label="${I18N.t('app.theme')}">
                             <span class="theme-icon-dark">${UI.icons.sun}</span>
                             <span class="theme-icon-light">${UI.icons.moon}</span>
                         </button>
@@ -159,7 +160,7 @@ const App = {
     },
 
     pageTitle(p) {
-        return { files: 'Faýllar', shared: 'Paýlaşylanlar', trash: 'Çöp gutusy', admin: 'Dolandyryş' }[p] || 'Paylash';
+        return { files: I18N.t('app.nav_files'), shared: I18N.t('app.nav_shared'), trash: I18N.t('app.nav_trash'), admin: I18N.t('app.nav_admin_section') }[p] || 'Paýlaş';
     },
 
     initPage(page) {
@@ -170,7 +171,7 @@ const App = {
             case 'shared': c.innerHTML = SharesPage.renderSharedWithMe(); SharesPage.initSharedWithMe(); break;
             case 'trash':  c.innerHTML = TrashPage.render(); TrashPage.init(); break;
             case 'admin':  c.innerHTML = AdminPage.render(); AdminPage.init(); break;
-            default:       c.innerHTML = '<div class="empty-state"><p>Sahypa tapylmady</p></div>';
+            default:       c.innerHTML = `<div class="empty-state"><p>${I18N.t('app.page_not_found')}</p></div>`;
         }
     },
 
@@ -178,7 +179,7 @@ const App = {
         try { await API.auth.logout(); } catch {}
         this.user = null;
         this.navigate('login', true);
-        UI.toast('Ulgamdan çykdyňyz', 'info');
+        UI.toast(I18N.t('app.logged_out'), 'info');
     },
 
     async loadStorageUsage() {
@@ -189,7 +190,7 @@ const App = {
             const bar = document.getElementById('storage-bar');
             if (!bar) return;
             const pct = d.quota_bytes > 0 ? Math.min((d.used_bytes / d.quota_bytes) * 100, 100) : 0;
-            const label = scope === 'project' ? (FilesPage.currentProjectName || 'Taslama') : scope === 'common' ? 'Umumy' : 'Şahsy';
+            const label = scope === 'project' ? (FilesPage.currentProjectName || I18N.t('app.project_label')) : scope === 'common' ? I18N.t('app.nav_common') : I18N.t('app.nav_personal');
             bar.innerHTML = `<div class="storage-info"><span>${label}: ${UI.formatBytes(d.used_bytes)} / ${UI.formatBytes(d.quota_bytes)}</span><span>${Math.round(pct)}%</span></div>
                 <div class="storage-track"><div class="storage-fill ${pct > 90 ? 'danger' : pct > 70 ? 'warning' : ''}" style="width:${pct}%"></div></div>`;
         } catch {}
@@ -210,31 +211,31 @@ const App = {
         const avatarHTML = u.avatar_url
             ? `<img class="profile-avatar-img" src="/api/avatar/${u.id}?v=${Date.now()}" alt="">`
             : `<div class="profile-avatar-placeholder">${(u.full_name || 'U').charAt(0).toUpperCase()}</div>`;
-        UI.showModal('Profil', `
+        UI.showModal(I18N.t('app.profile_title'), `
             <div class="profile-avatar-section">
                 <div class="profile-avatar-wrap" onclick="document.getElementById('avatar-input').click()">
                     ${avatarHTML}
                     <div class="profile-avatar-overlay">📷</div>
                 </div>
                 <input type="file" id="avatar-input" accept="image/*" style="display:none" onchange="App.uploadAvatar(this)">
-                <p class="text-muted" style="font-size:.75rem;margin-top:4px">Üýtgetmek üçin basyň</p>
+                <p class="text-muted" style="font-size:.75rem;margin-top:4px">${I18N.t('app.avatar_hint')}</p>
             </div>
-            <div class="form-group"><label>Doly ady</label><input type="text" id="prof-name" value="${UI.esc(u.full_name)}" class="form-control"></div>
+            <div class="form-group"><label>${I18N.t('auth.fullname_label')}</label><input type="text" id="prof-name" value="${UI.esc(u.full_name)}" class="form-control"></div>
             <hr style="border:none;border-top:1px solid var(--border);margin:12px 0">
-            <div class="form-group"><label>K\u00f6ne parol</label>${UI.passwordField('prof-old-pw', 'Di\u0148e \u00fc\u00fdtgetmek \u00fc\u00e7in')}</div>
-            <div class="form-group"><label>T\u00e4ze parol</label>${UI.passwordField('prof-new-pw', 'Azyndan 6 simwol')}</div>`,
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">\u00ddatyr</button><button class="btn btn-primary" onclick="App.saveProfile()">\u00ddatda sakla</button>`);
+            <div class="form-group"><label>${I18N.t('app.old_password_label')}</label>${UI.passwordField('prof-old-pw', I18N.t('app.old_password_placeholder'))}</div>
+            <div class="form-group"><label>${I18N.t('app.new_password_label')}</label>${UI.passwordField('prof-new-pw', I18N.t('auth.password_min_placeholder'))}</div>`,
+            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="App.saveProfile()">${I18N.t('common.save')}</button>`);
     },
 
     async uploadAvatar(input) {
         const file = input.files[0];
         if (!file) return;
-        if (!file.type.startsWith('image/')) { UI.toast('Diňe surat faýly rugsat berilýär', 'error'); return; }
-        if (file.size > 5 * 1024 * 1024) { UI.toast('Faýl 5MB-dan uly bolmaly däl', 'error'); return; }
+        if (!file.type.startsWith('image/')) { UI.toast(I18N.t('app.only_images_allowed'), 'error'); return; }
+        if (file.size > 5 * 1024 * 1024) { UI.toast(I18N.t('app.avatar_too_large'), 'error'); return; }
         try {
             const updated = await API.auth.uploadAvatar(file);
             this.user = updated;
-            UI.toast('Awatar üýtgedildi', 'success');
+            UI.toast(I18N.t('app.avatar_changed'), 'success');
             UI.closeModal();
             this.renderPage(this.currentPage);
         } catch (e) { UI.toast(e.message, 'error'); }
@@ -244,13 +245,13 @@ const App = {
         const name = document.getElementById('prof-name').value.trim();
         const oldPw = document.getElementById('prof-old-pw').value;
         const newPw = document.getElementById('prof-new-pw').value;
-        if (!name) { UI.toast('Ady giri\u017ai\u0148', 'error'); return; }
-        if (newPw && !oldPw) { UI.toast('K\u00f6ne paroly giri\u017ai\u0148', 'error'); return; }
+        if (!name) { UI.toast(I18N.t('app.name_required'), 'error'); return; }
+        if (newPw && !oldPw) { UI.toast(I18N.t('app.old_password_required'), 'error'); return; }
         try {
             const updated = await API.auth.updateProfile(name, oldPw, newPw);
             this.user = updated;
             UI.closeModal();
-            UI.toast('Profil \u00fc\u00fdtgedildi', 'success');
+            UI.toast(I18N.t('app.profile_updated'), 'success');
             this.renderPage(this.currentPage);
         } catch (e) { UI.toast(e.message, 'error'); }
     }

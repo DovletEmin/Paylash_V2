@@ -32,29 +32,30 @@ const FilesPage = {
                 <div class="files-toolbar-right">
                     <div class="search-box">
                         <span class="search-icon">${UI.icons.search}</span>
-                        <input type="text" id="file-search" placeholder="Gözle…" oninput="FilesPage.onSearch(this.value)">
+                        <input type="text" id="file-search" placeholder="${I18N.t('files.search_placeholder')}" oninput="FilesPage.onSearch(this.value)">
                     </div>
-                    <button class="btn btn-icon btn-ghost ${this.viewMode === 'grid' ? 'active' : ''}" onclick="FilesPage.setView('grid')" title="Setka">${UI.icons.grid}</button>
-                    <button class="btn btn-icon btn-ghost ${this.viewMode === 'list' ? 'active' : ''}" onclick="FilesPage.setView('list')" title="Sanaw">${UI.icons.list}</button>
+                    <button class="btn btn-icon btn-ghost ${this.viewMode === 'grid' ? 'active' : ''}" onclick="FilesPage.setView('grid')" title="${I18N.t('files.view_grid')}" aria-label="${I18N.t('files.view_grid')}">${UI.icons.grid}</button>
+                    <button class="btn btn-icon btn-ghost ${this.viewMode === 'list' ? 'active' : ''}" onclick="FilesPage.setView('list')" title="${I18N.t('files.view_list')}" aria-label="${I18N.t('files.view_list')}">${UI.icons.list}</button>
                 </div>
             </div>
             ${canUpload ? `<div class="files-actions">
-                <button class="btn btn-primary btn-sm" onclick="FilesPage.showUploadModal()">${UI.icons.upload} Ýükle</button>
-                <button class="btn btn-ghost btn-sm" onclick="FilesPage.showNewFolderModal()">${UI.icons.plus} Täze papka</button>
+                <button class="btn btn-primary btn-sm" onclick="FilesPage.showUploadModal()">${UI.icons.upload} ${I18N.t('files.upload_button')}</button>
+                <button class="btn btn-ghost btn-sm" onclick="FilesPage.showUploadFolderModal()" title="${I18N.t('files.upload_folder_button')}">${UI.icons.folder} ${I18N.t('files.upload_folder_button')}</button>
+                <button class="btn btn-ghost btn-sm" onclick="FilesPage.showNewFolderModal()">${UI.icons.plus} ${I18N.t('files.new_folder_button')}</button>
                 <div class="new-file-dropdown">
-                    <button class="btn btn-ghost btn-sm" onclick="FilesPage.toggleNewFileMenu(event)">${UI.icons.fileNew} Täze faýl</button>
+                    <button class="btn btn-ghost btn-sm" onclick="FilesPage.toggleNewFileMenu(event)">${UI.icons.fileNew} ${I18N.t('files.new_file_button')}</button>
                     <div class="new-file-menu hidden" id="new-file-menu">
                         <div class="new-file-option" onclick="FilesPage.createNewFile('docx')">
                             <span class="new-file-option-icon docx-icon">📝</span>
                             <div class="new-file-option-info">
-                                <span class="new-file-option-name">Word dokument</span>
+                                <span class="new-file-option-name">${I18N.t('files.new_word_doc')}</span>
                                 <span class="new-file-option-ext">.docx</span>
                             </div>
                         </div>
                         <div class="new-file-option" onclick="FilesPage.createNewFile('xlsx')">
                             <span class="new-file-option-icon xlsx-icon">📊</span>
                             <div class="new-file-option-info">
-                                <span class="new-file-option-name">Excel tablisa</span>
+                                <span class="new-file-option-name">${I18N.t('files.new_excel_doc')}</span>
                                 <span class="new-file-option-ext">.xlsx</span>
                             </div>
                         </div>
@@ -63,10 +64,11 @@ const FilesPage = {
             </div>` : ''}
             <div class="breadcrumbs" id="breadcrumbs"></div>
             <input type="file" id="file-input" multiple style="display:none" onchange="FilesPage.handleFileSelect(this.files)">
+            <input type="file" id="folder-input" webkitdirectory directory multiple style="display:none" onchange="FilesPage.handleFolderSelect(this.files)">
             <div id="upload-progress" class="upload-progress hidden"></div>
             <div id="files-content">${UI.skeletonCards(6)}</div>
             <div class="drop-overlay hidden" id="drop-overlay">
-                <div class="drop-overlay-content">${UI.icons.upload}<p>Faýllary goýberiň</p></div>
+                <div class="drop-overlay-content">${UI.icons.upload}<p>${I18N.t('files.drop_files_here')}</p><p class="drop-overlay-hint">${I18N.t('files.drop_folders_hint')}</p></div>
             </div>
         </div>`;
     },
@@ -91,13 +93,13 @@ const FilesPage = {
             this.renderBreadcrumbs();
             this.renderFiles();
         } catch (err) {
-            c.innerHTML = `<div class="empty-state"><p>Faýllary ýükläp bolmady</p><p class="text-muted">${UI.esc(err.message)}</p></div>`;
+            c.innerHTML = `<div class="empty-state"><p>${I18N.t('files.load_failed')}</p><p class="text-muted">${UI.esc(err.message)}</p></div>`;
         }
     },
 
     async loadMoreFiles() {
         const btn = document.getElementById('files-load-more');
-        if (btn) { btn.disabled = true; btn.textContent = 'Ýüklenýär…'; }
+        if (btn) { btn.disabled = true; btn.textContent = I18N.t('common.loading'); }
         try {
             this.filesOffset += this.filesLimit;
             const p = { scope: this.currentScope, limit: this.filesLimit, offset: this.filesOffset };
@@ -116,7 +118,7 @@ const FilesPage = {
     renderBreadcrumbs() {
         const el = document.getElementById('breadcrumbs');
         if (!el) return;
-        const rootLabel = this.currentScope === 'personal' ? 'Şahsy' : this.currentScope === 'project' ? (this.currentProjectName || 'Taslama') : 'Umumy';
+        const rootLabel = this.currentScope === 'personal' ? I18N.t('app.nav_personal') : this.currentScope === 'project' ? (this.currentProjectName || I18N.t('app.project_label')) : I18N.t('app.nav_common');
         let h = `<a class="breadcrumb-item" onclick="FilesPage.goToFolder(null)">${UI.esc(rootLabel)}</a>`;
         for (const b of this.breadcrumbs) {
             h += `<span class="breadcrumb-sep">/</span><a class="breadcrumb-item" onclick="FilesPage.goToFolder(${b.id})">${UI.esc(b.name)}</a>`;
@@ -129,20 +131,20 @@ const FilesPage = {
         if (!c) return;
         const items = [...this.folders.map(f => ({ ...f, isFolder: true })), ...this.files];
         if (!items.length) {
-            c.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📂</div><p>Bu ýerde faýl ýok</p><p class="text-muted">Faýl ýükläň ýa-da papka dörediň</p></div>';
+            c.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📂</div><p>${I18N.t('files.empty_title')}</p><p class="text-muted">${I18N.t('files.empty_subtitle')}</p></div>`;
             return;
         }
         if (this.viewMode === 'grid') {
             c.innerHTML = '<div class="file-grid">' + items.map(i => this.gridCard(i)).join('') + '</div>';
         } else {
             c.innerHTML = `<div class="file-list">
-                <div class="file-list-header"><div>Ady</div><div>Ölçegi</div><div>Senesi</div><div></div></div>
+                <div class="file-list-header"><div>${I18N.t('files.col_name')}</div><div>${I18N.t('files.col_size')}</div><div>${I18N.t('files.col_date')}</div><div></div></div>
                 ${items.map(i => this.listRow(i)).join('')}
             </div>`;
         }
         if (this.hasMoreFiles) {
             c.innerHTML += `<div style="text-align:center;margin-top:12px">
-                <button class="btn btn-ghost btn-sm" id="files-load-more" onclick="FilesPage.loadMoreFiles()">Ýene görkez</button>
+                <button class="btn btn-ghost btn-sm" id="files-load-more" onclick="FilesPage.loadMoreFiles()">${I18N.t('files.load_more')}</button>
             </div>`;
         }
     },
@@ -158,7 +160,7 @@ const FilesPage = {
         return `<div class="file-card" ondblclick="${dbl}" oncontextmenu="FilesPage.showMenu(event,${itemJson})">
             ${iconHtml}
             <div class="file-card-name" title="${UI.esc(item.name)}">${UI.esc(item.name)}</div>
-            ${!item.isFolder ? `<div class="file-card-meta">${UI.formatBytes(item.size_bytes || 0)} · ${UI.formatDate(item.updated_at || item.created_at)}</div>` : '<div class="file-card-meta">Papka</div>'}
+            ${!item.isFolder ? `<div class="file-card-meta">${UI.formatBytes(item.size_bytes || 0)} · ${UI.formatDate(item.updated_at || item.created_at)}</div>` : `<div class="file-card-meta">${I18N.t('files.folder_label')}</div>`}
         </div>`;
     },
 
@@ -175,7 +177,7 @@ const FilesPage = {
             <div class="file-list-name"><span class="file-list-icon ${cls}">${icon}</span>${UI.esc(item.name)}</div>
             <div class="file-list-size">${item.isFolder ? '—' : UI.formatBytes(item.size_bytes || 0)}</div>
             <div class="file-list-date">${UI.formatDate(item.updated_at || item.created_at)}</div>
-            <div class="file-list-actions"><button class="btn btn-icon btn-sm" onclick="FilesPage.showMenu(event,${itemJson})">⋮</button></div>
+            <div class="file-list-actions"><button class="btn btn-icon btn-sm" onclick="FilesPage.showMenu(event,${itemJson})" aria-label="${I18N.t('common.actions')}">⋮</button></div>
         </div>`;
     },
 
@@ -184,57 +186,58 @@ const FilesPage = {
         const canManage = this.canManage();
         const items = [];
         if (item.isFolder) {
-            items.push({ action: 'open', label: 'Aç', icon: '📂', handler: () => this.goToFolder(item.id) });
+            items.push({ action: 'open', label: I18N.t('files.action_open'), icon: '📂', handler: () => this.goToFolder(item.id) });
+            items.push({ action: 'download', label: I18N.t('files.action_download'), icon: '📥', handler: () => this.downloadFolder(item.id, item.name) });
             if (canManage) {
-                items.push({ action: 'rename', label: 'Adyny üýtget', icon: '✏️', handler: () => this.renameFolder(item) });
-                items.push({ action: 'move', label: 'Göçürmek', icon: '📁', handler: () => this.moveItem(item) });
+                items.push({ action: 'rename', label: I18N.t('files.action_rename'), icon: '✏️', handler: () => this.renameFolder(item) });
+                items.push({ action: 'move', label: I18N.t('files.action_move'), icon: '📁', handler: () => this.moveItem(item) });
                 items.push({ divider: true });
-                items.push({ action: 'delete', label: 'Poz', icon: '🗑', danger: true, handler: () => this.deleteFolder(item) });
+                items.push({ action: 'delete', label: I18N.t('files.action_delete'), icon: '🗑', danger: true, handler: () => this.deleteFolder(item) });
             }
         } else {
-            if (UI.isMediaPreviewable(item.name)) items.push({ action: 'preview', label: 'Görmek', icon: '👁', handler: () => PreviewPage.open(item.id, item.name, item.size_bytes) });
-            else if (UI.isCollaboraEditable(item.name)) items.push({ action: 'edit', label: 'Redaktirle', icon: '📝', handler: () => EditorPage.open(item.id, item.name) });
-            else if (UI.isCollaboraViewable(item.name)) items.push({ action: 'view', label: 'Açmak', icon: '👁', handler: () => EditorPage.open(item.id, item.name) });
-            items.push({ action: 'download', label: 'Ýükle', icon: '📥', handler: () => this.download(item.id, item.name) });
-            items.push({ action: 'versions', label: 'Wersiýalar', icon: '🕓', handler: () => this.showVersionsModal(item) });
+            if (UI.isMediaPreviewable(item.name)) items.push({ action: 'preview', label: I18N.t('files.action_preview'), icon: '👁', handler: () => PreviewPage.open(item.id, item.name, item.size_bytes) });
+            else if (UI.isCollaboraEditable(item.name)) items.push({ action: 'edit', label: I18N.t('files.action_edit'), icon: '📝', handler: () => EditorPage.open(item.id, item.name) });
+            else if (UI.isCollaboraViewable(item.name)) items.push({ action: 'view', label: I18N.t('files.action_preview'), icon: '👁', handler: () => EditorPage.open(item.id, item.name) });
+            items.push({ action: 'download', label: I18N.t('files.action_download'), icon: '📥', handler: () => this.download(item.id, item.name) });
+            items.push({ action: 'versions', label: I18N.t('files.action_versions'), icon: '🕓', handler: () => this.showVersionsModal(item) });
             if (canManage) {
-                items.push({ action: 'share', label: 'Paýlaş', icon: '🔗', handler: () => SharesPage.showShareModal(item) });
-                items.push({ action: 'rename', label: 'Adyny üýtget', icon: '✏️', handler: () => this.renameFile(item) });
-                items.push({ action: 'move', label: 'Göçürmek', icon: '📁', handler: () => this.moveItem(item) });
+                items.push({ action: 'share', label: I18N.t('files.action_share'), icon: '🔗', handler: () => SharesPage.showShareModal(item) });
+                items.push({ action: 'rename', label: I18N.t('files.action_rename'), icon: '✏️', handler: () => this.renameFile(item) });
+                items.push({ action: 'move', label: I18N.t('files.action_move'), icon: '📁', handler: () => this.moveItem(item) });
                 items.push({ divider: true });
-                items.push({ action: 'delete', label: 'Poz', icon: '🗑', danger: true, handler: () => this.deleteFile(item) });
+                items.push({ action: 'delete', label: I18N.t('files.action_delete'), icon: '🗑', danger: true, handler: () => this.deleteFile(item) });
             }
         }
         UI.showContextMenu(e.clientX, e.clientY, items);
     },
 
     async showVersionsModal(item) {
-        UI.showModal('Wersiýalar', '<div class="text-muted" style="text-align:center;padding:20px"><div class="spinner"></div></div>', '');
+        UI.showModal(I18N.t('files.versions_title'), '<div class="text-muted" style="text-align:center;padding:20px"><div class="spinner"></div></div>', '');
         try {
             const versions = await API.files.versions(item.id);
             const body = !versions || !versions.length
-                ? '<p class="text-muted">Wersiýa taryhy ýok</p>'
+                ? `<p class="text-muted">${I18N.t('files.versions_none')}</p>`
                 : `<div class="version-list">${versions.map(v => `
                     <div class="version-item">
                         <div class="version-item-info">
-                            <div>${v.is_latest ? '<strong>Häzirki</strong>' : UI.formatDate(v.last_modified)}</div>
-                            <div class="text-muted" style="font-size:.78rem">${UI.formatBytes(v.size_bytes)}${v.is_latest ? '' : ' · ' + new Date(v.last_modified).toLocaleString('tk-TM')}</div>
+                            <div>${v.is_latest ? `<strong>${I18N.t('files.version_current')}</strong>` : UI.formatDate(v.last_modified)}</div>
+                            <div class="text-muted" style="font-size:.78rem">${UI.formatBytes(v.size_bytes)}${v.is_latest ? '' : ' · ' + new Date(v.last_modified).toLocaleString(I18N.dateLocale())}</div>
                         </div>
                         <div style="display:flex;gap:6px">
                             <button class="btn btn-sm btn-ghost" onclick="API.files.downloadVersion(${item.id},'${v.version_id}')">${UI.icons.download}</button>
-                            ${!v.is_latest ? `<button class="btn btn-sm btn-ghost" onclick="FilesPage.restoreVersion(${item.id},'${v.version_id}')">Öwür</button>` : ''}
+                            ${!v.is_latest ? `<button class="btn btn-sm btn-ghost" onclick="FilesPage.restoreVersion(${item.id},'${v.version_id}')">${I18N.t('files.version_restore')}</button>` : ''}
                         </div>
                     </div>`).join('')}</div>`;
-            UI.showModal('Wersiýalar — ' + item.name, body, '<button class="btn btn-ghost" onclick="UI.closeModal()">Ýap</button>');
+            UI.showModal(I18N.t('files.versions_title') + ' — ' + item.name, body, `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.close')}</button>`);
         } catch (e) {
-            UI.showModal('Wersiýalar', `<p class="text-muted">${UI.esc(e.message)}</p>`, '<button class="btn btn-ghost" onclick="UI.closeModal()">Ýap</button>');
+            UI.showModal(I18N.t('files.versions_title'), `<p class="text-muted">${UI.esc(e.message)}</p>`, `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.close')}</button>`);
         }
     },
 
     async restoreVersion(id, versionId) {
         try {
             await API.files.restoreVersion(id, versionId);
-            UI.toast('Wersiýa dikeldildi', 'success');
+            UI.toast(I18N.t('files.version_restored'), 'success');
             UI.closeModal();
             this.loadFiles();
         } catch (e) { UI.toast(e.message, 'error'); }
@@ -252,12 +255,18 @@ const FilesPage = {
     setView(m) { this.viewMode = m; this.renderFiles(); },
     goToFolder(id) { this.currentFolder = id; this.loadFiles(); },
 
+    _searchTimer: null,
     async onSearch(q) {
+        clearTimeout(this._searchTimer);
+        this._searchTimer = setTimeout(() => this._runSearch(q), 300);
+    },
+    async _runSearch(q) {
         if (!q || q.length < 2) { this.loadFiles(); return; }
         try { const data = await API.files.search(q); this.files = data || []; this.folders = []; this.breadcrumbs = []; this.renderBreadcrumbs(); this.renderFiles(); } catch {}
     },
 
     showUploadModal() { document.getElementById('file-input').click(); },
+    showUploadFolderModal() { document.getElementById('folder-input').click(); },
 
     async handleFileSelect(fileList) {
         if (!fileList.length) return;
@@ -267,7 +276,7 @@ const FilesPage = {
             const id = 'u-' + Math.random().toString(36).substr(2, 6);
             const isLarge = typeof Uploader !== 'undefined' && Uploader.isLarge(file);
             const resumeBadge = isLarge
-                ? '<span class="upload-item-badge" title="Sahypany täzelesiňizem ýa-da internet üzülsedem, ýükleme togtan ýerinden dowam eder">↻ dowam eder</span>'
+                ? `<span class="upload-item-badge" title="${I18N.t('files.upload_resume_hint')}">${I18N.t('files.upload_resume_badge')}</span>`
                 : '';
             prog.innerHTML += `<div class="upload-item" id="${id}"><div class="upload-item-name">${UI.esc(file.name)} ${resumeBadge}</div><div class="upload-item-bar"><div class="upload-item-fill" id="${id}-f"></div></div><div class="upload-item-pct" id="${id}-p">0%</div></div>`;
             try {
@@ -286,13 +295,59 @@ const FilesPage = {
                 }
                 document.getElementById(id)?.classList.add('upload-done');
             } catch (err) {
-                UI.toast(`"${file.name}" ýüklenip bilmedi: ${err.message}`, 'error');
+                UI.toast(I18N.t('files.upload_item_failed', { name: file.name, error: err.message }), 'error');
                 document.getElementById(id)?.classList.add('upload-error');
             }
         }
         setTimeout(() => { prog.innerHTML = ''; prog.classList.add('hidden'); }, 2000);
         this.loadFiles(); App.loadStorageUsage();
         document.getElementById('file-input').value = '';
+    },
+
+    // Uploads a batch of {file, relativePath} entries (from the folder
+    // <input> or a folder dropped onto the page), recreating the folder
+    // structure server-side first via Uploader.resolveFolderPaths, then
+    // reusing the normal per-file upload pipeline above.
+    async handleFolderUpload(entries) {
+        if (!entries.length) return;
+        const prog = document.getElementById('upload-progress');
+        prog.classList.remove('hidden');
+        try {
+            const resolved = await Uploader.resolveFolderPaths(entries, this.currentScope, this.currentFolder, this.currentProjectId);
+            for (const { file, folderId } of resolved) {
+                const id = 'u-' + Math.random().toString(36).substr(2, 6);
+                const isLarge = typeof Uploader !== 'undefined' && Uploader.isLarge(file);
+                const resumeBadge = isLarge
+                    ? `<span class="upload-item-badge" title="${I18N.t('files.upload_resume_hint')}">${I18N.t('files.upload_resume_badge')}</span>`
+                    : '';
+                prog.innerHTML += `<div class="upload-item" id="${id}"><div class="upload-item-name">${UI.esc(file.webkitRelativePath || file.name)} ${resumeBadge}</div><div class="upload-item-bar"><div class="upload-item-fill" id="${id}-f"></div></div><div class="upload-item-pct" id="${id}-p">0%</div></div>`;
+                try {
+                    const onProgress = pct => {
+                        const f = document.getElementById(id + '-f'), p = document.getElementById(id + '-p');
+                        if (f) f.style.width = pct + '%'; if (p) p.textContent = Math.round(pct) + '%';
+                    };
+                    if (isLarge) {
+                        await Uploader.uploadLarge(file, this.currentScope, folderId, this.currentProjectId, onProgress);
+                    } else {
+                        await API.files.upload(file, this.currentScope, folderId, this.currentProjectId, onProgress);
+                    }
+                    document.getElementById(id)?.classList.add('upload-done');
+                } catch (err) {
+                    UI.toast(I18N.t('files.upload_item_failed', { name: file.name, error: err.message }), 'error');
+                    document.getElementById(id)?.classList.add('upload-error');
+                }
+            }
+        } catch (err) {
+            UI.toast(err.message, 'error');
+        }
+        setTimeout(() => { prog.innerHTML = ''; prog.classList.add('hidden'); }, 2000);
+        this.loadFiles(); App.loadStorageUsage();
+    },
+
+    handleFolderSelect(fileList) {
+        const entries = Array.from(fileList).map(file => ({ file, relativePath: file.webkitRelativePath || file.name }));
+        this.handleFolderUpload(entries);
+        document.getElementById('folder-input').value = '';
     },
 
     initDragDrop() {
@@ -306,16 +361,75 @@ const FilesPage = {
         pg.addEventListener('dragenter', ev => { ev.preventDefault(); dragCounter++; ov.classList.remove('hidden'); });
         pg.addEventListener('dragover', ev => { ev.preventDefault(); });
         pg.addEventListener('dragleave', ev => { ev.preventDefault(); dragCounter--; if (dragCounter <= 0) { dragCounter = 0; ov.classList.add('hidden'); } });
-        pg.addEventListener('drop', ev => { ev.preventDefault(); dragCounter = 0; ov.classList.add('hidden'); if (ev.dataTransfer.files.length) this.handleFileSelect(ev.dataTransfer.files); });
+        pg.addEventListener('drop', ev => {
+            ev.preventDefault(); dragCounter = 0; ov.classList.add('hidden');
+            this.handleDrop(ev.dataTransfer);
+        });
+    },
+
+    // Dropped items can be a flat batch of files or include whole folders —
+    // DataTransferItemList exposes webkitGetAsEntry() for the latter, which
+    // plain dataTransfer.files can't express (it flattens everything and
+    // drops folder structure entirely). Falls back to the simple flat-file
+    // path when nothing dropped is a directory (the common case, and cheap
+    // to detect up front).
+    async handleDrop(dataTransfer) {
+        const items = dataTransfer.items;
+        if (!items || !items.length || typeof items[0].webkitGetAsEntry !== 'function') {
+            if (dataTransfer.files.length) this.handleFileSelect(dataTransfer.files);
+            return;
+        }
+        const entries = [];
+        let hasDirectory = false;
+        for (const item of items) {
+            const entry = item.webkitGetAsEntry && item.webkitGetAsEntry();
+            if (!entry) continue;
+            if (entry.isDirectory) hasDirectory = true;
+            entries.push(entry);
+        }
+        if (!hasDirectory) {
+            if (dataTransfer.files.length) this.handleFileSelect(dataTransfer.files);
+            return;
+        }
+        const collected = [];
+        await Promise.all(entries.map(entry => this._walkEntry(entry, '', collected)));
+        this.handleFolderUpload(collected);
+    },
+
+    // Recursively walks a FileSystemEntry (file or directory), collecting
+    // {file, relativePath} pairs — the same shape handleFolderSelect
+    // produces from a <input webkitdirectory> selection, so both entry
+    // points feed the same upload pipeline.
+    _walkEntry(entry, basePath, out) {
+        return new Promise((resolve, reject) => {
+            if (entry.isFile) {
+                entry.file(file => { out.push({ file, relativePath: basePath + entry.name }); resolve(); }, reject);
+                return;
+            }
+            const reader = entry.createReader();
+            const allEntries = [];
+            const readBatch = () => {
+                reader.readEntries(batch => {
+                    if (!batch.length) {
+                        Promise.all(allEntries.map(e => this._walkEntry(e, basePath + entry.name + '/', out))).then(resolve, reject);
+                        return;
+                    }
+                    allEntries.push(...batch);
+                    readBatch();
+                }, reject);
+            };
+            readBatch();
+        });
     },
 
     // A same-origin <a download> click lets the browser's own download
     // manager stream the response straight to disk — unlike the fetch()+blob
     // approach this replaced, which buffered the *entire* file in page
     // memory first. That was fine for small documents but would have made
-    // downloading a 100GB scan/render either crawl or crash the tab, which
-    // defeats the point of the large-file support built elsewhere in this
-    // app (chunked resumable upload, presigned direct-download redirect).
+    // downloading a 100GB scan/render either crawl or crash the tab. The app
+    // server itself streams the object straight from MinIO without
+    // buffering it either (see DownloadFile/http.ServeContent server-side),
+    // so this stays cheap end-to-end regardless of file size.
     download(id, name) {
         const a = document.createElement('a');
         a.href = `/api/files/${id}/download`;
@@ -323,24 +437,32 @@ const FilesPage = {
         document.body.appendChild(a); a.click(); document.body.removeChild(a);
     },
 
+    downloadFolder(id, name) {
+        UI.toast(I18N.t('files.folder_zip_preparing', { name }), 'info');
+        const a = document.createElement('a');
+        a.href = API.folders.downloadURL(id);
+        a.download = name + '.zip';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    },
+
     renameFile(item) {
-        UI.showModal('Adyny üýtget', `<div class="form-group"><label>Täze ady</label><input type="text" id="rename-input" value="${UI.esc(item.name)}" class="form-control"></div>`,
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">Ýatyrmak</button><button class="btn btn-primary" onclick="FilesPage.doRenameFile(${item.id})">Üýtget</button>`);
+        UI.showModal(I18N.t('files.rename_file_title'), `<div class="form-group"><label>${I18N.t('common.new_name_label')}</label><input type="text" id="rename-input" value="${UI.esc(item.name)}" class="form-control"></div>`,
+            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="FilesPage.doRenameFile(${item.id})">${I18N.t('common.rename')}</button>`);
         setTimeout(() => { const i = document.getElementById('rename-input'); if (i) { i.focus(); i.select(); } }, 100);
     },
     async doRenameFile(id) {
         const n = document.getElementById('rename-input').value.trim(); if (!n) return;
-        try { await API.files.rename(id, n); UI.closeModal(); UI.toast('Ady üýtgedildi', 'success'); this.loadFiles(); } catch (e) { UI.toast(e.message, 'error'); }
+        try { await API.files.rename(id, n); UI.closeModal(); UI.toast(I18N.t('files.rename_done'), 'success'); this.loadFiles(); } catch (e) { UI.toast(e.message, 'error'); }
     },
 
     renameFolder(item) {
-        UI.showModal('Papkanyň adyny üýtget', `<div class="form-group"><label>Täze ady</label><input type="text" id="rename-input" value="${UI.esc(item.name)}" class="form-control"></div>`,
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">Ýatyrmak</button><button class="btn btn-primary" onclick="FilesPage.doRenameFolder(${item.id})">Üýtget</button>`);
+        UI.showModal(I18N.t('files.rename_folder_title'), `<div class="form-group"><label>${I18N.t('common.new_name_label')}</label><input type="text" id="rename-input" value="${UI.esc(item.name)}" class="form-control"></div>`,
+            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="FilesPage.doRenameFolder(${item.id})">${I18N.t('common.rename')}</button>`);
         setTimeout(() => { const i = document.getElementById('rename-input'); if (i) { i.focus(); i.select(); } }, 100);
     },
     async doRenameFolder(id) {
         const n = document.getElementById('rename-input').value.trim(); if (!n) return;
-        try { await API.folders.rename(id, n); UI.closeModal(); UI.toast('Ady üýtgedildi', 'success'); this.loadFiles(); } catch (e) { UI.toast(e.message, 'error'); }
+        try { await API.folders.rename(id, n); UI.closeModal(); UI.toast(I18N.t('files.rename_done'), 'success'); this.loadFiles(); } catch (e) { UI.toast(e.message, 'error'); }
     },
 
     async moveItem(item) {
@@ -358,11 +480,11 @@ const FilesPage = {
                 }
             }
             const lines = UI.flattenFolderTree(folders).filter(l => !excluded.has(l.id));
-            const options = ['<option value="">— Kök —</option>']
+            const options = [`<option value="">${I18N.t('common.root_option')}</option>`]
                 .concat(lines.map(l => `<option value="${l.id}">${'— '.repeat(l.depth)}${UI.esc(l.name)}</option>`));
-            UI.showModal(`"${UI.esc(item.name)}" göçürmek`,
-                `<div class="form-group"><label>Nirä göçürmeli</label><select id="move-target" class="form-control">${options.join('')}</select></div>`,
-                `<button class="btn btn-ghost" onclick="UI.closeModal()">Ýatyrmak</button><button class="btn btn-primary" onclick="FilesPage.doMove(${item.id},${!!item.isFolder})">Göçür</button>`);
+            UI.showModal(I18N.t('files.move_title', { name: item.name }),
+                `<div class="form-group"><label>${I18N.t('files.move_target_label')}</label><select id="move-target" class="form-control">${options.join('')}</select></div>`,
+                `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="FilesPage.doMove(${item.id},${!!item.isFolder})">${I18N.t('common.move')}</button>`);
         } catch (e) { UI.toast(e.message, 'error'); }
     },
     async doMove(id, isFolder) {
@@ -372,76 +494,85 @@ const FilesPage = {
             if (isFolder) await API.folders.move(id, targetId);
             else await API.files.move(id, targetId);
             UI.closeModal();
-            UI.toast('Göçürildi', 'success');
+            UI.toast(I18N.t('files.move_done'), 'success');
             this.loadFiles();
         } catch (e) { UI.toast(e.message, 'error'); }
     },
 
     deleteFile(item) {
-        UI.showModal('Faýly pozmak',
-            `<p>"<strong>${UI.esc(item.name)}</strong>" faýlyny pozmak isleýärsiňizmi?</p><p class="text-muted">Bu yzyna gaýtaryp bolmaýar.</p>`,
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">Ýatyrmak</button><button class="btn btn-danger" onclick="FilesPage.doDeleteFile(${item.id})">Poz</button>`);
+        UI.showModal(I18N.t('files.delete_file_title'),
+            I18N.t('files.delete_file_body', { name: UI.esc(item.name) }),
+            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-danger" onclick="FilesPage.doDeleteFile(${item.id})">${I18N.t('common.delete')}</button>`);
     },
-    async doDeleteFile(id) { try { await API.files.delete(id); UI.closeModal(); UI.toast('Faýl pozuldy', 'success'); this.loadFiles(); App.loadStorageUsage(); } catch (e) { UI.toast(e.message, 'error'); } },
+    async doDeleteFile(id) { try { await API.files.delete(id); UI.closeModal(); UI.toast(I18N.t('files.delete_file_done'), 'success'); this.loadFiles(); App.loadStorageUsage(); } catch (e) { UI.toast(e.message, 'error'); } },
 
     deleteFolder(item) {
-        UI.showModal('Papkany pozmak',
-            `<p>"<strong>${UI.esc(item.name)}</strong>" papkasyny pozmak isleýärsiňizmi?</p><p class="text-muted">Ähli faýllar pozular.</p>`,
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">Ýatyrmak</button><button class="btn btn-danger" onclick="FilesPage.doDeleteFolder(${item.id})">Poz</button>`);
+        UI.showModal(I18N.t('files.delete_folder_title'),
+            I18N.t('files.delete_folder_body', { name: UI.esc(item.name) }),
+            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-danger" onclick="FilesPage.doDeleteFolder(${item.id})">${I18N.t('common.delete')}</button>`);
     },
-    async doDeleteFolder(id) { try { await API.folders.delete(id); UI.closeModal(); UI.toast('Papka pozuldy', 'success'); this.loadFiles(); } catch (e) { UI.toast(e.message, 'error'); } },
+    async doDeleteFolder(id) { try { await API.folders.delete(id); UI.closeModal(); UI.toast(I18N.t('files.delete_folder_done'), 'success'); this.loadFiles(); } catch (e) { UI.toast(e.message, 'error'); } },
 
     showNewFolderModal() {
-        UI.showModal('Täze papka', `<div class="form-group"><label>Papkanyň ady</label><input type="text" id="new-folder-name" class="form-control" placeholder="Papka ady"></div>`,
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">Ýatyrmak</button><button class="btn btn-primary" onclick="FilesPage.doCreateFolder()">Döret</button>`);
+        UI.showModal(I18N.t('files.new_folder_title'), `<div class="form-group"><label>${I18N.t('files.new_folder_name_label')}</label><input type="text" id="new-folder-name" class="form-control" placeholder="${I18N.t('files.new_folder_name_placeholder')}"></div>`,
+            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="FilesPage.doCreateFolder()">${I18N.t('common.create')}</button>`);
         setTimeout(() => { const i = document.getElementById('new-folder-name'); if (i) i.focus(); }, 100);
     },
     async doCreateFolder() {
         const n = document.getElementById('new-folder-name').value.trim(); if (!n) return;
-        try { await API.folders.create(n, this.currentScope, this.currentFolder, this.currentProjectId); UI.closeModal(); UI.toast('Papka döredildi', 'success'); this.loadFiles(); } catch (e) { UI.toast(e.message, 'error'); }
+        try { await API.folders.create(n, this.currentScope, this.currentFolder, this.currentProjectId); UI.closeModal(); UI.toast(I18N.t('files.folder_created'), 'success'); this.loadFiles(); } catch (e) { UI.toast(e.message, 'error'); }
     },
 
     toggleNewFileMenu(e) {
         e.stopPropagation();
         const menu = document.getElementById('new-file-menu');
         if (!menu) return;
-        menu.classList.toggle('hidden');
-        const closeMenu = (ev) => {
-            if (!menu.contains(ev.target)) {
-                menu.classList.add('hidden');
-                document.removeEventListener('click', closeMenu);
-            }
+        if (!menu.classList.contains('hidden')) { this.closeNewFileMenu(); return; }
+        menu.classList.remove('hidden');
+        // Bound to `this` and stashed so closeNewFileMenu can remove exactly
+        // this listener however the menu ends up closing (outside click, or
+        // createNewFile hiding it directly after picking an option) —
+        // otherwise the latter path leaves a stale document listener behind
+        // every time, one more each time the menu is reopened.
+        this._newFileMenuCloseHandler = (ev) => {
+            if (!menu.contains(ev.target)) this.closeNewFileMenu();
         };
-        if (!menu.classList.contains('hidden')) {
-            setTimeout(() => document.addEventListener('click', closeMenu), 0);
+        setTimeout(() => document.addEventListener('click', this._newFileMenuCloseHandler), 0);
+    },
+
+    closeNewFileMenu() {
+        document.getElementById('new-file-menu')?.classList.add('hidden');
+        if (this._newFileMenuCloseHandler) {
+            document.removeEventListener('click', this._newFileMenuCloseHandler);
+            this._newFileMenuCloseHandler = null;
         }
     },
 
     createNewFile(type) {
-        document.getElementById('new-file-menu')?.classList.add('hidden');
-        const defaults = { docx: 'Täze dokument', xlsx: 'Täze tablisa' };
-        const defaultName = defaults[type] || 'Täze faýl';
-        UI.showModal('Täze faýl döret',
-            `<div class="form-group"><label>Faýlyň ady</label><input type="text" id="new-file-name" class="form-control" placeholder="${UI.esc(defaultName)}" value="${UI.esc(defaultName)}"></div>
+        this.closeNewFileMenu();
+        const defaults = { docx: I18N.t('files.new_file_default_doc'), xlsx: I18N.t('files.new_file_default_sheet') };
+        const defaultName = defaults[type] || I18N.t('files.new_file_default_doc');
+        UI.showModal(I18N.t('files.new_file_title'),
+            `<div class="form-group"><label>${I18N.t('files.new_file_name_label')}</label><input type="text" id="new-file-name" class="form-control" placeholder="${UI.esc(defaultName)}" value="${UI.esc(defaultName)}"></div>
              <div class="new-file-type-badge"><span class="file-type-label">${type.toUpperCase()}</span></div>`,
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">Ýatyrmak</button><button class="btn btn-primary" onclick="FilesPage.doCreateNewFile('${type}')">Döret</button>`);
+            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="FilesPage.doCreateNewFile('${type}')">${I18N.t('common.create')}</button>`);
         setTimeout(() => { const i = document.getElementById('new-file-name'); if (i) { i.focus(); i.select(); } }, 100);
     },
 
     async doCreateNewFile(type) {
         const name = document.getElementById('new-file-name')?.value.trim();
-        if (!name) { UI.toast('Faýl adyny giriziň', 'error'); return; }
+        if (!name) { UI.toast(I18N.t('files.file_name_required'), 'error'); return; }
         try {
             const file = await API.files.createBlank(name, type, this.currentScope, this.currentFolder, this.currentProjectId);
             UI.closeModal();
-            UI.toast('Faýl döredildi', 'success');
+            UI.toast(I18N.t('files.file_created'), 'success');
             this.loadFiles();
             App.loadStorageUsage();
             // Open the file in editor if it's an editable document
             if (type === 'docx' || type === 'xlsx') {
                 setTimeout(() => EditorPage.open(file.id, file.name), 500);
             }
-        } catch (e) { UI.toast(e.message || 'Faýl döredip bolmady', 'error'); }
+        } catch (e) { UI.toast(e.message || I18N.t('files.file_create_failed'), 'error'); }
     },
 
 };

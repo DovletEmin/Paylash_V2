@@ -77,6 +77,7 @@ func (s *Server) routes(webFS embed.FS) {
 	s.mux.Handle("PATCH /api/folders/{id}", auth(http.HandlerFunc(h.RenameFolder)))
 	s.mux.Handle("PATCH /api/folders/{id}/move", auth(http.HandlerFunc(h.MoveFolder)))
 	s.mux.Handle("DELETE /api/folders/{id}", auth(http.HandlerFunc(h.DeleteFolder)))
+	s.mux.Handle("GET /api/folders/{id}/download", auth(http.HandlerFunc(h.DownloadFolder)))
 
 	// Sharing
 	s.mux.Handle("POST /api/files/{id}/share", auth(http.HandlerFunc(h.ShareFile)))
