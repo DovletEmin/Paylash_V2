@@ -383,6 +383,34 @@ func (d *DB) GetFolder(id int) (*models.Folder, error) {
 	return f, err
 }
 
+// GetFolderAncestors returns every ancestor of folderID, root-most first
+// (folderID itself is not included) — used to build the breadcrumb trail
+// when listing a folder's contents.
+func (d *DB) GetFolderAncestors(folderID int) ([]models.FolderCrumb, error) {
+	rows, err := d.Query(
+		`WITH RECURSIVE ancestors AS (
+			SELECT id, name, parent_id, 0 AS depth FROM folders WHERE id = $1
+			UNION ALL
+			SELECT f.id, f.name, f.parent_id, a.depth + 1
+			FROM folders f JOIN ancestors a ON f.id = a.parent_id
+		)
+		SELECT id, name FROM ancestors WHERE id != $1 ORDER BY depth DESC`, folderID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var crumbs []models.FolderCrumb
+	for rows.Next() {
+		var c models.FolderCrumb
+		if err := rows.Scan(&c.ID, &c.Name); err != nil {
+			return nil, err
+		}
+		crumbs = append(crumbs, c)
+	}
+	return crumbs, rows.Err()
+}
+
 // GetFolderIncludingTrash fetches a folder regardless of trash state — used
 // by the trash-management endpoints (restore/purge).
 func (d *DB) GetFolderIncludingTrash(id int) (*models.Folder, error) {

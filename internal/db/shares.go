@@ -71,27 +71,27 @@ func (d *DB) GetSharesForFile(fileID int) ([]models.ShareView, error) {
 	return shares, rows.Err()
 }
 
-// GetSharedWithMe returns files individually shared with the user, plus files
-// visible to everyone via the common folder (visibility/scope = 'common').
+// GetSharedWithMe returns files individually, explicitly shared with the
+// user — i.e. exactly the rows in file_shares naming them as the recipient.
+// It deliberately does NOT include common-scope/common-visibility files:
+// those already have their own "Common" page, and surfacing every one of
+// them here too meant a file "shared to common access" landed in literally
+// every employee's Shared page, which is the opposite of what "shared with
+// me" should mean. Grouped by SharedByID (who actually performed the share,
+// via file_shares.shared_by) rather than the file's owner, since an admin or
+// a common/project editor can share a file they don't own.
 func (d *DB) GetSharedWithMe(userID int) ([]models.SharedFileView, error) {
-	q := `SELECT sub.* FROM (
-		SELECT DISTINCT ON (f.id)
+	q := `SELECT
 			f.id, f.name, f.mime_type, f.size_bytes, f.minio_bucket, f.minio_key,
 			f.folder_id, f.owner_id, f.project_id, f.scope, f.visibility, f.version, f.created_at, f.updated_at,
-			owner.display_name,
-			COALESCE(fs.permission, 'view') AS perm,
-			COALESCE(fs.created_at, f.updated_at) AS shared_at
-		FROM files f
-		JOIN users owner ON f.owner_id = owner.id
-		LEFT JOIN file_shares fs ON fs.file_id = f.id AND fs.shared_with = $1
-		WHERE f.owner_id != $1
-		AND (
-			fs.id IS NOT NULL
-			OR f.visibility = 'common'
-			OR f.scope = 'common'
-		)
-		ORDER BY f.id, fs.permission DESC NULLS LAST
-	) sub ORDER BY sub.shared_at DESC`
+			fs.shared_by, COALESCE(sharer.display_name, sharer.username, '') AS shared_by_name,
+			fs.permission,
+			fs.created_at AS shared_at
+		FROM file_shares fs
+		JOIN files f ON f.id = fs.file_id
+		JOIN users sharer ON sharer.id = fs.shared_by
+		WHERE fs.shared_with = $1 AND f.deleted_at IS NULL
+		ORDER BY fs.created_at DESC`
 
 	rows, err := d.Query(q, userID)
 	if err != nil {
@@ -103,7 +103,7 @@ func (d *DB) GetSharedWithMe(userID int) ([]models.SharedFileView, error) {
 		var sv models.SharedFileView
 		if err := rows.Scan(&sv.ID, &sv.Name, &sv.MimeType, &sv.SizeBytes, &sv.MinioBucket, &sv.MinioKey,
 			&sv.FolderID, &sv.OwnerID, &sv.ProjectID, &sv.Scope, &sv.Visibility, &sv.Version, &sv.CreatedAt, &sv.UpdatedAt,
-			&sv.SharedByName, &sv.Permission, &sv.SharedAt); err != nil {
+			&sv.SharedByID, &sv.SharedByName, &sv.Permission, &sv.SharedAt); err != nil {
 			return nil, err
 		}
 		list = append(list, sv)
@@ -115,13 +115,13 @@ func (d *DB) GetSharedByMe(userID int) ([]models.SharedByMeView, error) {
 	q := `SELECT
 			f.id, f.name, f.mime_type, f.size_bytes, f.minio_bucket, f.minio_key,
 			f.folder_id, f.owner_id, f.project_id, f.scope, f.visibility, f.version, f.created_at, f.updated_at,
-			COALESCE(u.display_name, u.username, '') AS shared_with_name,
+			fs.shared_with, COALESCE(u.display_name, u.username, '') AS shared_with_name,
 			fs.permission,
 			fs.created_at AS shared_at
 		FROM file_shares fs
 		JOIN files f ON f.id = fs.file_id
-		LEFT JOIN users u ON u.id = fs.shared_with
-		WHERE fs.shared_by = $1 AND fs.shared_with IS NOT NULL
+		JOIN users u ON u.id = fs.shared_with
+		WHERE fs.shared_by = $1 AND fs.shared_with IS NOT NULL AND f.deleted_at IS NULL
 		ORDER BY fs.created_at DESC`
 
 	rows, err := d.Query(q, userID)
@@ -134,7 +134,7 @@ func (d *DB) GetSharedByMe(userID int) ([]models.SharedByMeView, error) {
 		var sv models.SharedByMeView
 		if err := rows.Scan(&sv.ID, &sv.Name, &sv.MimeType, &sv.SizeBytes, &sv.MinioBucket, &sv.MinioKey,
 			&sv.FolderID, &sv.OwnerID, &sv.ProjectID, &sv.Scope, &sv.Visibility, &sv.Version, &sv.CreatedAt, &sv.UpdatedAt,
-			&sv.SharedWithName, &sv.Permission, &sv.SharedAt); err != nil {
+			&sv.SharedWithID, &sv.SharedWithName, &sv.Permission, &sv.SharedAt); err != nil {
 			return nil, err
 		}
 		list = append(list, sv)

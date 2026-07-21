@@ -13,6 +13,7 @@ import (
 	"paylash/internal/db"
 	"paylash/internal/models"
 	"paylash/internal/storage"
+	"paylash/internal/thumbnail"
 	"strconv"
 	"strings"
 	"time"
@@ -212,7 +213,26 @@ func (h *Handler) ListFiles(w http.ResponseWriter, r *http.Request) {
 	if folders == nil {
 		folders = []models.Folder{}
 	}
-	writeJSON(w, http.StatusOK, models.FileListResponse{Files: files, Folders: folders})
+
+	// Breadcrumb trail for the currently-open folder, root-most first, with
+	// the folder itself appended last — the frontend renders every entry
+	// but this one as a clickable ancestor link.
+	var crumbs []models.FolderCrumb
+	if folderID != nil {
+		crumbs, err = h.db.GetFolderAncestors(*folderID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "ýoly alyp bolmady")
+			return
+		}
+		if here, err := h.db.GetFolder(*folderID); err == nil && here != nil {
+			crumbs = append(crumbs, models.FolderCrumb{ID: here.ID, Name: here.Name})
+		}
+	}
+	if crumbs == nil {
+		crumbs = []models.FolderCrumb{}
+	}
+
+	writeJSON(w, http.StatusOK, models.FileListResponse{Files: files, Folders: folders, Breadcrumbs: crumbs})
 }
 
 func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
@@ -396,6 +416,98 @@ func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
 	// directly against it (Range requests included) instead of us buffering
 	// the whole object in the process' memory first.
 	http.ServeContent(w, r, f.Name, f.UpdatedAt, obj)
+}
+
+// isThumbnailableImage reports whether name is a format the stdlib image
+// package can decode (jpeg/png/gif) — the only formats FileThumbnail will
+// attempt to generate a preview for. Other "image" extensions the UI
+// otherwise recognizes (webp, svg, bmp, tiff, ico) fall straight through to
+// the frontend's generic-icon fallback instead of silently serving the full
+// original as a "thumbnail".
+func isThumbnailableImage(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".jpg", ".jpeg", ".png", ".gif":
+		return true
+	}
+	return false
+}
+
+// FileThumbnail serves a small cached JPEG preview of an image file instead
+// of the full original — the file grid used to point straight at
+// DownloadFile for thumbnails, which meant opening a folder full of photos
+// fired off dozens of concurrent full-resolution downloads at once. The
+// generated preview is cached in MinIO under a version-addressed key (see
+// storage.ThumbnailKey), so a given file+version pair is decoded/resized
+// exactly once no matter how many times it's viewed afterward, and the
+// version-in-key scheme lets the response be marked immutable — the browser
+// never has to re-request it either, as long as the frontend includes the
+// file's version in the request URL (see gridCard/listRow in files.js).
+func (h *Handler) FileThumbnail(w http.ResponseWriter, r *http.Request) {
+	user := authutil.GetUser(r)
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry ID")
+		return
+	}
+
+	f, err := h.db.GetFile(id)
+	if err != nil || f == nil {
+		writeError(w, http.StatusNotFound, "faýl tapylmady")
+		return
+	}
+	canAccess, err := h.db.CanAccessFile(f.ID, user.ID, user.Role == "admin", "view")
+	if err != nil || !canAccess {
+		writeError(w, http.StatusForbidden, "rugsat ýok")
+		return
+	}
+	if !isThumbnailableImage(f.Name) {
+		writeError(w, http.StatusUnsupportedMediaType, "bu görnüş üçin kiçi surat ýok")
+		return
+	}
+
+	key := storage.ThumbnailKey(f.ID, f.Version)
+	writeThumbHeaders := func() {
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		w.Header().Set("ETag", `"`+key+`"`)
+	}
+
+	// GetObjectInfo does a real HEAD-style stat, unlike Download/GetObject:
+	// minio-go's GetObject returns an object handle lazily and doesn't
+	// actually error until the first Read, so checking Download's error
+	// alone would "succeed" even when nothing is cached yet — and then
+	// silently write a truncated/empty body once io.Copy hit the real
+	// error on its first read.
+	if _, statErr := h.minio.GetObjectInfo(r.Context(), storage.ThumbnailBucket, key); statErr == nil {
+		if cached, err := h.minio.Download(r.Context(), storage.ThumbnailBucket, key); err == nil {
+			defer cached.Close()
+			writeThumbHeaders()
+			io.Copy(w, cached)
+			return
+		}
+	}
+
+	orig, err := h.minio.Download(r.Context(), f.MinioBucket, f.MinioKey)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "faýl tapylmady")
+		return
+	}
+	defer orig.Close()
+
+	data, err := thumbnail.Generate(orig)
+	if err != nil {
+		writeError(w, http.StatusUnsupportedMediaType, "kiçi surat döredip bolmady")
+		return
+	}
+
+	if err := h.minio.EnsureBucket(r.Context(), storage.ThumbnailBucket); err != nil {
+		log.Printf("thumbnail: ensure bucket: %v", err)
+	} else if err := h.minio.Upload(r.Context(), storage.ThumbnailBucket, key, bytes.NewReader(data), int64(len(data)), "image/jpeg"); err != nil {
+		log.Printf("thumbnail: cache write %s: %v", key, err)
+	}
+
+	writeThumbHeaders()
+	w.Write(data)
 }
 
 func (h *Handler) RenameFile(w http.ResponseWriter, r *http.Request) {

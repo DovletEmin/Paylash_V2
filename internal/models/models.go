@@ -164,8 +164,16 @@ type ShareRequest struct {
 }
 
 type FileListResponse struct {
-	Files   []File   `json:"files"`
-	Folders []Folder `json:"folders"`
+	Files       []File        `json:"files"`
+	Folders     []Folder      `json:"folders"`
+	Breadcrumbs []FolderCrumb `json:"breadcrumbs,omitempty"`
+}
+
+// FolderCrumb is the minimal id+name pair the breadcrumb trail needs for
+// each ancestor of the currently-open folder, root-most first.
+type FolderCrumb struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
 }
 
 type StorageUsage struct {
@@ -182,13 +190,15 @@ type AdminDashboard struct {
 
 type SharedFileView struct {
 	File
-	SharedByName string    `json:"owner_name"`
+	SharedByID   int       `json:"shared_by_id"`
+	SharedByName string    `json:"shared_by_name"`
 	Permission   string    `json:"permission"`
 	SharedAt     time.Time `json:"shared_at"`
 }
 
 type SharedByMeView struct {
 	File
+	SharedWithID   int       `json:"shared_with_id"`
 	SharedWithName string    `json:"shared_with_name"`
 	Permission     string    `json:"permission"`
 	SharedAt       time.Time `json:"shared_at"`

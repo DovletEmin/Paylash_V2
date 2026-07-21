@@ -327,3 +327,19 @@ func PersonalBucket(userID int) string {
 func ProjectBucket(projectID int) string {
 	return fmt.Sprintf("project-%d", projectID)
 }
+
+// ThumbnailBucket holds generated preview JPEGs for every scope, keyed by
+// ThumbnailKey — a single shared bucket rather than one per scope, since
+// thumbnails are only ever served through the authenticated /thumbnail
+// endpoint (which re-checks access on the source file) and never listed or
+// exposed on their own.
+const ThumbnailBucket = "thumbnails"
+
+// ThumbnailKey names a cached thumbnail object. Including the file's version
+// makes the key itself version-addressed: a re-upload or Collabora autosave
+// bumps the version, which naturally produces a fresh key instead of serving
+// a stale cached preview, and lets the /thumbnail endpoint hand out
+// far-future immutable cache headers safely.
+func ThumbnailKey(fileID, version int) string {
+	return fmt.Sprintf("%d-v%d.jpg", fileID, version)
+}

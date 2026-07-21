@@ -247,10 +247,13 @@ select.form-control,select.form-input{appearance:none;cursor:pointer;background-
   display:inline-block;padding:4px 12px;border-radius:var(--r);font-size:.78rem;font-weight:600;
   background:var(--primary);color:#fff;letter-spacing:.5px;
 }
-.breadcrumbs{display:flex;align-items:center;gap:4px;font-size:.85rem}
+.breadcrumbs{display:flex;align-items:center;gap:4px;font-size:.85rem;flex-wrap:wrap}
 .breadcrumb-item{color:var(--text-3);cursor:pointer;transition:color var(--tr)}
 .breadcrumb-item:hover{color:var(--text)}
+.breadcrumb-current{color:var(--text);font-weight:600;cursor:default}
 .breadcrumb-sep{color:var(--text-3);font-size:.75rem}
+.breadcrumb-back{color:var(--text-2);margin-right:2px}
+.breadcrumb-back svg{width:16px;height:16px}
 
 /* ─── Drop Overlay ─── */
 .files-page{position:relative;min-height:100%}
@@ -450,6 +453,20 @@ select.form-control,select.form-input{appearance:none;cursor:pointer;background-
 .shares-empty p{font-size:.9rem;margin:0}
 .file-card-recipients{font-size:.7rem;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 8px 6px}
 
+/* ─── Shares Page: grouped-by-person view ─── */
+.share-user-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px}
+.share-user-card{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);
+  padding:18px 12px;display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center;
+  cursor:pointer;transition:all var(--tr);
+}
+.share-user-card:hover{border-color:var(--primary);background:var(--surface-2);transform:translateY(-1px)}
+.share-user-avatar-lg{width:52px;height:52px;font-size:1.15rem}
+.share-user-card-name{font-weight:600;font-size:.85rem;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.share-user-card-count{font-size:.72rem;color:var(--text-3)}
+.share-group-header{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+.share-group-title{font-weight:600;font-size:1rem}
+
 /* ─── Visibility Buttons ─── */
 .visibility-buttons{display:flex;gap:4px}
 .vis-btn{border:1px solid var(--border);color:var(--text-2);background:var(--bg);transition:all var(--tr);font-size:.78rem !important;padding:6px 12px !important}
@@ -479,9 +496,26 @@ select.form-control,select.form-input{appearance:none;cursor:pointer;background-
 /* ─── Media Preview ─── */
 .preview-container{flex:1;position:relative;display:flex;align-items:center;justify-content:center;overflow:auto;background:var(--bg)}
 .preview-media{display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;padding:20px}
-.preview-image{overflow:auto}
+.preview-image{overflow:auto;position:relative}
 .preview-image img{max-width:100%;max-height:calc(100vh - 64px);object-fit:contain;border-radius:var(--r);cursor:zoom-in;transition:transform .2s}
 .preview-image img.zoomed{max-width:none;max-height:none;cursor:zoom-out}
+.preview-nav-arrow{
+  position:absolute;top:50%;transform:translateY(-50%);z-index:2;
+  width:44px;height:44px;border-radius:50%;border:1px solid var(--border);
+  background:var(--surface);color:var(--text);display:flex;align-items:center;justify-content:center;
+  cursor:pointer;transition:all var(--tr);opacity:.85;
+}
+.preview-nav-arrow svg{width:22px;height:22px}
+.preview-nav-arrow:hover:not(:disabled){background:var(--primary);border-color:var(--primary);color:#fff;opacity:1}
+.preview-nav-arrow:disabled{opacity:.25;cursor:default}
+.preview-nav-prev{left:16px}
+.preview-nav-next{right:16px}
+@media (max-width:768px){
+  .preview-nav-arrow{width:36px;height:36px}
+  .preview-nav-arrow svg{width:18px;height:18px}
+  .preview-nav-prev{left:6px}
+  .preview-nav-next{right:6px}
+}
 .preview-audio{gap:20px;text-align:center}
 .preview-audio-icon{font-size:4rem;opacity:.6}
 .preview-audio-name{font-size:1rem;font-weight:500;margin-bottom:12px;color:var(--text)}

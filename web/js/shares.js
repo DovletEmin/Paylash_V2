@@ -1,6 +1,12 @@
 /* Paylash — Shares Page */
 const SharesPage = {
     _activeShareTab: 'with-me',
+    _withMeFiles: [],
+    _byMeFiles: [],
+    // Which person's files are currently drilled into (their user id), or
+    // null for the top-level "grid of people" view — kept per page instance
+    // rather than per-tab since switching tabs always resets to the grid.
+    _expandedUserId: null,
 
     renderSharedWithMe() {
         return `
@@ -13,11 +19,13 @@ const SharesPage = {
 
     async initSharedWithMe() {
         this._activeShareTab = 'with-me';
+        this._expandedUserId = null;
         this.loadSharedWithMe();
     },
 
     switchShareTab(tab) {
         this._activeShareTab = tab;
+        this._expandedUserId = null;
         document.querySelectorAll('.shares-tab').forEach(b => b.classList.toggle('active', b.id === `tab-${tab}`));
         const c = document.getElementById('shares-tab-content');
         if (c) c.innerHTML = UI.skeletonCards(3);
@@ -29,33 +37,8 @@ const SharesPage = {
         const c = document.getElementById('shares-tab-content');
         if (!c) return;
         try {
-            const shares = (await API.sharing.sharedByMe()) || [];
-            if (!shares.length) {
-                c.innerHTML = `<div class="shares-empty"><div class="shares-empty-icon">📤</div><p>${I18N.t('shares.empty_by_me')}</p></div>`;
-                return;
-            }
-            // Group by file id
-            const grouped = {};
-            for (const s of shares) {
-                if (!grouped[s.id]) grouped[s.id] = { file: s, recipients: [] };
-                grouped[s.id].recipients.push({ name: s.shared_with_name, permission: s.permission });
-            }
-            let h = '<div class="file-grid">';
-            for (const g of Object.values(grouped)) {
-                const f = g.file;
-                const icon = UI.fileIcon(f.name, false);
-                const dbl = `UI.openFile(${f.id},${UI.escJson(f.name)},${f.size_bytes || 0})`;
-                const names = g.recipients.map(r => r.name).filter(Boolean);
-                const countText = names.length === 1 ? names[0] : I18N.tn('shares.recipients_count', names.length);
-                h += `<div class="file-card" ondblclick="${dbl}">
-                    <div class="file-card-icon document">${icon}</div>
-                    <div class="file-card-name" title="${UI.esc(f.name)}">${UI.esc(f.name)}</div>
-                    <div class="file-card-meta">${UI.formatBytes(f.size_bytes || 0)}</div>
-                    <div class="file-card-badge">→ ${UI.esc(countText)}</div>
-                    ${names.length > 1 ? `<div class="file-card-recipients" title="${UI.esc(names.join(', '))}">${names.map(n => UI.esc(n)).join(', ')}</div>` : ''}
-                </div>`;
-            }
-            c.innerHTML = h + '</div>';
+            this._byMeFiles = (await API.sharing.sharedByMe()) || [];
+            this.renderShareGroups();
         } catch (err) {
             c.innerHTML = `<p class="text-muted">${UI.esc(err.message)}</p>`;
         }
@@ -65,26 +48,89 @@ const SharesPage = {
         const c = document.getElementById('shares-tab-content');
         if (!c) return;
         try {
-            const files = (await API.sharing.sharedWithMe()) || [];
-            if (!files.length) {
-                c.innerHTML = `<div class="shares-empty"><div class="shares-empty-icon">📥</div><p>${I18N.t('shares.empty_with_me')}</p></div>`;
-                return;
-            }
-            let h = '<div class="file-grid">';
-            for (const f of files) {
-                const icon = UI.fileIcon(f.name, false);
-                const dbl = `UI.openFile(${f.id},${UI.escJson(f.name)},${f.size_bytes || 0})`;
-                h += `<div class="file-card" ondblclick="${dbl}">
-                    <div class="file-card-icon document">${icon}</div>
-                    <div class="file-card-name" title="${UI.esc(f.name)}">${UI.esc(f.name)}</div>
-                    <div class="file-card-meta">${UI.formatBytes(f.size_bytes || 0)}${f.owner_name ? ' · ' + UI.esc(f.owner_name) : ''}</div>
-                    <div class="file-card-badge">${f.permission === 'edit' ? '✏️ ' + I18N.t('shares.can_edit') : '👁 ' + I18N.t('shares.view_only')}</div>
-                </div>`;
-            }
-            c.innerHTML = h + '</div>';
+            this._withMeFiles = (await API.sharing.sharedWithMe()) || [];
+            this.renderShareGroups();
         } catch (err) {
             c.innerHTML = `<p class="text-muted">${UI.esc(err.message)}</p>`;
         }
+    },
+
+    // Both tabs share one rendering path: the API already returns one row
+    // per (file, person) pair, so grouping by that other person — who
+    // shared with me, or who I shared with — turns into a simple key-by.
+    // A flat file list made it impossible to see at a glance who's on the
+    // other end of a share, especially once more than a couple of colleagues
+    // were involved; grouping by avatar first, with a drill-down into that
+    // person's files, scales much better.
+    renderShareGroups() {
+        const c = document.getElementById('shares-tab-content');
+        if (!c) return;
+        const isWithMe = this._activeShareTab === 'with-me';
+        const files = isWithMe ? this._withMeFiles : this._byMeFiles;
+        const idKey = isWithMe ? 'shared_by_id' : 'shared_with_id';
+        const nameKey = isWithMe ? 'shared_by_name' : 'shared_with_name';
+
+        if (!files.length) {
+            const icon = isWithMe ? '📥' : '📤';
+            const text = isWithMe ? I18N.t('shares.empty_with_me') : I18N.t('shares.empty_by_me');
+            c.innerHTML = `<div class="shares-empty"><div class="shares-empty-icon">${icon}</div><p>${text}</p></div>`;
+            return;
+        }
+
+        if (this._expandedUserId != null) {
+            const userFiles = files.filter(f => f[idKey] === this._expandedUserId);
+            if (!userFiles.length) { this._expandedUserId = null; return this.renderShareGroups(); }
+            const name = userFiles[0][nameKey] || '';
+            c.innerHTML = `
+                <div class="share-group-header">
+                    <button class="btn btn-icon btn-ghost btn-sm" onclick="SharesPage.collapseGroup()" title="${I18N.t('shares.back_to_users')}" aria-label="${I18N.t('shares.back_to_users')}">${UI.icons.back}</button>
+                    <span class="share-user-avatar share-user-avatar-lg">${UI.esc((name || '?').charAt(0).toUpperCase())}</span>
+                    <span class="share-group-title">${UI.esc(name)}</span>
+                </div>
+                <div class="file-grid">${userFiles.map(f => this.shareFileCard(f)).join('')}</div>`;
+            return;
+        }
+
+        const groups = new Map();
+        for (const f of files) {
+            const id = f[idKey];
+            if (!groups.has(id)) groups.set(id, { id, name: f[nameKey] || '', count: 0 });
+            groups.get(id).count++;
+        }
+        const sorted = [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
+        c.innerHTML = `<div class="share-user-grid">` + sorted.map(g => `
+            <div class="share-user-card" onclick="SharesPage.expandGroup(${g.id})">
+                <span class="share-user-avatar share-user-avatar-lg">${UI.esc((g.name || '?').charAt(0).toUpperCase())}</span>
+                <div class="share-user-card-name" title="${UI.esc(g.name)}">${UI.esc(g.name)}</div>
+                <div class="share-user-card-count">${I18N.tn('shares.file_count', g.count)}</div>
+            </div>`).join('') + `</div>`;
+    },
+
+    expandGroup(userId) {
+        this._expandedUserId = userId;
+        this.renderShareGroups();
+    },
+
+    collapseGroup() {
+        this._expandedUserId = null;
+        this.renderShareGroups();
+    },
+
+    shareFileCard(f) {
+        const ext = f.name.split('.').pop().toLowerCase();
+        const iconHtml = UI.isThumbnailable(ext)
+            ? `<img class="file-card-thumb" src="/api/files/${f.id}/thumbnail?v=${f.version || 0}" loading="lazy" alt="" onerror="FilesPage.thumbError(this)">`
+            : UI.isImage(ext)
+            ? `<img class="file-card-thumb" src="/api/files/${f.id}/download" loading="lazy" alt="" onerror="FilesPage.thumbError(this)">`
+            : `<div class="file-card-icon document">${UI.fileIcon(f.name, false)}</div>`;
+        const dbl = `UI.openFile(${f.id},${UI.escJson(f.name)},${f.size_bytes || 0})`;
+        const badge = f.permission === 'edit' ? `✏️ ${I18N.t('shares.can_edit')}` : `👁 ${I18N.t('shares.view_only')}`;
+        return `<div class="file-card" ondblclick="${dbl}">
+            ${iconHtml}
+            <div class="file-card-name" title="${UI.esc(f.name)}">${UI.esc(f.name)}</div>
+            <div class="file-card-meta">${UI.formatBytes(f.size_bytes || 0)}</div>
+            <div class="file-card-badge">${badge}</div>
+        </div>`;
     },
 
     /* ── Share Modal (multi-user) ── */

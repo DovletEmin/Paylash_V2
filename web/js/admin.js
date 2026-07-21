@@ -50,7 +50,7 @@ const AdminPage = {
     async renderDashboard(el) {
         try {
             const [d, pq] = await Promise.all([API.admin.dashboard(), API.admin.publicQuota.get()]);
-            const pqMB = Math.round((pq.quota_bytes || 53687091200) / (1024 * 1024));
+            const pqGB = Math.round((pq.quota_bytes || 53687091200) / (1024 ** 3) * 10) / 10;
             el.innerHTML = `
             <h2 style="font-size:1.1rem;font-weight:600;margin-bottom:16px">${I18N.t('admin.nav_dashboard')}</h2>
             <div class="stat-cards">
@@ -61,8 +61,8 @@ const AdminPage = {
             </div>
             <h3 style="font-size:1rem;font-weight:600;margin:24px 0 12px">${I18N.t('admin.public_quota_title')}</h3>
             <div style="display:flex;align-items:center;gap:10px">
-                <input type="number" id="public-quota-mb" class="form-control" value="${pqMB}" min="1" style="width:160px">
-                <span class="text-muted" style="font-size:.82rem">MB</span>
+                <input type="number" id="public-quota-gb" class="form-control" value="${pqGB}" min="0.1" step="0.1" style="width:160px">
+                <span class="text-muted" style="font-size:.82rem">GB</span>
                 <button class="btn btn-primary btn-sm" onclick="AdminPage.savePublicQuota()">${I18N.t('common.save')}</button>
             </div>
             <p class="text-muted" style="font-size:.78rem;margin-top:6px">${I18N.t('admin.public_quota_hint')}</p>`;
@@ -70,9 +70,9 @@ const AdminPage = {
     },
 
     async savePublicQuota() {
-        const mb = parseInt(document.getElementById('public-quota-mb').value) || 0;
-        if (mb <= 0) { UI.toast(I18N.t('admin.invalid_quota'), 'error'); return; }
-        try { await API.admin.publicQuota.set(mb); UI.toast(I18N.t('admin.public_quota_changed'), 'success'); } catch (e) { UI.toast(e.message, 'error'); }
+        const gb = parseFloat(document.getElementById('public-quota-gb').value) || 0;
+        if (gb <= 0) { UI.toast(I18N.t('admin.invalid_quota'), 'error'); return; }
+        try { await API.admin.publicQuota.set(Math.round(gb * 1024)); UI.toast(I18N.t('admin.public_quota_changed'), 'success'); } catch (e) { UI.toast(e.message, 'error'); }
     },
 
     /* ── Projects ── */
@@ -98,16 +98,16 @@ const AdminPage = {
 
     showProjectModal(id, name, quotaBytes) {
         const edit = !!id;
-        const quotaMB = Math.round((quotaBytes || 5368709120) / (1024 * 1024));
+        const quotaGB = Math.round((quotaBytes || 5368709120) / (1024 ** 3) * 10) / 10;
         UI.showModal(edit ? I18N.t('admin.edit_project_title') : I18N.t('admin.new_project'),
             `<div class="form-group"><label>${I18N.t('admin.col_name')}</label><input type="text" id="proj-name" value="${name||''}" class="form-control" placeholder="${I18N.t('admin.project_name_placeholder')}"></div>
-             <div class="form-group"><label>${I18N.t('admin.quota_mb_label')}</label><input type="number" id="proj-quota" value="${quotaMB}" class="form-control" min="1"></div>`,
+             <div class="form-group"><label>${I18N.t('admin.quota_gb_label')}</label><input type="number" id="proj-quota" value="${quotaGB}" class="form-control" min="0.1" step="0.1"></div>`,
             `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="AdminPage.saveProject(${id||'null'})">${edit ? I18N.t('common.change') : I18N.t('common.create')}</button>`);
     },
     async saveProject(id) {
         const n = document.getElementById('proj-name').value.trim();
-        const quotaMB = parseInt(document.getElementById('proj-quota').value) || 5120;
-        const quotaBytes = quotaMB * 1024 * 1024;
+        const quotaGB = parseFloat(document.getElementById('proj-quota').value) || 5;
+        const quotaBytes = Math.round(quotaGB * 1024 ** 3);
         if (!n) { UI.toast(I18N.t('app.name_required'), 'error'); return; }
         try {
             if (id) await API.admin.projects.update(id, n, quotaBytes); else await API.admin.projects.create(n, quotaBytes);
@@ -122,14 +122,14 @@ const AdminPage = {
 
     showBulkProjectQuota() {
         UI.showModal(I18N.t('admin.bulk_project_quota_title'), `
-            <div class="form-group"><label>${I18N.t('admin.bulk_quota_new_label')}</label><input type="number" id="bulk-project-quota" class="form-control" value="5120" min="1"></div>
+            <div class="form-group"><label>${I18N.t('admin.bulk_quota_new_label')}</label><input type="number" id="bulk-project-quota" class="form-control" value="5" min="0.1" step="0.1"></div>
             <p class="text-muted" style="font-size:.78rem">${I18N.t('admin.bulk_project_quota_hint')}</p>`,
             `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="AdminPage.doBulkProjectQuota()">${I18N.t('common.change')}</button>`);
     },
     async doBulkProjectQuota() {
-        const mb = parseInt(document.getElementById('bulk-project-quota').value) || 0;
-        if (mb <= 0) { UI.toast(I18N.t('admin.invalid_quota'), 'error'); return; }
-        try { await API.admin.projects.bulkQuota(mb); UI.closeModal(); UI.toast(I18N.t('admin.bulk_project_quota_done'), 'success'); this.switchTab('projects'); } catch (e) { UI.toast(e.message, 'error'); }
+        const gb = parseFloat(document.getElementById('bulk-project-quota').value) || 0;
+        if (gb <= 0) { UI.toast(I18N.t('admin.invalid_quota'), 'error'); return; }
+        try { await API.admin.projects.bulkQuota(Math.round(gb * 1024)); UI.closeModal(); UI.toast(I18N.t('admin.bulk_project_quota_done'), 'success'); this.switchTab('projects'); } catch (e) { UI.toast(e.message, 'error'); }
     },
 
     /* ── Project members (ACL) ── */
@@ -295,7 +295,7 @@ const AdminPage = {
             <div class="form-group"><label>${I18N.t('auth.username_label')}</label><input type="text" id="nu-username" class="form-control" placeholder="${I18N.t('admin.username_field_placeholder')}"></div>
             <div class="form-group"><label>${I18N.t('auth.password_label')}</label>${UI.passwordField('nu-password', I18N.t('auth.password_min_placeholder'))}</div>
             <div class="form-group"><label>${I18N.t('admin.col_role')}</label><select id="nu-role" class="form-control"><option value="user">${I18N.t('app.role_user')}</option><option value="admin">${I18N.t('app.role_admin')}</option></select></div>
-            <div class="form-group"><label>${I18N.t('admin.quota_mb_label')}</label><input type="number" id="nu-quota" class="form-control" value="10240" min="0"></div>
+            <div class="form-group"><label>${I18N.t('admin.quota_gb_label')}</label><input type="number" id="nu-quota" class="form-control" value="10" min="0" step="0.1"></div>
             <p class="text-muted" style="font-size:.78rem">${I18N.t('admin.project_membership_hint')}</p>`,
             `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="AdminPage.doCreateUser()">${I18N.t('common.create')}</button>`);
     },
@@ -305,7 +305,7 @@ const AdminPage = {
         const username = document.getElementById('nu-username').value.trim();
         const password = document.getElementById('nu-password').value;
         const role = document.getElementById('nu-role').value;
-        const quotaMB = parseInt(document.getElementById('nu-quota').value) || 0;
+        const quotaMB = Math.round((parseFloat(document.getElementById('nu-quota').value) || 0) * 1024);
         if (!name || !username || !password) { UI.toast(I18N.t('auth.fill_all_fields'), 'error'); return; }
         try {
             await API.admin.users.create({ full_name: name, username, password, role, quota_mb: quotaMB });
@@ -315,20 +315,20 @@ const AdminPage = {
 
     showEditUserModal(id) {
         const u = this._users.find(x => x.id === id); if (!u) return;
-        const mb = Math.round((u.quota_bytes || 0) / (1024 * 1024));
+        const gb = Math.round((u.quota_bytes || 0) / (1024 ** 3) * 10) / 10;
         UI.showModal(I18N.t('admin.edit_user_title'), `
             <div class="form-group"><label>${I18N.t('auth.fullname_label')}</label><input type="text" id="eu-name" value="${UI.esc(u.full_name)}" class="form-control"></div>
             <div class="form-group"><label>${I18N.t('app.new_password_label')}</label>${UI.passwordField('eu-password', I18N.t('admin.new_password_optional_placeholder'))}</div>
             <div class="form-group"><label>${I18N.t('admin.col_role')}</label><select id="eu-role" class="form-control"><option value="user" ${u.role==='user'?'selected':''}>${I18N.t('app.role_user')}</option><option value="admin" ${u.role==='admin'?'selected':''}>${I18N.t('app.role_admin')}</option></select></div>
-            <div class="form-group"><label>${I18N.t('admin.quota_mb_label')}</label><input type="number" id="eu-quota" value="${mb}" class="form-control" min="0"></div>`,
+            <div class="form-group"><label>${I18N.t('admin.quota_gb_label')}</label><input type="number" id="eu-quota" value="${gb}" class="form-control" min="0" step="0.1"></div>`,
             `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="AdminPage.saveUser(${id})">${I18N.t('common.save')}</button>`);
     },
     async saveUser(id) {
         const role = document.getElementById('eu-role').value;
-        const mb = parseInt(document.getElementById('eu-quota').value) || 0;
+        const gb = parseFloat(document.getElementById('eu-quota').value) || 0;
         const name = document.getElementById('eu-name').value.trim();
         const password = document.getElementById('eu-password').value;
-        const data = { role, quota_bytes: mb * 1024 * 1024 };
+        const data = { role, quota_bytes: Math.round(gb * 1024 ** 3) };
         if (name) data.display_name = name;
         if (password) data.password = password;
         try { await API.admin.users.update(id, data); UI.closeModal(); UI.toast(I18N.t('admin.updated'), 'success'); this.switchTab('users'); } catch (e) { UI.toast(e.message, 'error'); }
@@ -356,14 +356,14 @@ const AdminPage = {
 
     showBulkUserQuota() {
         UI.showModal(I18N.t('admin.bulk_user_quota_title'), `
-            <div class="form-group"><label>${I18N.t('admin.bulk_quota_new_label')}</label><input type="number" id="bulk-user-quota" class="form-control" value="10240" min="1"></div>
+            <div class="form-group"><label>${I18N.t('admin.bulk_quota_new_label')}</label><input type="number" id="bulk-user-quota" class="form-control" value="10" min="0.1" step="0.1"></div>
             <p class="text-muted" style="font-size:.78rem">${I18N.t('admin.bulk_user_quota_hint')}</p>`,
             `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="AdminPage.doBulkUserQuota()">${I18N.t('common.change')}</button>`);
     },
     async doBulkUserQuota() {
-        const mb = parseInt(document.getElementById('bulk-user-quota').value) || 0;
-        if (mb <= 0) { UI.toast(I18N.t('admin.invalid_quota'), 'error'); return; }
-        try { await API.admin.users.bulkQuota(mb); UI.closeModal(); UI.toast(I18N.t('admin.bulk_user_quota_done'), 'success'); this.switchTab('users'); } catch (e) { UI.toast(e.message, 'error'); }
+        const gb = parseFloat(document.getElementById('bulk-user-quota').value) || 0;
+        if (gb <= 0) { UI.toast(I18N.t('admin.invalid_quota'), 'error'); return; }
+        try { await API.admin.users.bulkQuota(Math.round(gb * 1024)); UI.closeModal(); UI.toast(I18N.t('admin.bulk_user_quota_done'), 'success'); this.switchTab('users'); } catch (e) { UI.toast(e.message, 'error'); }
     },
 
     showImportModal() {
@@ -456,11 +456,21 @@ const AdminPage = {
     renderPjfBreadcrumbs() {
         const el = document.getElementById('pjf-breadcrumbs');
         if (!el) return;
-        const proj = this._projects.find(p => p.id === this._adminProjectFiles.projectId);
-        let h = `<a class="breadcrumb-item" onclick="AdminPage._adminProjectFiles.folderId=null;AdminPage.loadPjfFiles()">${UI.esc(proj ? proj.name : I18N.t('app.project_label'))}</a>`;
-        for (const b of this._adminProjectFiles.breadcrumbs) {
-            h += `<span class="breadcrumb-sep">/</span><a class="breadcrumb-item" onclick="AdminPage._adminProjectFiles.folderId=${b.id};AdminPage.loadPjfFiles()">${UI.esc(b.name)}</a>`;
+        const st = this._adminProjectFiles;
+        const proj = this._projects.find(p => p.id === st.projectId);
+        let h = '';
+        if (st.folderId) {
+            const parentId = st.breadcrumbs.length > 1 ? st.breadcrumbs[st.breadcrumbs.length - 2].id : null;
+            h += `<button class="btn btn-icon btn-ghost btn-sm breadcrumb-back" onclick="AdminPage._adminProjectFiles.folderId=${parentId};AdminPage.loadPjfFiles()" title="${I18N.t('files.back_button')}" aria-label="${I18N.t('files.back_button')}">${UI.icons.back}</button>`;
         }
+        h += `<a class="breadcrumb-item" onclick="AdminPage._adminProjectFiles.folderId=null;AdminPage.loadPjfFiles()">${UI.esc(proj ? proj.name : I18N.t('app.project_label'))}</a>`;
+        st.breadcrumbs.forEach((b, i) => {
+            const isCurrent = i === st.breadcrumbs.length - 1;
+            h += `<span class="breadcrumb-sep">/</span>`;
+            h += isCurrent
+                ? `<span class="breadcrumb-item breadcrumb-current">${UI.esc(b.name)}</span>`
+                : `<a class="breadcrumb-item" onclick="AdminPage._adminProjectFiles.folderId=${b.id};AdminPage.loadPjfFiles()">${UI.esc(b.name)}</a>`;
+        });
         el.innerHTML = h;
     },
 
@@ -472,7 +482,9 @@ const AdminPage = {
             const cls = UI.fileIconClass(i.name, i.isFolder);
             const dbl = i.isFolder ? `AdminPage._adminProjectFiles.folderId=${i.id};AdminPage.loadPjfFiles()` : `UI.openFile(${i.id},${UI.escJson(i.name)},${i.size_bytes || 0})`;
             const ext = i.isFolder ? '' : i.name.split('.').pop().toLowerCase();
-            const iconHtml = !i.isFolder && UI.isImage(ext)
+            const iconHtml = !i.isFolder && UI.isThumbnailable(ext)
+                ? `<img class="file-card-thumb" src="/api/files/${i.id}/thumbnail?v=${i.version || 0}" loading="lazy" alt="" onerror="FilesPage.thumbError(this)">`
+                : !i.isFolder && UI.isImage(ext)
                 ? `<img class="file-card-thumb" src="/api/files/${i.id}/download" loading="lazy" alt="" onerror="FilesPage.thumbError(this)">`
                 : `<div class="file-card-icon ${cls}">${UI.fileIcon(i.name, i.isFolder)}</div>`;
             return `<div class="file-card" ondblclick="${dbl}" oncontextmenu="AdminPage.showPjfMenu(event,${UI.escJson(i)})">
@@ -593,10 +605,20 @@ const AdminPage = {
     renderCfBreadcrumbs() {
         const el = document.getElementById('cf-breadcrumbs');
         if (!el) return;
-        let h = `<a class="breadcrumb-item" onclick="AdminPage._adminCommonFiles.folderId=null;AdminPage.loadCfFiles()">${I18N.t('app.nav_common')}</a>`;
-        for (const b of this._adminCommonFiles.breadcrumbs) {
-            h += `<span class="breadcrumb-sep">/</span><a class="breadcrumb-item" onclick="AdminPage._adminCommonFiles.folderId=${b.id};AdminPage.loadCfFiles()">${UI.esc(b.name)}</a>`;
+        const st = this._adminCommonFiles;
+        let h = '';
+        if (st.folderId) {
+            const parentId = st.breadcrumbs.length > 1 ? st.breadcrumbs[st.breadcrumbs.length - 2].id : null;
+            h += `<button class="btn btn-icon btn-ghost btn-sm breadcrumb-back" onclick="AdminPage._adminCommonFiles.folderId=${parentId};AdminPage.loadCfFiles()" title="${I18N.t('files.back_button')}" aria-label="${I18N.t('files.back_button')}">${UI.icons.back}</button>`;
         }
+        h += `<a class="breadcrumb-item" onclick="AdminPage._adminCommonFiles.folderId=null;AdminPage.loadCfFiles()">${I18N.t('app.nav_common')}</a>`;
+        st.breadcrumbs.forEach((b, i) => {
+            const isCurrent = i === st.breadcrumbs.length - 1;
+            h += `<span class="breadcrumb-sep">/</span>`;
+            h += isCurrent
+                ? `<span class="breadcrumb-item breadcrumb-current">${UI.esc(b.name)}</span>`
+                : `<a class="breadcrumb-item" onclick="AdminPage._adminCommonFiles.folderId=${b.id};AdminPage.loadCfFiles()">${UI.esc(b.name)}</a>`;
+        });
         el.innerHTML = h;
     },
 
@@ -608,7 +630,9 @@ const AdminPage = {
             const cls = UI.fileIconClass(i.name, i.isFolder);
             const dbl = i.isFolder ? `AdminPage._adminCommonFiles.folderId=${i.id};AdminPage.loadCfFiles()` : `UI.openFile(${i.id},${UI.escJson(i.name)},${i.size_bytes || 0})`;
             const ext = i.isFolder ? '' : i.name.split('.').pop().toLowerCase();
-            const iconHtml = !i.isFolder && UI.isImage(ext)
+            const iconHtml = !i.isFolder && UI.isThumbnailable(ext)
+                ? `<img class="file-card-thumb" src="/api/files/${i.id}/thumbnail?v=${i.version || 0}" loading="lazy" alt="" onerror="FilesPage.thumbError(this)">`
+                : !i.isFolder && UI.isImage(ext)
                 ? `<img class="file-card-thumb" src="/api/files/${i.id}/download" loading="lazy" alt="" onerror="FilesPage.thumbError(this)">`
                 : `<div class="file-card-icon ${cls}">${UI.fileIcon(i.name, i.isFolder)}</div>`;
             return `<div class="file-card" ondblclick="${dbl}" oncontextmenu="AdminPage.showCfMenu(event,${UI.escJson(i)})">

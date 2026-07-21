@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"paylash/internal/authutil"
 	"paylash/internal/models"
+	"paylash/internal/storage"
 	"strconv"
 )
 
@@ -142,6 +143,7 @@ func (h *Handler) PurgeFile(w http.ResponseWriter, r *http.Request) {
 	if err := h.minio.Delete(r.Context(), f.MinioBucket, f.MinioKey); err != nil {
 		log.Printf("purge object %s/%s: %v", f.MinioBucket, f.MinioKey, err)
 	}
+	h.purgeThumbnail(r, f.ID, f.Version)
 	if err := h.db.PurgeFiles([]int{id}); err != nil {
 		writeError(w, http.StatusInternalServerError, "pozup bolmady")
 		return
@@ -205,6 +207,7 @@ func (h *Handler) EmptyTrash(w http.ResponseWriter, r *http.Request) {
 		if err := h.minio.Delete(r.Context(), f.MinioBucket, f.MinioKey); err != nil {
 			log.Printf("empty trash: purge object %s/%s: %v", f.MinioBucket, f.MinioKey, err)
 		}
+		h.purgeThumbnail(r, f.ID, f.Version)
 	}
 	var fileIDs []int
 	for _, f := range files {
@@ -236,9 +239,21 @@ func (h *Handler) purgeFolderTree(r *http.Request, folderID int) error {
 		if err := h.minio.Delete(r.Context(), f.MinioBucket, f.MinioKey); err != nil {
 			log.Printf("purge object %s/%s: %v", f.MinioBucket, f.MinioKey, err)
 		}
+		h.purgeThumbnail(r, f.ID, f.Version)
 	}
 	if err := h.db.DeleteFilesInFolders(folderIDs); err != nil {
 		return err
 	}
 	return h.db.PurgeFolders(folderIDs)
+}
+
+// purgeThumbnail best-effort deletes a file's cached thumbnail (if any) at
+// its current version. A missing object is not an error; failures here are
+// logged, not surfaced — they'd otherwise block a permanent-delete that has
+// already succeeded on the parts that actually matter (the file's own data).
+func (h *Handler) purgeThumbnail(r *http.Request, fileID, version int) {
+	key := storage.ThumbnailKey(fileID, version)
+	if err := h.minio.Delete(r.Context(), storage.ThumbnailBucket, key); err != nil {
+		log.Printf("purge thumbnail %s: %v", key, err)
+	}
 }

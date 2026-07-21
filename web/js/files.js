@@ -119,10 +119,23 @@ const FilesPage = {
         const el = document.getElementById('breadcrumbs');
         if (!el) return;
         const rootLabel = this.currentScope === 'personal' ? I18N.t('app.nav_personal') : this.currentScope === 'project' ? (this.currentProjectName || I18N.t('app.project_label')) : I18N.t('app.nav_common');
-        let h = `<a class="breadcrumb-item" onclick="FilesPage.goToFolder(null)">${UI.esc(rootLabel)}</a>`;
-        for (const b of this.breadcrumbs) {
-            h += `<span class="breadcrumb-sep">/</span><a class="breadcrumb-item" onclick="FilesPage.goToFolder(${b.id})">${UI.esc(b.name)}</a>`;
+        let h = '';
+        if (this.currentFolder) {
+            // Ancestors as returned by the server are root-most first, with
+            // the current folder itself appended last — so "one level up" is
+            // whatever's second-to-last, or the scope root if there's only
+            // the current folder in the list.
+            const parentId = this.breadcrumbs.length > 1 ? this.breadcrumbs[this.breadcrumbs.length - 2].id : null;
+            h += `<button class="btn btn-icon btn-ghost btn-sm breadcrumb-back" onclick="FilesPage.goToFolder(${parentId})" title="${I18N.t('files.back_button')}" aria-label="${I18N.t('files.back_button')}">${UI.icons.back}</button>`;
         }
+        h += `<a class="breadcrumb-item" onclick="FilesPage.goToFolder(null)">${UI.esc(rootLabel)}</a>`;
+        this.breadcrumbs.forEach((b, i) => {
+            const isCurrent = i === this.breadcrumbs.length - 1;
+            h += `<span class="breadcrumb-sep">/</span>`;
+            h += isCurrent
+                ? `<span class="breadcrumb-item breadcrumb-current">${UI.esc(b.name)}</span>`
+                : `<a class="breadcrumb-item" onclick="FilesPage.goToFolder(${b.id})">${UI.esc(b.name)}</a>`;
+        });
         el.innerHTML = h;
     },
 
@@ -154,7 +167,19 @@ const FilesPage = {
         const dbl = item.isFolder ? `FilesPage.goToFolder(${item.id})` : `UI.openFile(${item.id},${UI.escJson(item.name)},${item.size_bytes || 0})`;
         const itemJson = UI.escJson(item);
         const ext = item.isFolder ? '' : item.name.split('.').pop().toLowerCase();
-        const iconHtml = !item.isFolder && UI.isImage(ext)
+        // Small cached JPEG preview (see FileThumbnail server-side) instead of
+        // the full original — a folder full of camera photos used to fire off
+        // dozens of concurrent full-resolution downloads just to paint the
+        // grid. Only formats the server can actually generate a preview for
+        // (see isThumbnailableImage in internal/api/files.go) go through
+        // /thumbnail; the handful of image types it can't decode (svg, webp,
+        // ico, bmp, tiff) keep using /download directly since those are
+        // either already tiny (svg/ico) or too rare here to be worth a
+        // second code path. The file's version is in the URL so the browser
+        // can cache the response forever and still pick up re-uploads/edits.
+        const iconHtml = !item.isFolder && UI.isThumbnailable(ext)
+            ? `<img class="file-card-thumb" src="/api/files/${item.id}/thumbnail?v=${item.version || 0}" loading="lazy" alt="" onerror="FilesPage.thumbError(this)">`
+            : !item.isFolder && UI.isImage(ext)
             ? `<img class="file-card-thumb" src="/api/files/${item.id}/download" loading="lazy" alt="" onerror="FilesPage.thumbError(this)">`
             : `<div class="file-card-icon ${cls}">${UI.fileIcon(item.name, item.isFolder)}</div>`;
         return `<div class="file-card" ondblclick="${dbl}" oncontextmenu="FilesPage.showMenu(event,${itemJson})">

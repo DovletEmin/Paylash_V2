@@ -124,6 +124,10 @@ func purgeExpiredTrash(database *db.DB, minioClient *storage.MinioClient) error 
 		if err := minioClient.Delete(ctx, f.MinioBucket, f.MinioKey); err != nil {
 			log.Printf("janitor: delete object %s/%s: %v", f.MinioBucket, f.MinioKey, err)
 		}
+		thumbKey := storage.ThumbnailKey(f.ID, f.Version)
+		if err := minioClient.Delete(ctx, storage.ThumbnailBucket, thumbKey); err != nil {
+			log.Printf("janitor: delete thumbnail %s: %v", thumbKey, err)
+		}
 		fileIDs = append(fileIDs, f.ID)
 	}
 	if err := database.PurgeFiles(fileIDs); err != nil {

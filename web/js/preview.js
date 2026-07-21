@@ -13,7 +13,7 @@ const PreviewPage = {
         <div class="editor-page">
             <div class="editor-toolbar">
                 <button class="btn btn-ghost btn-sm" onclick="App.navigate('files')">${I18N.t('editor.back')}</button>
-                <span class="editor-filename">${UI.esc(this.currentFileName)}</span>
+                <span class="editor-filename" id="preview-filename">${UI.esc(this.currentFileName)}</span>
                 <div class="editor-toolbar-right">
                     <button class="btn btn-ghost btn-sm" onclick="PreviewPage.download()">${UI.icons.download} ${I18N.t('files.action_download')}</button>
                     <button class="btn btn-ghost btn-sm" onclick="SharesPage.showShareModal({id:PreviewPage.currentFileId,name:PreviewPage.currentFileName})">${UI.icons.share} ${I18N.t('files.action_share')}</button>
@@ -32,14 +32,80 @@ const PreviewPage = {
         App.navigate('preview');
     },
 
+    // Finds whichever currently-loaded file list contains the file being
+    // previewed (the folder/scope the user was actually browsing) so the
+    // side arrows and arrow keys can step through the same set of images —
+    // scoped per source so switching photos never crosses into an unrelated
+    // list.  Returns [] (no navigation UI) when the file isn't part of any
+    // list still held in memory, e.g. opened straight from a search result.
+    _findSiblings() {
+        const lists = [];
+        if (typeof FilesPage !== 'undefined' && Array.isArray(FilesPage.files)) lists.push(FilesPage.files);
+        if (typeof AdminPage !== 'undefined') {
+            if (AdminPage._adminProjectFiles && Array.isArray(AdminPage._adminProjectFiles.files)) lists.push(AdminPage._adminProjectFiles.files);
+            if (AdminPage._adminCommonFiles && Array.isArray(AdminPage._adminCommonFiles.files)) lists.push(AdminPage._adminCommonFiles.files);
+        }
+        for (const list of lists) {
+            if (list.some(f => f.id === this.currentFileId)) {
+                return list.filter(f => UI.mediaType(f.name) === 'image');
+            }
+        }
+        return [];
+    },
+
+    navArrowHTML(dir) {
+        const siblings = this._findSiblings();
+        const idx = siblings.findIndex(f => f.id === this.currentFileId);
+        if (idx === -1 || siblings.length < 2) return '';
+        const canGo = dir === 'prev' ? idx > 0 : idx < siblings.length - 1;
+        const label = I18N.t(dir === 'prev' ? 'preview.nav_prev' : 'preview.nav_next');
+        const glyph = dir === 'prev' ? UI.icons.chevronLeft : UI.icons.chevronRight;
+        if (!canGo) return `<button class="preview-nav-arrow preview-nav-${dir}" disabled aria-label="${label}">${glyph}</button>`;
+        return `<button class="preview-nav-arrow preview-nav-${dir}" onclick="PreviewPage.navigateSibling(${dir === 'prev' ? -1 : 1})" aria-label="${label}">${glyph}</button>`;
+    },
+
+    navigateSibling(delta) {
+        const siblings = this._findSiblings();
+        const idx = siblings.findIndex(f => f.id === this.currentFileId);
+        if (idx === -1) return;
+        const next = siblings[idx + delta];
+        if (!next) return;
+        this.currentFileId = next.id;
+        this.currentFileName = next.name;
+        this.currentFileSize = next.size_bytes || 0;
+        this.init();
+    },
+
+    _keyNavBound: false,
+    // Registered once for the page's whole lifetime (this is a single-page
+    // app — the script never reloads) rather than per-open/per-init, so
+    // repeatedly opening previews never stacks up duplicate listeners; the
+    // handler itself checks it's actually the active page before acting.
+    _bindKeyNav() {
+        if (this._keyNavBound) return;
+        this._keyNavBound = true;
+        document.addEventListener('keydown', ev => {
+            if (App.currentPage !== 'preview' || UI.mediaType(PreviewPage.currentFileName) !== 'image') return;
+            if (ev.key === 'ArrowLeft') { ev.preventDefault(); PreviewPage.navigateSibling(-1); }
+            else if (ev.key === 'ArrowRight') { ev.preventDefault(); PreviewPage.navigateSibling(1); }
+        });
+    },
+
     async init() {
         if (!this.currentFileId) { App.navigate('files'); return; }
+        this._bindKeyNav();
+        const nameEl = document.getElementById('preview-filename');
+        if (nameEl) nameEl.textContent = this.currentFileName;
         const c = document.getElementById('preview-container');
         const type = UI.mediaType(this.currentFileName);
         const url = `/api/files/${this.currentFileId}/download`;
 
         if (type === 'image') {
-            c.innerHTML = `<div class="preview-media preview-image"><img src="${url}" alt="${UI.esc(this.currentFileName)}" onclick="PreviewPage.toggleZoom(this)"></div>`;
+            c.innerHTML = `<div class="preview-media preview-image">
+                ${this.navArrowHTML('prev')}
+                <img src="${url}" alt="${UI.esc(this.currentFileName)}" onclick="PreviewPage.toggleZoom(this)">
+                ${this.navArrowHTML('next')}
+            </div>`;
         } else if (type === 'audio') {
             c.innerHTML = `<div class="preview-media preview-audio">
                 <div class="preview-audio-icon">🎵</div>
