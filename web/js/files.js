@@ -12,6 +12,9 @@ const FilesPage = {
     filesLimit: 50,
     filesOffset: 0,
     hasMoreFiles: false,
+    // Selection keys are "file:123" / "folder:45" — prefixed so a file and a
+    // folder that happen to share a numeric id can't collide in the Set.
+    selected: new Set(),
 
     // Whether the current user may upload/create/rename/delete in the active scope.
     canManage() {
@@ -28,6 +31,9 @@ const FilesPage = {
         <div class="files-page">
             <div class="files-toolbar">
                 <div class="files-toolbar-left">
+                    <label class="select-all-check" title="${I18N.t('files.select_all')}">
+                        <input type="checkbox" id="select-all-checkbox" onchange="FilesPage.toggleSelectAll(this.checked)">
+                    </label>
                 </div>
                 <div class="files-toolbar-right">
                     <div class="search-box">
@@ -38,6 +44,7 @@ const FilesPage = {
                     <button class="btn btn-icon btn-ghost ${this.viewMode === 'list' ? 'active' : ''}" onclick="FilesPage.setView('list')" title="${I18N.t('files.view_list')}" aria-label="${I18N.t('files.view_list')}">${UI.icons.list}</button>
                 </div>
             </div>
+            <div id="bulk-actions-bar" class="bulk-actions-bar hidden"></div>
             ${canUpload ? `<div class="files-actions">
                 <button class="btn btn-primary btn-sm" onclick="FilesPage.showUploadModal()">${UI.icons.upload} ${I18N.t('files.upload_button')}</button>
                 <button class="btn btn-ghost btn-sm" onclick="FilesPage.showUploadFolderModal()" title="${I18N.t('files.upload_folder_button')}">${UI.icons.folder} ${I18N.t('files.upload_folder_button')}</button>
@@ -81,6 +88,7 @@ const FilesPage = {
         if (!c) return;
         c.innerHTML = UI.skeletonCards(6);
         this.filesOffset = 0;
+        this.clearSelection();
         try {
             const p = { scope: this.currentScope, limit: this.filesLimit, offset: 0 };
             if (this.currentFolder) p.folder_id = this.currentFolder;
@@ -160,12 +168,160 @@ const FilesPage = {
                 <button class="btn btn-ghost btn-sm" id="files-load-more" onclick="FilesPage.loadMoreFiles()">${I18N.t('files.load_more')}</button>
             </div>`;
         }
+        this.syncSelectionUI();
+    },
+
+    /* ── Multi-select ── */
+
+    selectionKey(item) { return (item.isFolder ? 'folder:' : 'file:') + item.id; },
+
+    toggleSelect(key, ev) {
+        if (ev) ev.stopPropagation();
+        if (this.selected.has(key)) this.selected.delete(key); else this.selected.add(key);
+        this.renderFiles();
+    },
+
+    toggleSelectAll(checked) {
+        this.selected.clear();
+        if (checked) {
+            for (const f of this.folders) this.selected.add('folder:' + f.id);
+            for (const f of this.files) this.selected.add('file:' + f.id);
+        }
+        this.renderFiles();
+    },
+
+    clearSelection() {
+        if (!this.selected.size) { this.syncSelectionUI(); return; }
+        this.selected.clear();
+        this.renderFiles();
+    },
+
+    selectedItems() {
+        const items = [];
+        for (const key of this.selected) {
+            const [kind, idStr] = key.split(':');
+            const id = parseInt(idStr, 10);
+            const src = kind === 'folder' ? this.folders : this.files;
+            const found = src.find(x => x.id === id);
+            if (found) items.push({ ...found, isFolder: kind === 'folder' });
+        }
+        return items;
+    },
+
+    // Keeps the toolbar's "select all" checkbox and the bulk action bar in
+    // sync with `selected` — called after every render/render (renderFiles)
+    // rather than threaded through each individual mutation, so it can never
+    // drift out of sync with what's actually on screen.
+    syncSelectionUI() {
+        const selAll = document.getElementById('select-all-checkbox');
+        if (selAll) {
+            const total = this.files.length + this.folders.length;
+            selAll.checked = total > 0 && this.selected.size === total;
+            selAll.indeterminate = this.selected.size > 0 && this.selected.size < total;
+        }
+        this.renderBulkBar();
+    },
+
+    renderBulkBar() {
+        const bar = document.getElementById('bulk-actions-bar');
+        if (!bar) return;
+        if (!this.selected.size) { bar.classList.add('hidden'); bar.innerHTML = ''; return; }
+        const items = this.selectedItems();
+        const canManage = this.canManage();
+        const allFiles = items.every(i => !i.isFolder);
+        bar.classList.remove('hidden');
+        bar.innerHTML = `
+            <span class="bulk-bar-count">${I18N.tn('files.selected_count', items.length)}</span>
+            <div class="bulk-bar-actions">
+                <button class="btn btn-ghost btn-sm" onclick="FilesPage.bulkDownload()">${UI.icons.download} ${I18N.t('files.action_download')}</button>
+                ${canManage && allFiles ? `<button class="btn btn-ghost btn-sm" onclick="FilesPage.bulkShare()">${UI.icons.share} ${I18N.t('files.action_share')}</button>` : ''}
+                ${canManage ? `<button class="btn btn-ghost btn-sm" onclick="FilesPage.bulkMove()">${UI.icons.folder} ${I18N.t('files.action_move')}</button>` : ''}
+                ${canManage ? `<button class="btn btn-ghost btn-sm btn-danger" onclick="FilesPage.bulkDelete()">${UI.icons.trash} ${I18N.t('files.action_delete')}</button>` : ''}
+                <button class="btn btn-icon btn-ghost btn-sm" onclick="FilesPage.clearSelection()" title="${I18N.t('files.clear_selection')}" aria-label="${I18N.t('files.clear_selection')}">✕</button>
+            </div>`;
+    },
+
+    bulkDownload() {
+        for (const item of this.selectedItems()) {
+            if (item.isFolder) this.downloadFolder(item.id, item.name);
+            else this.download(item.id, item.name);
+        }
+    },
+
+    bulkShare() {
+        const items = this.selectedItems().filter(i => !i.isFolder);
+        if (items.length) SharesPage.showShareModal(items);
+    },
+
+    async bulkMove() {
+        const items = this.selectedItems();
+        if (!items.length) return;
+        try {
+            const folders = await API.folders.tree(this.currentScope, this.currentProjectId);
+            // Exclude every selected folder and all of its descendants —
+            // moving a folder into its own subtree would orphan it.
+            const excluded = new Set(items.filter(i => i.isFolder).map(i => i.id));
+            const byParent = {};
+            for (const f of folders) { const k = f.parent_id || 'root'; (byParent[k] = byParent[k] || []).push(f); }
+            const stack = items.filter(i => i.isFolder).map(i => i.id);
+            while (stack.length) {
+                const cur = stack.pop();
+                for (const f of (byParent[cur] || [])) { excluded.add(f.id); stack.push(f.id); }
+            }
+            const lines = UI.flattenFolderTree(folders).filter(l => !excluded.has(l.id));
+            const options = [`<option value="">${I18N.t('common.root_option')}</option>`]
+                .concat(lines.map(l => `<option value="${l.id}">${'— '.repeat(l.depth)}${UI.esc(l.name)}</option>`));
+            UI.showModal(I18N.t('files.bulk_move_title', { count: items.length }),
+                `<div class="form-group"><label>${I18N.t('files.move_target_label')}</label><select id="move-target" class="form-control">${options.join('')}</select></div>`,
+                `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="FilesPage.doBulkMove()">${I18N.t('common.move')}</button>`);
+        } catch (e) { UI.toast(e.message, 'error'); }
+    },
+
+    async doBulkMove() {
+        const val = document.getElementById('move-target').value;
+        const targetId = val ? parseInt(val) : null;
+        const items = this.selectedItems();
+        const errors = [];
+        for (const item of items) {
+            try {
+                if (item.isFolder) await API.folders.move(item.id, targetId);
+                else await API.files.move(item.id, targetId);
+            } catch (e) { errors.push(`${item.name}: ${e.message}`); }
+        }
+        UI.closeModal();
+        if (errors.length) UI.toast(I18N.t('shares.some_errors', { errors: errors.join('; ') }), 'error');
+        else UI.toast(I18N.t('files.move_done'), 'success');
+        this.clearSelection();
+        this.loadFiles();
+    },
+
+    bulkDelete() {
+        const items = this.selectedItems();
+        if (!items.length) return;
+        UI.confirmAction(I18N.t('files.bulk_delete_title'),
+            I18N.t('files.bulk_delete_body', { count: items.length }),
+            I18N.t('common.delete'), async () => {
+                const errors = [];
+                for (const item of items) {
+                    try {
+                        if (item.isFolder) await API.folders.delete(item.id);
+                        else await API.files.delete(item.id);
+                    } catch (e) { errors.push(`${item.name}: ${e.message}`); }
+                }
+                if (errors.length) UI.toast(I18N.t('shares.some_errors', { errors: errors.join('; ') }), 'error');
+                else UI.toast(I18N.t('files.bulk_delete_done'), 'success');
+                this.clearSelection();
+                this.loadFiles();
+                App.loadStorageUsage();
+            });
     },
 
     gridCard(item) {
         const cls = UI.fileIconClass(item.name, item.isFolder);
         const dbl = item.isFolder ? `FilesPage.goToFolder(${item.id})` : `UI.openFile(${item.id},${UI.escJson(item.name)},${item.size_bytes || 0})`;
         const itemJson = UI.escJson(item);
+        const key = this.selectionKey(item);
+        const isSelected = this.selected.has(key);
         const ext = item.isFolder ? '' : item.name.split('.').pop().toLowerCase();
         // Small cached JPEG preview (see FileThumbnail server-side) instead of
         // the full original — a folder full of camera photos used to fire off
@@ -182,7 +338,10 @@ const FilesPage = {
             : !item.isFolder && UI.isImage(ext)
             ? `<img class="file-card-thumb" src="/api/files/${item.id}/download" loading="lazy" alt="" onerror="FilesPage.thumbError(this)">`
             : `<div class="file-card-icon ${cls}">${UI.fileIcon(item.name, item.isFolder)}</div>`;
-        return `<div class="file-card" ondblclick="${dbl}" oncontextmenu="FilesPage.showMenu(event,${itemJson})">
+        return `<div class="file-card${isSelected ? ' selected' : ''}" ondblclick="${dbl}" oncontextmenu="FilesPage.showMenu(event,${itemJson})">
+            <label class="file-card-select" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()">
+                <input type="checkbox" ${isSelected ? 'checked' : ''} onchange="FilesPage.toggleSelect('${key}',event)" aria-label="${I18N.t('files.select_item')}">
+            </label>
             ${iconHtml}
             <div class="file-card-name" title="${UI.esc(item.name)}">${UI.esc(item.name)}</div>
             ${!item.isFolder ? `<div class="file-card-meta">${UI.formatBytes(item.size_bytes || 0)} · ${UI.formatDate(item.updated_at || item.created_at)}</div>` : `<div class="file-card-meta">${I18N.t('files.folder_label')}</div>`}
@@ -198,8 +357,15 @@ const FilesPage = {
         const cls = UI.fileIconClass(item.name, item.isFolder);
         const dbl = item.isFolder ? `FilesPage.goToFolder(${item.id})` : `UI.openFile(${item.id},${UI.escJson(item.name)},${item.size_bytes || 0})`;
         const itemJson = UI.escJson(item);
-        return `<div class="file-list-row" ondblclick="${dbl}" oncontextmenu="FilesPage.showMenu(event,${itemJson})">
-            <div class="file-list-name"><span class="file-list-icon ${cls}">${icon}</span>${UI.esc(item.name)}</div>
+        const key = this.selectionKey(item);
+        const isSelected = this.selected.has(key);
+        return `<div class="file-list-row${isSelected ? ' selected' : ''}" ondblclick="${dbl}" oncontextmenu="FilesPage.showMenu(event,${itemJson})">
+            <div class="file-list-name">
+                <label class="file-list-select" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()">
+                    <input type="checkbox" ${isSelected ? 'checked' : ''} onchange="FilesPage.toggleSelect('${key}',event)" aria-label="${I18N.t('files.select_item')}">
+                </label>
+                <span class="file-list-icon ${cls}">${icon}</span>${UI.esc(item.name)}
+            </div>
             <div class="file-list-size">${item.isFolder ? '—' : UI.formatBytes(item.size_bytes || 0)}</div>
             <div class="file-list-date">${UI.formatDate(item.updated_at || item.created_at)}</div>
             <div class="file-list-actions"><button class="btn btn-icon btn-sm" onclick="FilesPage.showMenu(event,${itemJson})" aria-label="${I18N.t('common.actions')}">⋮</button></div>
@@ -287,6 +453,7 @@ const FilesPage = {
     },
     async _runSearch(q) {
         if (!q || q.length < 2) { this.loadFiles(); return; }
+        this.selected.clear();
         try { const data = await API.files.search(q); this.files = data || []; this.folders = []; this.breadcrumbs = []; this.renderBreadcrumbs(); this.renderFiles(); } catch {}
     },
 

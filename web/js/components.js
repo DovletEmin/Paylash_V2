@@ -98,6 +98,28 @@ const UI = {
         return JSON.stringify(v).replace(/[&<>"']/g, c => ESC_CHARS[c]);
     },
 
+    // Real profile photo when the person has one, falling back to an
+    // initials circle otherwise — used everywhere another person shows up
+    // (share dialogs, the shared-with-me/by-me groups, project members).
+    // Previously every one of those spots hardcoded just the initials, so a
+    // colleague's uploaded photo was only ever visible to themselves. There's
+    // no cheap way to know up front whether userId has an avatar, so this
+    // always points the <img> at /api/avatar/{id} and lets onerror (a 404
+    // for someone with no photo) swap in the initials — same fallback
+    // pattern as FilesPage.thumbError for file thumbnails.
+    avatarHTML(userId, name, extraClass) {
+        const initial = (name || '?').charAt(0).toUpperCase();
+        const cls = ('share-user-avatar ' + (extraClass || '')).trim();
+        if (!userId) return `<span class="${cls}">${this.esc(initial)}</span>`;
+        return `<img class="${cls}" src="/api/avatar/${userId}" alt="${this.esc(initial)}" onerror="UI.avatarFallback(this)">`;
+    },
+    avatarFallback(img) {
+        const span = document.createElement('span');
+        span.className = img.className;
+        span.textContent = img.alt || '?';
+        img.replaceWith(span);
+    },
+
     // Flattens a scope's folder list (parent_id links) into a depth-ordered
     // array suitable for an indented <select> — used by the "move to" picker.
     flattenFolderTree(folders) {

@@ -281,13 +281,13 @@ func (h *Handler) GetSharesForFile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, shares)
 }
 
+// SearchUsers backs the share modal's recipient picker. An empty q is not a
+// no-op: SearchUsers's ILIKE '%%' matches everyone, which is exactly what
+// powers the "browse all people" dropdown (focusing the empty search field)
+// alongside the existing type-to-filter behavior.
 func (h *Handler) SearchUsers(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
-	if q == "" {
-		writeJSON(w, http.StatusOK, []models.UserSearchResult{})
-		return
-	}
-	results, err := h.db.SearchUsers(q, 20)
+	results, err := h.db.SearchUsers(q, 30)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "gözleg ýalňyşlygy")
 		return

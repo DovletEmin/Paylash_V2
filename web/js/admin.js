@@ -159,9 +159,12 @@ const AdminPage = {
             const members = (await API.admin.projects.members.list(projectId)) || [];
             if (!members.length) { el.innerHTML = `<p class="text-muted" style="font-size:.82rem">${I18N.t('admin.no_members')}</p>`; return; }
             el.innerHTML = members.map(m => `
-                <div class="member-row" style="display:flex;align-items:center;justify-content:space-between;padding:6px 0">
-                    <div><strong>${UI.esc(m.full_name || m.username)}</strong> <span class="text-muted">@${UI.esc(m.username)}</span></div>
-                    <div style="display:flex;gap:6px;align-items:center">
+                <div class="member-row">
+                    <div class="member-row-identity">
+                        ${UI.avatarHTML(m.user_id, m.full_name || m.username)}
+                        <div><strong>${UI.esc(m.full_name || m.username)}</strong> <span class="text-muted">@${UI.esc(m.username)}</span></div>
+                    </div>
+                    <div class="member-row-actions">
                         <select class="form-control" style="width:150px" onchange="AdminPage.changeMemberPermission(${projectId},${m.user_id},this.value)">
                             <option value="view" ${m.permission==='view'?'selected':''}>${I18N.t('shares.perm_view_option')}</option>
                             <option value="edit" ${m.permission==='edit'?'selected':''}>${I18N.t('shares.perm_edit_option')}</option>
@@ -183,7 +186,8 @@ const AdminPage = {
                 const users = (await API.sharing.searchUsers(q)) || [];
                 resEl.innerHTML = users.map(u => `
                     <div class="member-search-item" onclick="AdminPage.addMember(${projectId},${u.id})">
-                        <strong>${UI.esc(u.full_name || u.username)}</strong> <span class="text-muted">@${UI.esc(u.username)}</span>
+                        ${UI.avatarHTML(u.id, u.full_name || u.username)}
+                        <div><strong>${UI.esc(u.full_name || u.username)}</strong> <span class="text-muted">@${UI.esc(u.username)}</span></div>
                     </div>`).join('') || `<div class="text-muted" style="font-size:.8rem;padding:4px 0">${I18N.t('shares.no_results')}</div>`;
             } catch { resEl.innerHTML = ''; }
         }, 250);
@@ -221,7 +225,7 @@ const AdminPage = {
                 </div>
             </div>
             <table class="admin-table" id="admin-users-table"><thead><tr><th>${I18N.t('admin.col_id')}</th><th>${I18N.t('admin.col_name')}</th><th>${I18N.t('admin.col_username')}</th><th>${I18N.t('admin.col_role')}</th><th>${I18N.t('admin.col_quota')}</th><th>${I18N.t('admin.col_actions')}</th></tr></thead><tbody>
-            ${users.map(u => `<tr data-uid="${u.id}"><td>${u.id}</td><td>${UI.esc(u.full_name)} ${u.must_change_password ? `<span class="badge" title="${I18N.t('admin.force_pw_badge_title')}">🔑</span>` : ''}</td><td>@${UI.esc(u.username)}</td>
+            ${users.map(u => `<tr data-uid="${u.id}"><td>${u.id}</td><td><div class="table-identity">${UI.avatarHTML(u.id, u.full_name, 'share-user-avatar-sm')}<span>${UI.esc(u.full_name)}</span> ${u.must_change_password ? `<span class="badge" title="${I18N.t('admin.force_pw_badge_title')}">🔑</span>` : ''}</div></td><td>@${UI.esc(u.username)}</td>
                 <td><span class="badge badge-${u.role === 'admin' ? 'admin' : 'user'}">${u.role === 'admin' ? I18N.t('app.role_admin') : I18N.t('app.role_user')}</span></td>
                 <td>${UI.formatBytes(u.quota_bytes || 0)}</td>
                 <td><button class="btn btn-sm btn-ghost" onclick="AdminPage.showEditUserModal(${u.id})">✏️</button>

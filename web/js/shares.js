@@ -84,7 +84,7 @@ const SharesPage = {
             c.innerHTML = `
                 <div class="share-group-header">
                     <button class="btn btn-icon btn-ghost btn-sm" onclick="SharesPage.collapseGroup()" title="${I18N.t('shares.back_to_users')}" aria-label="${I18N.t('shares.back_to_users')}">${UI.icons.back}</button>
-                    <span class="share-user-avatar share-user-avatar-lg">${UI.esc((name || '?').charAt(0).toUpperCase())}</span>
+                    ${UI.avatarHTML(this._expandedUserId, name, 'share-user-avatar-lg')}
                     <span class="share-group-title">${UI.esc(name)}</span>
                 </div>
                 <div class="file-grid">${userFiles.map(f => this.shareFileCard(f)).join('')}</div>`;
@@ -100,7 +100,7 @@ const SharesPage = {
         const sorted = [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
         c.innerHTML = `<div class="share-user-grid">` + sorted.map(g => `
             <div class="share-user-card" onclick="SharesPage.expandGroup(${g.id})">
-                <span class="share-user-avatar share-user-avatar-lg">${UI.esc((g.name || '?').charAt(0).toUpperCase())}</span>
+                ${UI.avatarHTML(g.id, g.name, 'share-user-avatar-lg')}
                 <div class="share-user-card-name" title="${UI.esc(g.name)}">${UI.esc(g.name)}</div>
                 <div class="share-user-card-count">${I18N.tn('shares.file_count', g.count)}</div>
             </div>`).join('') + `</div>`;
@@ -133,18 +133,25 @@ const SharesPage = {
         </div>`;
     },
 
-    /* ── Share Modal (multi-user) ── */
+    /* ── Share Modal (multi-user, single or multiple files) ── */
 
-    _currentFile: null,
+    _currentFiles: [],
     _pendingRecipients: [],
     _existingShareUserIds: [],
     _selectedVisibility: 'private',
 
-    showShareModal(file) {
+    // fileOrFiles is a single file object (from a context menu / preview /
+    // editor toolbar) or an array of file objects (from the files-page bulk
+    // action bar) — normalized to an array internally either way.
+    showShareModal(fileOrFiles) {
+        const files = Array.isArray(fileOrFiles) ? fileOrFiles : [fileOrFiles];
+        if (!files.length) return;
+        const single = files.length === 1 ? files[0] : null;
         const isAdmin = App.user && App.user.role === 'admin';
-        const vis = file.visibility || 'private';
+        const vis = single ? (single.visibility || 'private') : 'private';
+
         let visibilityHTML = '';
-        if (isAdmin) {
+        if (single && isAdmin) {
             visibilityHTML = `
             <hr style="border:none;border-top:1px solid var(--border);margin:14px 0">
             <div class="form-group">
@@ -158,10 +165,17 @@ const SharesPage = {
                 </div>
             </div>`;
         }
-        UI.showModal(I18N.t('shares.modal_title', { name: file.name }), `
-            <div class="form-group">
+
+        const title = single ? I18N.t('shares.modal_title', { name: single.name }) : I18N.t('shares.modal_title_multi', { count: files.length });
+        const existingSection = single
+            ? `<div id="share-existing"><p class="text-muted">${I18N.t('common.loading')}</p></div>`
+            : `<p class="text-muted" style="font-size:.78rem">${I18N.t('shares.bulk_hint', { count: files.length })}</p>`;
+
+        UI.showModal(title, `
+            <div class="form-group share-user-picker">
                 <label>${I18N.t('shares.search_label')}</label>
-                <input type="text" id="share-user-search" class="form-control" placeholder="${I18N.t('shares.search_placeholder')}" oninput="SharesPage.searchUsers(this.value)">
+                <input type="text" id="share-user-search" class="form-control" placeholder="${I18N.t('shares.search_placeholder')}"
+                    oninput="SharesPage.searchUsers(this.value)" onfocus="SharesPage.onSearchFocus(this.value)" autocomplete="off">
                 <div id="share-user-results" class="share-user-results"></div>
             </div>
             <div class="form-group">
@@ -173,21 +187,48 @@ const SharesPage = {
             </div>
             <div id="share-pending-list"></div>
             ${visibilityHTML}
-            <div id="share-existing"><p class="text-muted">${I18N.t('common.loading')}</p></div>`,
+            ${existingSection}`,
             `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="SharesPage.saveShare()">${I18N.t('common.save')}</button>`);
-        this._currentFile = file;
+
+        this._currentFiles = files;
         this._pendingRecipients = [];
         this._existingShareUserIds = [];
         this._selectedVisibility = vis;
-        this.loadExistingShares(file.id);
+        this._bindDropdownClose();
+        if (single) this.loadExistingShares(single.id);
     },
 
-    async searchUsers(q) {
+    // The results dropdown (populated either by typing or by focusing the
+    // empty field — see onSearchFocus) stays open until an explicit pick or
+    // a click elsewhere; this closes it on any outside click. Bound once for
+    // the page's lifetime — showModal wipes and rebuilds the DOM on every
+    // open, so a per-open listener would leak one more each time.
+    _dropdownCloseBound: false,
+    _bindDropdownClose() {
+        if (this._dropdownCloseBound) return;
+        this._dropdownCloseBound = true;
+        document.addEventListener('click', ev => {
+            const input = document.getElementById('share-user-search');
+            const results = document.getElementById('share-user-results');
+            if (!input || !results) return;
+            if (ev.target === input || results.contains(ev.target)) return;
+            results.innerHTML = '';
+        });
+    },
+
+    // Focusing the empty search field browses the full people list (a
+    // dropdown-style picker) rather than requiring the user to already know
+    // who to type — typing still narrows it exactly as before.
+    onSearchFocus(q) {
+        if (!q) this.searchUsers('', true);
+    },
+
+    async searchUsers(q, browseAll) {
         const r = document.getElementById('share-user-results');
         if (!r) return;
-        if (!q || q.length < 2) { r.innerHTML = ''; return; }
+        if (!browseAll && (!q || q.length < 2)) { r.innerHTML = ''; return; }
         try {
-            const users = await API.sharing.searchUsers(q);
+            const users = await API.sharing.searchUsers(q || '');
             if (!users?.length) { r.innerHTML = `<div class="share-user-no-result">${I18N.t('shares.no_results')}</div>`; return; }
             // Filter out already-pending and already-shared users
             const skipIds = new Set([
@@ -199,7 +240,7 @@ const SharesPage = {
             if (!filtered.length) { r.innerHTML = `<div class="share-user-no-result">${I18N.t('shares.no_results')}</div>`; return; }
             r.innerHTML = filtered.map(u => `
                 <div class="share-user-item" onclick="SharesPage.addRecipient(${u.id},${UI.escJson(u.full_name)},${UI.escJson(u.username)})">
-                    <span class="share-user-avatar">${(u.full_name||'?').charAt(0).toUpperCase()}</span>
+                    ${UI.avatarHTML(u.id, u.full_name)}
                     <div><div class="share-user-name">${UI.esc(u.full_name)}</div><div class="share-user-username">@${UI.esc(u.username)}</div></div>
                 </div>`).join('');
         } catch { r.innerHTML = ''; }
@@ -231,7 +272,7 @@ const SharesPage = {
         el.innerHTML = `<h4 style="font-size:.82rem;font-weight:600;color:var(--text-2);margin:8px 0">${I18N.t('shares.new_shares_heading')}</h4>` +
             this._pendingRecipients.map(p => `
             <div class="share-pending-item">
-                <span class="share-user-avatar">${(p.name||'?').charAt(0).toUpperCase()}</span>
+                ${UI.avatarHTML(p.id, p.name)}
                 <div style="flex:1;min-width:0"><div style="font-size:.82rem;font-weight:500">${UI.esc(p.name)}</div></div>
                 <select class="form-control" style="width:auto;padding:4px 28px 4px 8px;font-size:.72rem" onchange="SharesPage.updateRecipientPermission(${p.id},this.value)">
                     <option value="view" ${p.permission === 'view' ? 'selected' : ''}>👁 ${I18N.t('shares.perm_view_option')}</option>
@@ -249,32 +290,39 @@ const SharesPage = {
     },
 
     async saveShare() {
-        if (!this._currentFile) return;
+        if (!this._currentFiles.length) return;
         try {
-            // Save visibility
-            const newVis = this._selectedVisibility || 'private';
-            const oldVis = this._currentFile.visibility || 'private';
-            if (newVis !== oldVis) {
-                await API.sharing.setVisibility(this._currentFile.id, newVis);
-                this._currentFile.visibility = newVis;
+            // Visibility only applies to a single-file share (see showShareModal).
+            if (this._currentFiles.length === 1) {
+                const file = this._currentFiles[0];
+                const newVis = this._selectedVisibility || 'private';
+                const oldVis = file.visibility || 'private';
+                if (newVis !== oldVis) {
+                    await API.sharing.setVisibility(file.id, newVis);
+                    file.visibility = newVis;
+                }
             }
-            // Share with all pending recipients
+            // Share every selected file with every pending recipient.
             const errors = [];
-            for (const p of this._pendingRecipients) {
-                try {
-                    await API.sharing.share(this._currentFile.id, p.id, p.permission);
-                } catch (e) { errors.push(`${p.name}: ${e.message}`); }
+            let shareCount = 0;
+            for (const file of this._currentFiles) {
+                for (const p of this._pendingRecipients) {
+                    try {
+                        await API.sharing.share(file.id, p.id, p.permission);
+                        shareCount++;
+                    } catch (e) { errors.push(`${file.name} → ${p.name}: ${e.message}`); }
+                }
             }
             UI.closeModal();
             if (errors.length) {
                 UI.toast(I18N.t('shares.some_errors', { errors: errors.join('; ') }), 'error');
-            } else if (this._pendingRecipients.length) {
+            } else if (shareCount) {
                 UI.toast(I18N.t('shares.shared_with_count', { count: this._pendingRecipients.length }), 'success');
             } else {
                 UI.toast(I18N.t('shares.changes_saved'), 'success');
             }
             this._pendingRecipients = [];
-            if (typeof FilesPage !== 'undefined') FilesPage.loadFiles();
+            if (typeof FilesPage !== 'undefined') { FilesPage.clearSelection?.(); FilesPage.loadFiles(); }
         } catch (e) { UI.toast(e.message, 'error'); }
     },
 
@@ -288,7 +336,7 @@ const SharesPage = {
             el.innerHTML = `<h4 style="font-size:.82rem;font-weight:600;color:var(--text-2);margin-bottom:8px">${I18N.t('shares.existing_heading')}</h4>` +
                 shares.map(s => `
                 <div class="share-existing-item">
-                    <span class="share-user-avatar">${(s.full_name || '?').charAt(0).toUpperCase()}</span>
+                    ${UI.avatarHTML(s.shared_with, s.full_name || s.username)}
                     <div class="share-existing-info">
                         <div style="font-size:.82rem;font-weight:500">${UI.esc(s.full_name || s.username)}</div>
                     </div>
