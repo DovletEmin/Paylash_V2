@@ -129,6 +129,11 @@ type RegisterRequest struct {
 	FullName string `json:"full_name"`
 }
 
+// DefaultQuotaBytes is the personal storage allowance a new account gets
+// when nothing more specific was requested (self-registration, or an admin
+// leaving the quota field blank) — 1 GiB.
+const DefaultQuotaBytes int64 = 1 << 30
+
 type LoginRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`

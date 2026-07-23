@@ -201,7 +201,7 @@ func (s *Server) Start() error {
 	serveErr := make(chan error, 1)
 	go func() {
 		log.Printf("Paylash server starting on http://localhost%s", addr)
-		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {	
 			serveErr <- err
 		}
 	}()

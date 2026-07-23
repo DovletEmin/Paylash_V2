@@ -486,19 +486,26 @@ func (h *Handler) AdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		Password: req.Password,
 		FullName: strings.TrimSpace(req.FullName),
 	}
-	user, err := h.db.CreateUser(regReq, hash, true)
+	role := "user"
+	if req.Role == "admin" {
+		role = "admin"
+	}
+	quotaBytes := models.DefaultQuotaBytes
+	if req.QuotaMB > 0 {
+		quotaBytes = int64(req.QuotaMB) * 1024 * 1024
+	}
+	user, err := h.db.CreateUser(regReq, hash, role, quotaBytes, true)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "ulanyjy döredip bolmady")
 		return
 	}
-	if req.Role == "admin" {
-		h.db.UpdateUser(user.ID, "admin", user.QuotaBytes, user.DisplayName, "")
-	}
-	if req.QuotaMB > 0 {
-		h.db.UpdateUser(user.ID, req.Role, int64(req.QuotaMB)*1024*1024, user.DisplayName, "")
-	}
 	bucket := storage.PersonalBucket(user.ID)
-	h.minio.EnsureBucket(r.Context(), bucket)
+	// Best-effort warm-up — every actual upload path re-ensures its bucket
+	// on demand (see files.go/uploads.go), so a hiccup here isn't fatal to
+	// account creation, but it shouldn't pass silently either.
+	if err := h.minio.EnsureBucket(r.Context(), bucket); err != nil {
+		log.Printf("ensure bucket for new user %d: %v", user.ID, err)
+	}
 	writeJSON(w, http.StatusCreated, user)
 }
 
@@ -626,18 +633,16 @@ func (h *Handler) AdminImportUsers(w http.ResponseWriter, r *http.Request) {
 			Password: password,
 			FullName: fullName,
 		}
-		user, err := h.db.CreateUser(regReq, hash, true)
+		user, err := h.db.CreateUser(regReq, hash, "user", int64(quotaMB)*1024*1024, true)
 		if err != nil {
 			results = append(results, importResult{Username: username, Error: "döredip bolmady"})
 			continue
 		}
 
-		if quotaMB > 0 {
-			h.db.UpdateUser(user.ID, "user", int64(quotaMB)*1024*1024, user.DisplayName, "")
-		}
-
 		bucket := storage.PersonalBucket(user.ID)
-		h.minio.EnsureBucket(r.Context(), bucket)
+		if err := h.minio.EnsureBucket(r.Context(), bucket); err != nil {
+			log.Printf("ensure bucket for imported user %d: %v", user.ID, err)
+		}
 
 		results = append(results, importResult{Username: username, Success: true})
 		created++

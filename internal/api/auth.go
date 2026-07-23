@@ -57,7 +57,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.db.CreateUser(&req, hash, false)
+	user, err := h.db.CreateUser(&req, hash, "user", models.DefaultQuotaBytes, false)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "hasap döredip bolmady")
 		return

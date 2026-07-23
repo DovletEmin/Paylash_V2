@@ -572,8 +572,14 @@ img.share-user-avatar-lg{box-shadow:0 0 0 3px var(--surface),0 0 0 5px var(--acc
 .preview-container{flex:1;position:relative;display:flex;align-items:center;justify-content:center;overflow:auto;background:var(--bg)}
 .preview-media{display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;padding:20px}
 .preview-image{overflow:auto;position:relative}
-.preview-image img{max-width:100%;max-height:calc(100vh - 64px);object-fit:contain;border-radius:var(--r);cursor:zoom-in;transition:transform .2s}
-.preview-image img.zoomed{max-width:none;max-height:none;cursor:zoom-out}
+/* Wraps the img tightly (inline-block shrinks to content) so this box is
+   always exactly the image's rendered rect — pins are positioned as % of
+   *this* element, not the outer flex-centered container, so they stay put
+   whether the image is letterboxed, zoomed, or the viewport is resized. */
+.preview-image-inner{position:relative;display:inline-block;line-height:0;max-width:100%}
+.preview-image-inner.zoomed{max-width:none}
+.preview-image-inner img{display:block;max-width:100%;max-height:calc(100vh - 64px);object-fit:contain;border-radius:var(--r);cursor:zoom-in;transition:transform .2s}
+.preview-image-inner img.zoomed{max-width:none;max-height:none;cursor:zoom-out}
 .preview-nav-arrow{
   position:absolute;top:50%;transform:translateY(-50%);z-index:2;
   width:44px;height:44px;border-radius:50%;border:1px solid var(--border);
@@ -645,7 +651,7 @@ img.share-user-avatar-lg{box-shadow:0 0 0 3px var(--surface),0 0 0 5px var(--acc
 .comment-pin:hover{transform:translate(-50%,-50%) scale(1.15)}
 .comment-pin-pending{background:var(--primary);animation:pulse 1.2s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
-.preview-image img.pin-mode{cursor:crosshair}
+.preview-image-inner img.pin-mode{cursor:crosshair}
 @media (max-width:900px){
   .preview-body{flex-direction:column}
   .comments-panel{width:100%;height:45%;border-left:none;border-top:1px solid var(--border)}

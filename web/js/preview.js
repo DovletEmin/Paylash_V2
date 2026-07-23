@@ -96,9 +96,22 @@ const PreviewPage = {
         });
     },
 
+    _visibilityBound: false,
+    // Catches back up immediately on tab focus instead of waiting up to
+    // COMMENTS_POLL_INTERVAL — bound once for the page's lifetime, same
+    // reasoning as _bindKeyNav above.
+    _bindVisibilityRefresh() {
+        if (this._visibilityBound) return;
+        this._visibilityBound = true;
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) PreviewPage.pollComments();
+        });
+    },
+
     async init() {
         if (!this.currentFileId) { App.navigate('files'); return; }
         this._bindKeyNav();
+        this._bindVisibilityRefresh();
         const nameEl = document.getElementById('preview-filename');
         if (nameEl) nameEl.textContent = this.currentFileName;
         const c = document.getElementById('preview-container');
@@ -108,8 +121,10 @@ const PreviewPage = {
         if (type === 'image') {
             c.innerHTML = `<div class="preview-media preview-image" id="preview-image-wrap">
                 ${this.navArrowHTML('prev')}
-                <img src="${url}" alt="${UI.esc(this.currentFileName)}" onclick="PreviewPage.onImageClick(event,this)">
-                <div class="comment-pins" id="comment-pins"></div>
+                <div class="preview-image-inner" id="preview-image-inner">
+                    <img src="${url}" alt="${UI.esc(this.currentFileName)}" onclick="PreviewPage.onImageClick(event,this)">
+                    <div class="comment-pins" id="comment-pins"></div>
+                </div>
                 ${this.navArrowHTML('next')}
             </div>`;
         } else if (type === 'audio') {
@@ -148,6 +163,10 @@ const PreviewPage = {
 
     toggleZoom(img) {
         img.classList.toggle('zoomed');
+        // The wrapper's own max-width has to drop in lockstep, or it keeps
+        // clamping the image to the container width even once the img
+        // itself says "no limit" — see .preview-image-inner.zoomed in CSS.
+        img.parentElement?.classList.toggle('zoomed');
     },
 
     // Clicking the image normally zooms it — but while placing a pinned
@@ -186,6 +205,7 @@ const PreviewPage = {
         panel.classList.toggle('hidden', !this._commentsOpen);
         if (btn) btn.classList.toggle('active', this._commentsOpen);
         if (this._commentsOpen) this.loadComments();
+        else this.stopCommentsPolling();
     },
 
     async loadComments() {
@@ -194,6 +214,43 @@ const PreviewPage = {
         catch { this._comments = []; }
         this.renderCommentsPanel();
         this.renderPins();
+        this.startCommentsPolling();
+    },
+
+    /* ── Background comment sync ──
+       Same no-WebSocket tradeoff as App's notification polling (see app.js)
+       — a live connection per open preview isn't worth the complexity for
+       this app's scale. Self-terminating: each tick checks it's still the
+       active preview with the panel open, so leaving the page (which has no
+       "unmount" hook in this single-page app) can't leak a runaway timer. */
+    COMMENTS_POLL_INTERVAL: 8000,
+    _commentsPollHandle: null,
+
+    startCommentsPolling() {
+        if (this._commentsPollHandle) return;
+        this._commentsPollHandle = setInterval(() => this.pollComments(), this.COMMENTS_POLL_INTERVAL);
+    },
+
+    stopCommentsPolling() {
+        if (this._commentsPollHandle) { clearInterval(this._commentsPollHandle); this._commentsPollHandle = null; }
+    },
+
+    async pollComments() {
+        if (App.currentPage !== 'preview' || !this._commentsOpen || !this.currentFileId) {
+            this.stopCommentsPolling();
+            return;
+        }
+        if (document.hidden) return; // tab backgrounded — skip the request, timer keeps ticking
+        try {
+            const fresh = await API.files.comments.list(this.currentFileId) || [];
+            const changed = fresh.length !== this._comments.length
+                || fresh.some((c, i) => !this._comments[i] || c.id !== this._comments[i].id);
+            if (changed) {
+                this._comments = fresh;
+                this.updateCommentsList();
+                this.renderPins();
+            }
+        } catch { /* transient network hiccup — next tick retries */ }
     },
 
     renderCommentsPanel() {
@@ -207,15 +264,27 @@ const PreviewPage = {
             : '';
         panel.innerHTML = `
             <div class="comments-panel-header">
-                <h4>${I18N.t('comments.title')} (${this._comments.length})</h4>
+                <h4>${I18N.t('comments.title')} (<span id="comments-count">${this._comments.length}</span>)</h4>
                 ${isImage ? `<button class="btn btn-icon btn-ghost btn-sm ${this._pinMode ? 'active' : ''}" onclick="PreviewPage.togglePinMode()" title="${I18N.t('comments.add_pin')}" aria-label="${I18N.t('comments.add_pin')}">📍</button>` : ''}
             </div>
-            <div class="comments-list">${list}</div>
+            <div class="comments-list" id="comments-list">${list}</div>
             <div class="comment-composer">
                 ${pinHint}
-                <textarea id="comment-body-input" class="form-control" rows="2" placeholder="${I18N.t('comments.placeholder')}"></textarea>
+                <textarea id="comment-body-input" class="form-control" rows="2" placeholder="${I18N.t('comments.placeholder')}" onkeydown="PreviewPage.onComposerKeydown(event)"></textarea>
                 <button class="btn btn-primary btn-sm" onclick="PreviewPage.submitComment()">${I18N.t('comments.post')}</button>
             </div>`;
+    },
+
+    // Lighter-weight than renderCommentsPanel: only touches the list + count,
+    // never the composer. Used by the background poll below so a comment the
+    // user is mid-typing in the textarea never gets wiped out from under them.
+    updateCommentsList() {
+        const listEl = document.getElementById('comments-list');
+        if (!listEl) return;
+        listEl.innerHTML = this._comments.map((c, i) => this.commentItemHTML(c, i)).join('')
+            || `<p class="text-muted comments-empty">${I18N.t('comments.empty')}</p>`;
+        const countEl = document.getElementById('comments-count');
+        if (countEl) countEl.textContent = this._comments.length;
     },
 
     commentItemHTML(c, i) {
@@ -261,6 +330,16 @@ const PreviewPage = {
         this._pendingPin = null;
         this.renderPins();
         this.renderCommentsPanel();
+    },
+
+    // Enter sends, Shift+Enter (or any other combo, e.g. IME composition)
+    // inserts a newline as normal — same convention as chat apps, so a
+    // multi-line note is still possible without submitting halfway through.
+    onComposerKeydown(ev) {
+        if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
+            ev.preventDefault();
+            this.submitComment();
+        }
     },
 
     async submitComment() {

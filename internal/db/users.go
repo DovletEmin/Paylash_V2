@@ -9,13 +9,20 @@ import (
 // chose the password — admin-provisioned and CSV-imported accounts — so the
 // employee is forced to set their own on first login. Self-registration
 // passes false since the user already picked their own password.
-func (d *DB) CreateUser(u *models.RegisterRequest, hash string, mustChangePassword bool) (*models.User, error) {
+//
+// role and quotaBytes are set in the same INSERT rather than via a
+// follow-up UpdateUser call — a caller that wants a non-default role/quota
+// used to create the row first and patch it in a second statement, which
+// left a window where the patch could silently fail (its error was never
+// even checked) and the account would end up created with the wrong role
+// or quota with no indication anything went wrong.
+func (d *DB) CreateUser(u *models.RegisterRequest, hash, role string, quotaBytes int64, mustChangePassword bool) (*models.User, error) {
 	user := &models.User{}
 	err := d.QueryRow(
-		`INSERT INTO users (username, password_hash, display_name, role, must_change_password)
-		 VALUES ($1, $2, $3, 'user', $4)
+		`INSERT INTO users (username, password_hash, display_name, role, quota_bytes, must_change_password)
+		 VALUES ($1, $2, $3, $4, $5, $6)
 		 RETURNING id, username, display_name, role, quota_bytes, avatar_url, must_change_password, created_at`,
-		u.Username, hash, u.FullName, mustChangePassword,
+		u.Username, hash, u.FullName, role, quotaBytes, mustChangePassword,
 	).Scan(&user.ID, &user.Username, &user.DisplayName, &user.Role, &user.QuotaBytes, &user.AvatarURL, &user.MustChangePassword, &user.CreatedAt)
 	return user, err
 }
