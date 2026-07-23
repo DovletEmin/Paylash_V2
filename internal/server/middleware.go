@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"paylash/internal/authutil"
 	"paylash/internal/db"
+	"strings"
 	"time"
 )
 
@@ -28,10 +29,31 @@ func AuthMiddleware(database *db.DB) func(http.Handler) http.Handler {
 				http.Error(w, `{"error":"ulanyjy tapylmady"}`, http.StatusUnauthorized)
 				return
 			}
+			// The frontend already blocks all interaction behind an
+			// un-dismissable "change your password" modal for an account
+			// flagged must_change_password — this is the same rule enforced
+			// server-side, so hitting the API directly (curl, devtools)
+			// can't route around it. Only the handful of endpoints needed to
+			// view/change the password and sign out stay reachable.
+			if user.MustChangePassword && !mustChangePasswordAllowed(r) {
+				http.Error(w, `{"error":"parolyňyzy üýtgetmeli","code":"must_change_password"}`, http.StatusForbidden)
+				return
+			}
 			ctx := context.WithValue(r.Context(), authutil.UserKey, user)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+func mustChangePasswordAllowed(r *http.Request) bool {
+	if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/avatar/") {
+		return true
+	}
+	switch r.Method + " " + r.URL.Path {
+	case "GET /api/auth/me", "PATCH /api/auth/profile", "POST /api/auth/logout-others":
+		return true
+	}
+	return false
 }
 
 func AdminMiddleware(next http.Handler) http.Handler {

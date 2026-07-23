@@ -11,13 +11,13 @@ func TestLoginLimiter(t *testing.T) {
 	}
 
 	for i := 0; i < loginMaxAttempts-1; i++ {
-		l.recordFailure(key)
+		l.record(key)
 	}
 	if l.blocked(key) {
 		t.Fatalf("must not be blocked before reaching %d failures", loginMaxAttempts)
 	}
 
-	l.recordFailure(key)
+	l.record(key)
 	if !l.blocked(key) {
 		t.Fatalf("must be blocked after %d failures", loginMaxAttempts)
 	}
@@ -31,7 +31,7 @@ func TestLoginLimiter(t *testing.T) {
 func TestLoginLimiterKeysAreIndependent(t *testing.T) {
 	l := newLoginLimiter()
 	for i := 0; i < loginMaxAttempts; i++ {
-		l.recordFailure("u:alice")
+		l.record("u:alice")
 	}
 	if !l.blocked("u:alice") {
 		t.Fatal("alice should be blocked")

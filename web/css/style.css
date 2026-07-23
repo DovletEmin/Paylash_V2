@@ -32,8 +32,11 @@
   --r: 10px;
   --r-lg: 16px;
   --r-full: 999px;
-  --font: 'Manrope',system-ui,-apple-system,sans-serif;
-  --font-mono: 'JetBrains Mono','SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
+  /* System font stacks, not a CDN webfont — this app runs on a LAN with no
+     guaranteed internet access, and every OS already ships a solid variable
+     sans/mono pair, so there's nothing a hosted font actually buys here. */
+  --font: system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+  --font-mono: ui-monospace,'SFMono-Regular','Cascadia Code',Consolas,'Liberation Mono',Menlo,monospace;
   /* Standard smooth ease for everyday hovers/transitions. */
   --tr: .18s cubic-bezier(.4,0,.2,1);
   /* A touch of overshoot for the signature "lift" interaction on cards,

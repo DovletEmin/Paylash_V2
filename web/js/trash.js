@@ -55,7 +55,7 @@ const TrashPage = {
             <div class="file-card-meta">${I18N.t('trash.deleted_suffix', { date: UI.formatDate(item.deleted_at) })}</div>
             <div style="display:flex;gap:6px;margin-top:8px">
                 <button class="btn btn-sm btn-ghost" style="flex:1" onclick="TrashPage.restore(${isFolder},${item.id})" title="${I18N.t('trash.restore_title')}">↩ ${I18N.t('trash.restore_title')}</button>
-                <button class="btn btn-sm btn-danger" onclick="TrashPage.confirmPurge(${isFolder},${item.id},${UI.escJson(item.name)})" title="${I18N.t('trash.purge_title')}">🗑</button>
+                <button class="btn btn-sm btn-danger" onclick="TrashPage.confirmPurge(${isFolder},${item.id},${UI.escJson(item.name)})" title="${I18N.t('trash.purge_title')}" aria-label="${I18N.t('trash.purge_title')}">🗑</button>
             </div>
         </div>`;
     },
@@ -70,34 +70,24 @@ const TrashPage = {
     },
 
     confirmPurge(isFolder, id, name) {
-        UI.showModal(I18N.t('trash.purge_confirm_title'),
-            I18N.t('trash.purge_confirm_body', { name: UI.esc(name) }),
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-danger" onclick="TrashPage.doPurge(${isFolder},${id})">${I18N.t('common.delete')}</button>`);
-    },
-
-    async doPurge(isFolder, id) {
-        try {
-            if (isFolder) await API.trash.purgeFolder(id);
-            else await API.trash.purgeFile(id);
-            UI.closeModal();
-            UI.toast(I18N.t('trash.purged'), 'success');
-            this.load();
-        } catch (e) { UI.toast(e.message, 'error'); }
+        UI.confirmAction(I18N.t('trash.purge_confirm_title'), I18N.t('trash.purge_confirm_body', { name: UI.esc(name) }), I18N.t('common.delete'), async () => {
+            try {
+                if (isFolder) await API.trash.purgeFolder(id);
+                else await API.trash.purgeFile(id);
+                UI.toast(I18N.t('trash.purged'), 'success');
+                this.load();
+            } catch (e) { UI.toast(e.message, 'error'); }
+        });
     },
 
     confirmEmpty() {
         if (!this.items.length) { UI.toast(I18N.t('trash.already_empty'), 'info'); return; }
-        UI.showModal(I18N.t('trash.empty_confirm_title'),
-            I18N.t('trash.empty_confirm_body'),
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-danger" onclick="TrashPage.doEmpty()">${I18N.t('trash.empty_button')}</button>`);
-    },
-
-    async doEmpty() {
-        try {
-            await API.trash.empty();
-            UI.closeModal();
-            UI.toast(I18N.t('trash.emptied'), 'success');
-            this.load();
-        } catch (e) { UI.toast(e.message, 'error'); }
+        UI.confirmAction(I18N.t('trash.empty_confirm_title'), I18N.t('trash.empty_confirm_body'), I18N.t('trash.empty_button'), async () => {
+            try {
+                await API.trash.empty();
+                UI.toast(I18N.t('trash.emptied'), 'success');
+                this.load();
+            } catch (e) { UI.toast(e.message, 'error'); }
+        });
     },
 };

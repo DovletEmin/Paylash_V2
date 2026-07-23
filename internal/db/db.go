@@ -25,29 +25,16 @@ func Connect(dsn string) (*DB, error) {
 	return &DB{conn}, nil
 }
 
+// Migrate applies every statement below, in order, on every startup. Each
+// one must be safe to re-run (IF NOT EXISTS / IF EXISTS / ON CONFLICT) rather
+// than tracked by a numbered/versioned migration tool — deliberately, for an
+// app this size: no schema-version table to get out of sync, no separate
+// migration-file build step, and no new dependency to fetch. The trade-off
+// (no rollback story, statements accumulate forever) is acceptable at this
+// scale; revisit with a real tool (golang-migrate/goose) if the schema
+// starts changing often enough for that to bite.
 func (d *DB) Migrate() error {
 	migrations := []string{
-		// Legacy university-era tables/columns — no longer part of the data model.
-		`DROP TABLE IF EXISTS courses CASCADE`,
-		`DROP TABLE IF EXISTS faculties CASCADE`,
-		`ALTER TABLE IF EXISTS users DROP COLUMN IF EXISTS faculty_id`,
-		`ALTER TABLE IF EXISTS users DROP COLUMN IF EXISTS course_id`,
-		`ALTER TABLE IF EXISTS users DROP COLUMN IF EXISTS group_id`,
-		`ALTER TABLE IF EXISTS groups RENAME TO projects`,
-		`ALTER TABLE IF EXISTS projects DROP COLUMN IF EXISTS course_id`,
-		// Rename group_id -> project_id only when migrating an existing pre-rename table.
-		`DO $$ BEGIN
-			IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'folders' AND column_name = 'group_id')
-			   AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'folders' AND column_name = 'project_id') THEN
-				ALTER TABLE folders RENAME COLUMN group_id TO project_id;
-			END IF;
-		END $$`,
-		`DO $$ BEGIN
-			IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'files' AND column_name = 'group_id')
-			   AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'files' AND column_name = 'project_id') THEN
-				ALTER TABLE files RENAME COLUMN group_id TO project_id;
-			END IF;
-		END $$`,
 		`CREATE TABLE IF NOT EXISTS users (
 			id            SERIAL PRIMARY KEY,
 			username      VARCHAR(100) NOT NULL UNIQUE,
@@ -100,11 +87,6 @@ func (d *DB) Migrate() error {
 		// on a brand-new database the files table above is just created
 		// without that column (it was bolted on later in this app's history).
 		`ALTER TABLE files ADD COLUMN IF NOT EXISTS visibility VARCHAR(20) NOT NULL DEFAULT 'private'`,
-		`UPDATE folders SET scope = 'project' WHERE scope = 'group'`,
-		`UPDATE files SET scope = 'project' WHERE scope = 'group'`,
-		`UPDATE folders SET scope = 'common' WHERE scope = 'public'`,
-		`UPDATE files SET scope = 'common' WHERE scope = 'public'`,
-		`UPDATE files SET visibility = 'common' WHERE visibility IN ('public', 'group')`,
 		`CREATE TABLE IF NOT EXISTS file_shares (
 			id          SERIAL PRIMARY KEY,
 			file_id     INT REFERENCES files(id) ON DELETE CASCADE,
@@ -202,6 +184,14 @@ func (d *DB) Migrate() error {
 			created_at TIMESTAMPTZ DEFAULT NOW()
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_file_comments_file ON file_comments(file_id)`,
+		// Trigram indexes back SearchFiles'/SearchUsers' `name/username/display_name
+		// ILIKE '%q%'` queries — a leading wildcard can't use a plain B-tree index,
+		// but pg_trgm's GIN index matches substrings directly and the planner picks
+		// it up automatically with no query-side changes needed.
+		`CREATE EXTENSION IF NOT EXISTS pg_trgm`,
+		`CREATE INDEX IF NOT EXISTS idx_files_name_trgm ON files USING GIN (name gin_trgm_ops)`,
+		`CREATE INDEX IF NOT EXISTS idx_users_username_trgm ON users USING GIN (username gin_trgm_ops)`,
+		`CREATE INDEX IF NOT EXISTS idx_users_display_name_trgm ON users USING GIN (display_name gin_trgm_ops)`,
 	}
 
 	for _, m := range migrations {

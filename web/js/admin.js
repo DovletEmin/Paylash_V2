@@ -3,8 +3,11 @@ const AdminPage = {
     currentTab: 'dashboard',
     _users: [],
     _projects: [],
-    _adminProjectFiles: { projectId: null, folderId: null, files: [], folders: [], breadcrumbs: [] },
-    _adminCommonFiles: { folderId: null, files: [], folders: [], breadcrumbs: [] },
+    // Backs both the "Project files" and "Common files" tabs — they differ
+    // only in scope ('project' vs 'common') and whether a project must be
+    // picked first, so one browser implementation (render*Files below)
+    // serves both instead of two ~150-line near-duplicates.
+    _adminBrowser: { scope: null, projectId: null, folderId: null, files: [], folders: [], breadcrumbs: [] },
 
     render() {
         return `
@@ -62,7 +65,7 @@ const AdminPage = {
             <h3 style="font-size:1rem;font-weight:600;margin:24px 0 12px">${I18N.t('admin.public_quota_title')}</h3>
             <div style="display:flex;align-items:center;gap:10px">
                 <input type="number" id="public-quota-gb" class="form-control" value="${pqGB}" min="0.1" step="0.1" style="width:160px">
-                <span class="text-muted" style="font-size:.82rem">GB</span>
+                <span class="text-muted" style="font-size:.82rem">${I18N.t('admin.unit_gb')}</span>
                 <button class="btn btn-primary btn-sm" onclick="AdminPage.savePublicQuota()">${I18N.t('common.save')}</button>
             </div>
             <p class="text-muted" style="font-size:.78rem;margin-top:6px">${I18N.t('admin.public_quota_hint')}</p>`;
@@ -89,8 +92,8 @@ const AdminPage = {
             <table class="admin-table"><thead><tr><th>${I18N.t('admin.col_id')}</th><th>${I18N.t('admin.col_name')}</th><th>${I18N.t('admin.col_quota')}</th><th>${I18N.t('admin.col_actions')}</th></tr></thead><tbody>
             ${items.map(p => `<tr><td>${p.id}</td><td>${UI.esc(p.name)}</td><td>${UI.formatBytes(p.quota_bytes || 0)}</td><td>
                 <button class="btn btn-sm btn-ghost" onclick="AdminPage.showMembersModal(${p.id},${UI.escJson(p.name)})">👥 ${I18N.t('admin.members_button')}</button>
-                <button class="btn btn-sm btn-ghost" onclick="AdminPage.showProjectModal(${p.id},${UI.escJson(p.name)},${p.quota_bytes||0})">✏️</button>
-                <button class="btn btn-sm btn-danger" onclick="AdminPage.deleteProject(${p.id})">🗑</button></td></tr>`).join('')}
+                <button class="btn btn-sm btn-ghost" onclick="AdminPage.showProjectModal(${p.id},${UI.escJson(p.name)},${p.quota_bytes||0})" title="${I18N.t('common.edit')}" aria-label="${I18N.t('common.edit')}">✏️</button>
+                <button class="btn btn-sm btn-danger" onclick="AdminPage.deleteProject(${p.id})" title="${I18N.t('common.delete')}" aria-label="${I18N.t('common.delete')}">🗑</button></td></tr>`).join('')}
             ${!items.length ? `<tr><td colspan="4" class="text-muted text-center">${I18N.t('admin.no_projects')}</td></tr>` : ''}
             </tbody></table>`;
         } catch (e) { el.innerHTML = `<p class="text-muted">${UI.esc(e.message)}</p>`; }
@@ -100,7 +103,7 @@ const AdminPage = {
         const edit = !!id;
         const quotaGB = Math.round((quotaBytes || 5368709120) / (1024 ** 3) * 10) / 10;
         UI.showModal(edit ? I18N.t('admin.edit_project_title') : I18N.t('admin.new_project'),
-            `<div class="form-group"><label>${I18N.t('admin.col_name')}</label><input type="text" id="proj-name" value="${name||''}" class="form-control" placeholder="${I18N.t('admin.project_name_placeholder')}"></div>
+            `<div class="form-group"><label>${I18N.t('admin.col_name')}</label><input type="text" id="proj-name" value="${UI.esc(name||'')}" class="form-control" placeholder="${I18N.t('admin.project_name_placeholder')}"></div>
              <div class="form-group"><label>${I18N.t('admin.quota_gb_label')}</label><input type="number" id="proj-quota" value="${quotaGB}" class="form-control" min="0.1" step="0.1"></div>`,
             `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="AdminPage.saveProject(${id||'null'})">${edit ? I18N.t('common.change') : I18N.t('common.create')}</button>`);
     },
@@ -169,7 +172,7 @@ const AdminPage = {
                             <option value="view" ${m.permission==='view'?'selected':''}>${I18N.t('shares.perm_view_option')}</option>
                             <option value="edit" ${m.permission==='edit'?'selected':''}>${I18N.t('shares.perm_edit_option')}</option>
                         </select>
-                        <button class="btn btn-sm btn-danger" onclick="AdminPage.removeMember(${projectId},${m.user_id})">🗑</button>
+                        <button class="btn btn-sm btn-danger" onclick="AdminPage.removeMember(${projectId},${m.user_id})" title="${I18N.t('common.remove')}" aria-label="${I18N.t('common.remove')}">🗑</button>
                     </div>
                 </div>`).join('');
         } catch (e) { el.innerHTML = `<p class="text-muted">${UI.esc(e.message)}</p>`; }
@@ -228,8 +231,8 @@ const AdminPage = {
             ${users.map(u => `<tr data-uid="${u.id}"><td>${u.id}</td><td><div class="table-identity">${UI.avatarHTML(u.id, u.full_name, 'share-user-avatar-sm')}<span>${UI.esc(u.full_name)}</span> ${u.must_change_password ? `<span class="badge" title="${I18N.t('admin.force_pw_badge_title')}">🔑</span>` : ''}</div></td><td>@${UI.esc(u.username)}</td>
                 <td><span class="badge badge-${u.role === 'admin' ? 'admin' : 'user'}">${u.role === 'admin' ? I18N.t('app.role_admin') : I18N.t('app.role_user')}</span></td>
                 <td>${UI.formatBytes(u.quota_bytes || 0)}</td>
-                <td><button class="btn btn-sm btn-ghost" onclick="AdminPage.showEditUserModal(${u.id})">✏️</button>
-                ${u.role !== 'admin' ? `<button class="btn btn-sm btn-danger" onclick="AdminPage.deleteUser(${u.id})">🗑</button>` : ''}</td></tr>`).join('')}
+                <td><button class="btn btn-sm btn-ghost" onclick="AdminPage.showEditUserModal(${u.id})" title="${I18N.t('common.edit')}" aria-label="${I18N.t('common.edit')}">✏️</button>
+                ${u.role !== 'admin' ? `<button class="btn btn-sm btn-danger" onclick="AdminPage.deleteUser(${u.id})" title="${I18N.t('common.delete')}" aria-label="${I18N.t('common.delete')}">🗑</button>` : ''}</td></tr>`).join('')}
             ${!users.length ? `<tr><td colspan="6" class="text-muted text-center">${I18N.t('admin.no_employees')}</td></tr>` : ''}
             </tbody></table>`;
             this._users = users;
@@ -246,7 +249,9 @@ const AdminPage = {
         try {
             const entries = (await API.admin.auditLog()) || [];
             el.innerHTML = `
-            <div class="admin-header"><h2>${I18N.t('admin.nav_audit_log')}</h2></div>
+            <div class="admin-header"><h2>${I18N.t('admin.nav_audit_log')}</h2>
+                <button class="btn btn-ghost btn-sm" onclick="AdminPage.exportAuditLog()">${UI.icons.download} ${I18N.t('admin.export_csv')}</button>
+            </div>
             <table class="admin-table"><thead><tr><th>${I18N.t('admin.col_time')}</th><th>${I18N.t('admin.col_who')}</th><th>${I18N.t('admin.col_action')}</th><th>${I18N.t('admin.col_target')}</th><th>${I18N.t('admin.col_details')}</th></tr></thead><tbody>
             ${entries.map(e => `<tr>
                 <td class="text-muted" style="white-space:nowrap">${new Date(e.created_at).toLocaleString(I18N.dateLocale())}</td>
@@ -258,6 +263,13 @@ const AdminPage = {
             ${!entries.length ? `<tr><td colspan="5" class="text-muted text-center">${I18N.t('admin.no_entries')}</td></tr>` : ''}
             </tbody></table>`;
         } catch (e) { el.innerHTML = `<p class="text-muted">${UI.esc(e.message)}</p>`; }
+    },
+
+    exportAuditLog() {
+        const a = document.createElement('a');
+        a.href = API.admin.auditLogExportURL();
+        a.download = 'paylash-audit-log.csv';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
     },
 
     /* ── Active large uploads ── */
@@ -405,7 +417,12 @@ const AdminPage = {
         finally { btn.disabled = false; btn.textContent = I18N.t('admin.import_submit'); }
     },
 
-    /* ── Project Files (admin browses any project's storage) ── */
+    /* ── File browser shared by "Project files" and "Common files" (admin
+       oversight into any project's or the company-wide storage) — the two
+       tabs previously duplicated this almost line-for-line as separate
+       pjf-prefixed and cf-prefixed methods; they differ only in scope and
+       in project-files' extra "pick a project first" step, both handled by
+       _adminBrowser.scope. ── */
     async renderProjectFiles(el) {
         try {
             const projects = (await API.admin.projects.list()) || [];
@@ -414,232 +431,102 @@ const AdminPage = {
             el.innerHTML = `
             <div class="admin-header"><h2>${I18N.t('admin.nav_project_files')}</h2></div>
             <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;align-items:end">
-                <div class="form-group" style="margin:0"><label style="font-size:.78rem">${I18N.t('app.project_label')}</label><select id="pjf-project" class="form-control" style="width:220px" onchange="AdminPage.onPjfProjectChange()"><option value="">${I18N.t('admin.select_placeholder')}</option>${opts}</select></div>
+                <div class="form-group" style="margin:0"><label style="font-size:.78rem">${I18N.t('app.project_label')}</label><select id="ab-project" class="form-control" style="width:220px" onchange="AdminPage.onBrowserProjectChange()"><option value="">${I18N.t('admin.select_placeholder')}</option>${opts}</select></div>
             </div>
-            <div id="pjf-actions" style="display:none;margin-bottom:12px">
-                <button class="btn btn-primary btn-sm" onclick="document.getElementById('pjf-file-input').click()">${UI.icons.upload} ${I18N.t('admin.upload_file_button')}</button>
-                <button class="btn btn-ghost btn-sm" onclick="AdminPage.showPjfNewFolder()">${UI.icons.plus} ${I18N.t('files.new_folder_button')}</button>
-                <input type="file" id="pjf-file-input" multiple style="display:none" onchange="AdminPage.pjfUploadFiles(this.files)">
+            <div id="ab-actions" style="display:none;margin-bottom:12px">
+                <button class="btn btn-primary btn-sm" onclick="document.getElementById('ab-file-input').click()">${UI.icons.upload} ${I18N.t('admin.upload_file_button')}</button>
+                <button class="btn btn-ghost btn-sm" onclick="AdminPage.showBrowserNewFolder()">${UI.icons.plus} ${I18N.t('files.new_folder_button')}</button>
+                <input type="file" id="ab-file-input" multiple style="display:none" onchange="AdminPage.browserUploadFiles(this.files)">
             </div>
-            <div id="pjf-breadcrumbs" class="breadcrumbs" style="margin-bottom:8px"></div>
-            <div id="pjf-upload-progress" class="upload-progress hidden"></div>
-            <div id="pjf-content"><p class="text-muted">${I18N.t('admin.choose_project_hint')}</p></div>`;
+            <div id="ab-breadcrumbs" class="breadcrumbs" style="margin-bottom:8px"></div>
+            <div id="ab-upload-progress" class="upload-progress hidden"></div>
+            <div id="ab-content"><p class="text-muted">${I18N.t('admin.choose_project_hint')}</p></div>`;
+            this._adminBrowser = { scope: 'project', projectId: null, folderId: null, files: [], folders: [], breadcrumbs: [] };
         } catch (e) { el.innerHTML = `<p class="text-muted">${UI.esc(e.message)}</p>`; }
     },
 
-    async onPjfProjectChange() {
-        const pId = parseInt(document.getElementById('pjf-project').value);
+    onBrowserProjectChange() {
+        const pId = parseInt(document.getElementById('ab-project').value);
         if (!pId) {
-            document.getElementById('pjf-actions').style.display = 'none';
-            document.getElementById('pjf-content').innerHTML = `<p class="text-muted">${I18N.t('admin.choose_project_hint')}</p>`;
+            document.getElementById('ab-actions').style.display = 'none';
+            document.getElementById('ab-content').innerHTML = `<p class="text-muted">${I18N.t('admin.choose_project_hint')}</p>`;
             return;
         }
-        this._adminProjectFiles.projectId = pId;
-        this._adminProjectFiles.folderId = null;
-        document.getElementById('pjf-actions').style.display = '';
-        await this.loadPjfFiles();
+        this._adminBrowser.projectId = pId;
+        this._adminBrowser.folderId = null;
+        document.getElementById('ab-actions').style.display = '';
+        this.loadBrowserFiles();
     },
 
-    async loadPjfFiles() {
-        const st = this._adminProjectFiles;
-        const c = document.getElementById('pjf-content');
-        if (!c || !st.projectId) return;
-        c.innerHTML = UI.skeletonCards(4);
-        try {
-            let url = `/api/files?scope=project&project_id=${st.projectId}`;
-            if (st.folderId) url += `&folder_id=${st.folderId}`;
-            const data = await API._request('GET', url);
-            st.files = data.files || [];
-            st.folders = data.folders || [];
-            st.breadcrumbs = data.breadcrumbs || [];
-            this.renderPjfBreadcrumbs();
-            this.renderPjfFileList(c);
-        } catch (e) { c.innerHTML = `<p class="text-muted">${UI.esc(e.message)}</p>`; }
-    },
-
-    renderPjfBreadcrumbs() {
-        const el = document.getElementById('pjf-breadcrumbs');
-        if (!el) return;
-        const st = this._adminProjectFiles;
-        const proj = this._projects.find(p => p.id === st.projectId);
-        let h = '';
-        if (st.folderId) {
-            const parentId = st.breadcrumbs.length > 1 ? st.breadcrumbs[st.breadcrumbs.length - 2].id : null;
-            h += `<button class="btn btn-icon btn-ghost btn-sm breadcrumb-back" onclick="AdminPage._adminProjectFiles.folderId=${parentId};AdminPage.loadPjfFiles()" title="${I18N.t('files.back_button')}" aria-label="${I18N.t('files.back_button')}">${UI.icons.back}</button>`;
-        }
-        h += `<a class="breadcrumb-item" onclick="AdminPage._adminProjectFiles.folderId=null;AdminPage.loadPjfFiles()">${UI.esc(proj ? proj.name : I18N.t('app.project_label'))}</a>`;
-        st.breadcrumbs.forEach((b, i) => {
-            const isCurrent = i === st.breadcrumbs.length - 1;
-            h += `<span class="breadcrumb-sep">/</span>`;
-            h += isCurrent
-                ? `<span class="breadcrumb-item breadcrumb-current">${UI.esc(b.name)}</span>`
-                : `<a class="breadcrumb-item" onclick="AdminPage._adminProjectFiles.folderId=${b.id};AdminPage.loadPjfFiles()">${UI.esc(b.name)}</a>`;
-        });
-        el.innerHTML = h;
-    },
-
-    renderPjfFileList(c) {
-        const st = this._adminProjectFiles;
-        const items = [...st.folders.map(f => ({ ...f, isFolder: true })), ...st.files];
-        if (!items.length) { c.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📂</div><p>${I18N.t('files.empty_title')}</p></div>`; return; }
-        c.innerHTML = '<div class="file-grid">' + items.map(i => {
-            const cls = UI.fileIconClass(i.name, i.isFolder);
-            const dbl = i.isFolder ? `AdminPage._adminProjectFiles.folderId=${i.id};AdminPage.loadPjfFiles()` : `UI.openFile(${i.id},${UI.escJson(i.name)},${i.size_bytes || 0})`;
-            const ext = i.isFolder ? '' : i.name.split('.').pop().toLowerCase();
-            const iconHtml = !i.isFolder && UI.isThumbnailable(ext)
-                ? `<img class="file-card-thumb" src="/api/files/${i.id}/thumbnail?v=${i.version || 0}" loading="lazy" alt="" onerror="FilesPage.thumbError(this)">`
-                : !i.isFolder && UI.isImage(ext)
-                ? `<img class="file-card-thumb" src="/api/files/${i.id}/download" loading="lazy" alt="" onerror="FilesPage.thumbError(this)">`
-                : `<div class="file-card-icon ${cls}">${UI.fileIcon(i.name, i.isFolder)}</div>`;
-            return `<div class="file-card" ondblclick="${dbl}" oncontextmenu="AdminPage.showPjfMenu(event,${UI.escJson(i)})">
-                ${iconHtml}
-                <div class="file-card-name" title="${UI.esc(i.name)}">${UI.esc(i.name)}</div>
-                ${!i.isFolder ? `<div class="file-card-meta">${UI.formatBytes(i.size_bytes||0)}</div>` : `<div class="file-card-meta">${I18N.t('files.folder_label')}</div>`}
-            </div>`;
-        }).join('') + '</div>';
-    },
-
-    showPjfMenu(e, item) {
-        e.preventDefault(); e.stopPropagation();
-        const items = [];
-        if (item.isFolder) {
-            items.push({ action: 'open', label: I18N.t('files.action_open'), icon: '📂', handler: () => { this._adminProjectFiles.folderId = item.id; this.loadPjfFiles(); } });
-            items.push({ action: 'download', label: I18N.t('files.action_download'), icon: '📥', handler: () => FilesPage.downloadFolder(item.id, item.name) });
-            items.push({ action: 'rename', label: I18N.t('files.action_rename'), icon: '✏️', handler: () => this.pjfRenameFolder(item) });
-            items.push({ divider: true });
-            items.push({ action: 'delete', label: I18N.t('files.action_delete'), icon: '🗑', danger: true, handler: () => this.pjfDeleteFolder(item) });
-        } else {
-            items.push({ action: 'download', label: I18N.t('files.action_download'), icon: '📥', handler: () => FilesPage.download(item.id, item.name) });
-            items.push({ action: 'rename', label: I18N.t('files.action_rename'), icon: '✏️', handler: () => this.pjfRenameFile(item) });
-            items.push({ divider: true });
-            items.push({ action: 'delete', label: I18N.t('files.action_delete'), icon: '🗑', danger: true, handler: () => this.pjfDeleteFile(item) });
-        }
-        UI.showContextMenu(e.clientX, e.clientY, items);
-    },
-
-    async pjfUploadFiles(fileList) {
-        if (!fileList.length || !this._adminProjectFiles.projectId) return;
-        const prog = document.getElementById('pjf-upload-progress');
-        prog.classList.remove('hidden');
-        const projectId = this._adminProjectFiles.projectId, folderId = this._adminProjectFiles.folderId;
-        for (const file of fileList) {
-            const id = 'pjfu-' + Math.random().toString(36).substr(2, 6);
-            const isLarge = typeof Uploader !== 'undefined' && Uploader.isLarge(file);
-            const resumeBadge = isLarge ? `<span class="upload-item-badge" title="${I18N.t('files.upload_resume_hint')}">${I18N.t('files.upload_resume_badge')}</span>` : '';
-            prog.innerHTML += `<div class="upload-item" id="${id}"><div class="upload-item-name">${UI.esc(file.name)} ${resumeBadge}</div><div class="upload-item-bar"><div class="upload-item-fill" id="${id}-f"></div></div><div class="upload-item-pct" id="${id}-p">0%</div></div>`;
-            const onProgress = pct => { const f = document.getElementById(id+'-f'), p = document.getElementById(id+'-p'); if (f) f.style.width = pct+'%'; if (p) p.textContent = pct+'%'; };
-            try {
-                if (isLarge) {
-                    await Uploader.uploadLarge(file, 'project', folderId, projectId, onProgress);
-                } else {
-                    await API.files.upload(file, 'project', folderId, projectId, onProgress);
-                }
-                document.getElementById(id)?.classList.add('upload-done');
-            } catch (err) {
-                UI.toast(I18N.t('files.upload_item_failed', { name: file.name, error: err.message }), 'error');
-                document.getElementById(id)?.classList.add('upload-error');
-            }
-        }
-        setTimeout(() => { prog.innerHTML = ''; prog.classList.add('hidden'); }, 2000);
-        this.loadPjfFiles();
-        document.getElementById('pjf-file-input').value = '';
-    },
-
-    showPjfNewFolder() {
-        UI.showModal(I18N.t('files.new_folder_title'), `<div class="form-group"><label>${I18N.t('files.new_folder_name_label')}</label><input type="text" id="pjf-folder-name" class="form-control" placeholder="${I18N.t('files.new_folder_name_placeholder')}"></div>`,
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="AdminPage.doPjfCreateFolder()">${I18N.t('common.create')}</button>`);
-    },
-    async doPjfCreateFolder() {
-        const n = document.getElementById('pjf-folder-name').value.trim(); if (!n) return;
-        try { await API.folders.create(n, 'project', this._adminProjectFiles.folderId, this._adminProjectFiles.projectId); UI.closeModal(); UI.toast(I18N.t('files.folder_created'), 'success'); this.loadPjfFiles(); } catch (e) { UI.toast(e.message, 'error'); }
-    },
-    pjfRenameFile(item) {
-        UI.showModal(I18N.t('files.rename_file_title'), `<div class="form-group"><label>${I18N.t('common.new_name_label')}</label><input type="text" id="pjf-rename" value="${UI.esc(item.name)}" class="form-control"></div>`,
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="AdminPage.doPjfRenameFile(${item.id})">${I18N.t('common.rename')}</button>`);
-    },
-    async doPjfRenameFile(id) { const n = document.getElementById('pjf-rename').value.trim(); if (!n) return; try { await API.files.rename(id, n); UI.closeModal(); UI.toast(I18N.t('admin.updated'), 'success'); this.loadPjfFiles(); } catch (e) { UI.toast(e.message, 'error'); } },
-    pjfRenameFolder(item) {
-        UI.showModal(I18N.t('files.rename_folder_title'), `<div class="form-group"><label>${I18N.t('common.new_name_label')}</label><input type="text" id="pjf-rename" value="${UI.esc(item.name)}" class="form-control"></div>`,
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="AdminPage.doPjfRenameFolder(${item.id})">${I18N.t('common.rename')}</button>`);
-    },
-    async doPjfRenameFolder(id) { const n = document.getElementById('pjf-rename').value.trim(); if (!n) return; try { await API.folders.rename(id, n); UI.closeModal(); UI.toast(I18N.t('admin.updated'), 'success'); this.loadPjfFiles(); } catch (e) { UI.toast(e.message, 'error'); } },
-    pjfDeleteFile(item) {
-        UI.confirmAction(I18N.t('files.delete_file_title'), I18N.t('files.delete_file_body', { name: UI.esc(item.name) }), I18N.t('common.delete'), async () => {
-            try { await API.files.delete(item.id); UI.toast(I18N.t('admin.deleted'), 'success'); this.loadPjfFiles(); } catch (e) { UI.toast(e.message, 'error'); }
-        });
-    },
-    pjfDeleteFolder(item) {
-        UI.confirmAction(I18N.t('files.delete_folder_title'), I18N.t('files.delete_folder_body', { name: UI.esc(item.name) }), I18N.t('common.delete'), async () => {
-            try { await API.folders.delete(item.id); UI.toast(I18N.t('admin.deleted'), 'success'); this.loadPjfFiles(); } catch (e) { UI.toast(e.message, 'error'); }
-        });
-    },
-
-    /* ── Common Files (shared with every employee) ── */
     async renderCommonFiles(el) {
         el.innerHTML = `
         <div class="admin-header"><h2>${I18N.t('admin.nav_common_files')}</h2></div>
         <div style="margin-bottom:12px">
-            <button class="btn btn-primary btn-sm" onclick="document.getElementById('cf-file-input').click()">${UI.icons.upload} ${I18N.t('admin.upload_file_button')}</button>
-            <button class="btn btn-ghost btn-sm" onclick="AdminPage.showCfNewFolder()">${UI.icons.plus} ${I18N.t('files.new_folder_button')}</button>
-            <input type="file" id="cf-file-input" multiple style="display:none" onchange="AdminPage.cfUploadFiles(this.files)">
+            <button class="btn btn-primary btn-sm" onclick="document.getElementById('ab-file-input').click()">${UI.icons.upload} ${I18N.t('admin.upload_file_button')}</button>
+            <button class="btn btn-ghost btn-sm" onclick="AdminPage.showBrowserNewFolder()">${UI.icons.plus} ${I18N.t('files.new_folder_button')}</button>
+            <input type="file" id="ab-file-input" multiple style="display:none" onchange="AdminPage.browserUploadFiles(this.files)">
         </div>
-        <div id="cf-breadcrumbs" class="breadcrumbs" style="margin-bottom:8px"></div>
-        <div id="cf-upload-progress" class="upload-progress hidden"></div>
-        <div id="cf-content">${UI.skeletonCards(4)}</div>`;
-        await this.loadCfFiles();
+        <div id="ab-breadcrumbs" class="breadcrumbs" style="margin-bottom:8px"></div>
+        <div id="ab-upload-progress" class="upload-progress hidden"></div>
+        <div id="ab-content">${UI.skeletonCards(4)}</div>`;
+        this._adminBrowser = { scope: 'common', projectId: null, folderId: null, files: [], folders: [], breadcrumbs: [] };
+        await this.loadBrowserFiles();
     },
 
-    async loadCfFiles() {
-        const st = this._adminCommonFiles;
-        const c = document.getElementById('cf-content');
-        if (!c) return;
+    async loadBrowserFiles() {
+        const st = this._adminBrowser;
+        const c = document.getElementById('ab-content');
+        if (!c || (st.scope === 'project' && !st.projectId)) return;
         c.innerHTML = UI.skeletonCards(4);
         try {
-            let url = `/api/files?scope=common`;
+            let url = `/api/files?scope=${st.scope}`;
+            if (st.scope === 'project') url += `&project_id=${st.projectId}`;
             if (st.folderId) url += `&folder_id=${st.folderId}`;
             const data = await API._request('GET', url);
             st.files = data.files || [];
             st.folders = data.folders || [];
             st.breadcrumbs = data.breadcrumbs || [];
-            this.renderCfBreadcrumbs();
-            this.renderCfFileList(c);
+            this.renderBrowserBreadcrumbs();
+            this.renderBrowserFileList(c);
         } catch (e) { c.innerHTML = `<p class="text-muted">${UI.esc(e.message)}</p>`; }
     },
 
-    renderCfBreadcrumbs() {
-        const el = document.getElementById('cf-breadcrumbs');
+    renderBrowserBreadcrumbs() {
+        const el = document.getElementById('ab-breadcrumbs');
         if (!el) return;
-        const st = this._adminCommonFiles;
+        const st = this._adminBrowser;
+        const rootLabel = st.scope === 'project' ? (this._projects.find(p => p.id === st.projectId)?.name || I18N.t('app.project_label')) : I18N.t('app.nav_common');
         let h = '';
         if (st.folderId) {
             const parentId = st.breadcrumbs.length > 1 ? st.breadcrumbs[st.breadcrumbs.length - 2].id : null;
-            h += `<button class="btn btn-icon btn-ghost btn-sm breadcrumb-back" onclick="AdminPage._adminCommonFiles.folderId=${parentId};AdminPage.loadCfFiles()" title="${I18N.t('files.back_button')}" aria-label="${I18N.t('files.back_button')}">${UI.icons.back}</button>`;
+            h += `<button class="btn btn-icon btn-ghost btn-sm breadcrumb-back" onclick="AdminPage._adminBrowser.folderId=${parentId};AdminPage.loadBrowserFiles()" title="${I18N.t('files.back_button')}" aria-label="${I18N.t('files.back_button')}">${UI.icons.back}</button>`;
         }
-        h += `<a class="breadcrumb-item" onclick="AdminPage._adminCommonFiles.folderId=null;AdminPage.loadCfFiles()">${I18N.t('app.nav_common')}</a>`;
+        h += `<a class="breadcrumb-item" onclick="AdminPage._adminBrowser.folderId=null;AdminPage.loadBrowserFiles()">${UI.esc(rootLabel)}</a>`;
         st.breadcrumbs.forEach((b, i) => {
             const isCurrent = i === st.breadcrumbs.length - 1;
             h += `<span class="breadcrumb-sep">/</span>`;
             h += isCurrent
                 ? `<span class="breadcrumb-item breadcrumb-current">${UI.esc(b.name)}</span>`
-                : `<a class="breadcrumb-item" onclick="AdminPage._adminCommonFiles.folderId=${b.id};AdminPage.loadCfFiles()">${UI.esc(b.name)}</a>`;
+                : `<a class="breadcrumb-item" onclick="AdminPage._adminBrowser.folderId=${b.id};AdminPage.loadBrowserFiles()">${UI.esc(b.name)}</a>`;
         });
         el.innerHTML = h;
     },
 
-    renderCfFileList(c) {
-        const st = this._adminCommonFiles;
+    renderBrowserFileList(c) {
+        const st = this._adminBrowser;
         const items = [...st.folders.map(f => ({ ...f, isFolder: true })), ...st.files];
         if (!items.length) { c.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📂</div><p>${I18N.t('files.empty_title')}</p></div>`; return; }
         c.innerHTML = '<div class="file-grid">' + items.map(i => {
             const cls = UI.fileIconClass(i.name, i.isFolder);
-            const dbl = i.isFolder ? `AdminPage._adminCommonFiles.folderId=${i.id};AdminPage.loadCfFiles()` : `UI.openFile(${i.id},${UI.escJson(i.name)},${i.size_bytes || 0})`;
+            const dbl = i.isFolder ? `AdminPage._adminBrowser.folderId=${i.id};AdminPage.loadBrowserFiles()` : `UI.openFile(${i.id},${UI.escJson(i.name)},${i.size_bytes || 0})`;
+            const itemJson = UI.escJson(i);
             const ext = i.isFolder ? '' : i.name.split('.').pop().toLowerCase();
             const iconHtml = !i.isFolder && UI.isThumbnailable(ext)
                 ? `<img class="file-card-thumb" src="/api/files/${i.id}/thumbnail?v=${i.version || 0}" loading="lazy" alt="" onerror="FilesPage.thumbError(this)">`
                 : !i.isFolder && UI.isImage(ext)
                 ? `<img class="file-card-thumb" src="/api/files/${i.id}/download" loading="lazy" alt="" onerror="FilesPage.thumbError(this)">`
                 : `<div class="file-card-icon ${cls}">${UI.fileIcon(i.name, i.isFolder)}</div>`;
-            return `<div class="file-card" ondblclick="${dbl}" oncontextmenu="AdminPage.showCfMenu(event,${UI.escJson(i)})">
+            return `<div class="file-card" tabindex="0" role="button" aria-label="${UI.esc(i.name)}" ondblclick="${dbl}" onkeydown="if(event.key==='Enter'&&event.target===event.currentTarget){event.preventDefault();${dbl}}" oncontextmenu="AdminPage.showBrowserMenu(event,${itemJson})">
                 ${iconHtml}
                 <div class="file-card-name" title="${UI.esc(i.name)}">${UI.esc(i.name)}</div>
                 ${!i.isFolder ? `<div class="file-card-meta">${UI.formatBytes(i.size_bytes||0)}</div>` : `<div class="file-card-meta">${I18N.t('files.folder_label')}</div>`}
@@ -647,40 +534,42 @@ const AdminPage = {
         }).join('') + '</div>';
     },
 
-    showCfMenu(e, item) {
+    showBrowserMenu(e, item) {
         e.preventDefault(); e.stopPropagation();
         const items = [];
         if (item.isFolder) {
-            items.push({ action: 'open', label: I18N.t('files.action_open'), icon: '📂', handler: () => { this._adminCommonFiles.folderId = item.id; this.loadCfFiles(); } });
+            items.push({ action: 'open', label: I18N.t('files.action_open'), icon: '📂', handler: () => { this._adminBrowser.folderId = item.id; this.loadBrowserFiles(); } });
             items.push({ action: 'download', label: I18N.t('files.action_download'), icon: '📥', handler: () => FilesPage.downloadFolder(item.id, item.name) });
-            items.push({ action: 'rename', label: I18N.t('files.action_rename'), icon: '✏️', handler: () => this.cfRenameFolder(item) });
+            items.push({ action: 'rename', label: I18N.t('files.action_rename'), icon: '✏️', handler: () => this.browserRenameFolder(item) });
             items.push({ divider: true });
-            items.push({ action: 'delete', label: I18N.t('files.action_delete'), icon: '🗑', danger: true, handler: () => this.cfDeleteFolder(item) });
+            items.push({ action: 'delete', label: I18N.t('files.action_delete'), icon: '🗑', danger: true, handler: () => this.browserDeleteFolder(item) });
         } else {
             items.push({ action: 'download', label: I18N.t('files.action_download'), icon: '📥', handler: () => FilesPage.download(item.id, item.name) });
-            items.push({ action: 'rename', label: I18N.t('files.action_rename'), icon: '✏️', handler: () => this.cfRenameFile(item) });
+            items.push({ action: 'rename', label: I18N.t('files.action_rename'), icon: '✏️', handler: () => this.browserRenameFile(item) });
             items.push({ divider: true });
-            items.push({ action: 'delete', label: I18N.t('files.action_delete'), icon: '🗑', danger: true, handler: () => this.cfDeleteFile(item) });
+            items.push({ action: 'delete', label: I18N.t('files.action_delete'), icon: '🗑', danger: true, handler: () => this.browserDeleteFile(item) });
         }
-        UI.showContextMenu(e.clientX, e.clientY, items);
+        const [x, y] = UI.eventPos(e);
+        UI.showContextMenu(x, y, items);
     },
 
-    async cfUploadFiles(fileList) {
-        if (!fileList.length) return;
-        const prog = document.getElementById('cf-upload-progress');
+    async browserUploadFiles(fileList) {
+        const st = this._adminBrowser;
+        if (!fileList.length || (st.scope === 'project' && !st.projectId)) return;
+        const prog = document.getElementById('ab-upload-progress');
         prog.classList.remove('hidden');
-        const folderId = this._adminCommonFiles.folderId;
+        const scope = st.scope, projectId = st.scope === 'project' ? st.projectId : null, folderId = st.folderId;
         for (const file of fileList) {
-            const id = 'cfu-' + Math.random().toString(36).substr(2, 6);
+            const id = 'abu-' + Math.random().toString(36).substr(2, 6);
             const isLarge = typeof Uploader !== 'undefined' && Uploader.isLarge(file);
             const resumeBadge = isLarge ? `<span class="upload-item-badge" title="${I18N.t('files.upload_resume_hint')}">${I18N.t('files.upload_resume_badge')}</span>` : '';
             prog.innerHTML += `<div class="upload-item" id="${id}"><div class="upload-item-name">${UI.esc(file.name)} ${resumeBadge}</div><div class="upload-item-bar"><div class="upload-item-fill" id="${id}-f"></div></div><div class="upload-item-pct" id="${id}-p">0%</div></div>`;
             const onProgress = pct => { const f = document.getElementById(id+'-f'), p = document.getElementById(id+'-p'); if (f) f.style.width = pct+'%'; if (p) p.textContent = pct+'%'; };
             try {
                 if (isLarge) {
-                    await Uploader.uploadLarge(file, 'common', folderId, null, onProgress);
+                    await Uploader.uploadLarge(file, scope, folderId, projectId, onProgress);
                 } else {
-                    await API.files.upload(file, 'common', folderId, null, onProgress);
+                    await API.files.upload(file, scope, folderId, projectId, onProgress);
                 }
                 document.getElementById(id)?.classList.add('upload-done');
             } catch (err) {
@@ -689,36 +578,37 @@ const AdminPage = {
             }
         }
         setTimeout(() => { prog.innerHTML = ''; prog.classList.add('hidden'); }, 2000);
-        this.loadCfFiles();
-        document.getElementById('cf-file-input').value = '';
+        this.loadBrowserFiles();
+        document.getElementById('ab-file-input').value = '';
     },
 
-    showCfNewFolder() {
-        UI.showModal(I18N.t('files.new_folder_title'), `<div class="form-group"><label>${I18N.t('files.new_folder_name_label')}</label><input type="text" id="cf-folder-name" class="form-control" placeholder="${I18N.t('files.new_folder_name_placeholder')}"></div>`,
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="AdminPage.doCfCreateFolder()">${I18N.t('common.create')}</button>`);
+    showBrowserNewFolder() {
+        UI.showModal(I18N.t('files.new_folder_title'), `<div class="form-group"><label>${I18N.t('files.new_folder_name_label')}</label><input type="text" id="ab-folder-name" class="form-control" placeholder="${I18N.t('files.new_folder_name_placeholder')}"></div>`,
+            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="AdminPage.doBrowserCreateFolder()">${I18N.t('common.create')}</button>`);
     },
-    async doCfCreateFolder() {
-        const n = document.getElementById('cf-folder-name').value.trim(); if (!n) return;
-        try { await API.folders.create(n, 'common', this._adminCommonFiles.folderId); UI.closeModal(); UI.toast(I18N.t('files.folder_created'), 'success'); this.loadCfFiles(); } catch (e) { UI.toast(e.message, 'error'); }
+    async doBrowserCreateFolder() {
+        const n = document.getElementById('ab-folder-name').value.trim(); if (!n) return;
+        const st = this._adminBrowser;
+        try { await API.folders.create(n, st.scope, st.folderId, st.scope === 'project' ? st.projectId : null); UI.closeModal(); UI.toast(I18N.t('files.folder_created'), 'success'); this.loadBrowserFiles(); } catch (e) { UI.toast(e.message, 'error'); }
     },
-    cfRenameFile(item) {
-        UI.showModal(I18N.t('files.rename_file_title'), `<div class="form-group"><label>${I18N.t('common.new_name_label')}</label><input type="text" id="cf-rename" value="${UI.esc(item.name)}" class="form-control"></div>`,
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="AdminPage.doCfRenameFile(${item.id})">${I18N.t('common.rename')}</button>`);
+    browserRenameFile(item) {
+        UI.showModal(I18N.t('files.rename_file_title'), `<div class="form-group"><label>${I18N.t('common.new_name_label')}</label><input type="text" id="ab-rename" value="${UI.esc(item.name)}" class="form-control"></div>`,
+            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="AdminPage.doBrowserRenameFile(${item.id})">${I18N.t('common.rename')}</button>`);
     },
-    async doCfRenameFile(id) { const n = document.getElementById('cf-rename').value.trim(); if (!n) return; try { await API.files.rename(id, n); UI.closeModal(); UI.toast(I18N.t('admin.updated'), 'success'); this.loadCfFiles(); } catch (e) { UI.toast(e.message, 'error'); } },
-    cfRenameFolder(item) {
-        UI.showModal(I18N.t('files.rename_folder_title'), `<div class="form-group"><label>${I18N.t('common.new_name_label')}</label><input type="text" id="cf-rename" value="${UI.esc(item.name)}" class="form-control"></div>`,
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="AdminPage.doCfRenameFolder(${item.id})">${I18N.t('common.rename')}</button>`);
+    async doBrowserRenameFile(id) { const n = document.getElementById('ab-rename').value.trim(); if (!n) return; try { await API.files.rename(id, n); UI.closeModal(); UI.toast(I18N.t('admin.updated'), 'success'); this.loadBrowserFiles(); } catch (e) { UI.toast(e.message, 'error'); } },
+    browserRenameFolder(item) {
+        UI.showModal(I18N.t('files.rename_folder_title'), `<div class="form-group"><label>${I18N.t('common.new_name_label')}</label><input type="text" id="ab-rename" value="${UI.esc(item.name)}" class="form-control"></div>`,
+            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="AdminPage.doBrowserRenameFolder(${item.id})">${I18N.t('common.rename')}</button>`);
     },
-    async doCfRenameFolder(id) { const n = document.getElementById('cf-rename').value.trim(); if (!n) return; try { await API.folders.rename(id, n); UI.closeModal(); UI.toast(I18N.t('admin.updated'), 'success'); this.loadCfFiles(); } catch (e) { UI.toast(e.message, 'error'); } },
-    cfDeleteFile(item) {
+    async doBrowserRenameFolder(id) { const n = document.getElementById('ab-rename').value.trim(); if (!n) return; try { await API.folders.rename(id, n); UI.closeModal(); UI.toast(I18N.t('admin.updated'), 'success'); this.loadBrowserFiles(); } catch (e) { UI.toast(e.message, 'error'); } },
+    browserDeleteFile(item) {
         UI.confirmAction(I18N.t('files.delete_file_title'), I18N.t('files.delete_file_body', { name: UI.esc(item.name) }), I18N.t('common.delete'), async () => {
-            try { await API.files.delete(item.id); UI.toast(I18N.t('admin.deleted'), 'success'); this.loadCfFiles(); } catch (e) { UI.toast(e.message, 'error'); }
+            try { await API.files.delete(item.id); UI.toast(I18N.t('admin.deleted'), 'success'); this.loadBrowserFiles(); } catch (e) { UI.toast(e.message, 'error'); }
         });
     },
-    cfDeleteFolder(item) {
+    browserDeleteFolder(item) {
         UI.confirmAction(I18N.t('files.delete_folder_title'), I18N.t('files.delete_folder_body', { name: UI.esc(item.name) }), I18N.t('common.delete'), async () => {
-            try { await API.folders.delete(item.id); UI.toast(I18N.t('admin.deleted'), 'success'); this.loadCfFiles(); } catch (e) { UI.toast(e.message, 'error'); }
+            try { await API.folders.delete(item.id); UI.toast(I18N.t('admin.deleted'), 'success'); this.loadBrowserFiles(); } catch (e) { UI.toast(e.message, 'error'); }
         });
     }
 };

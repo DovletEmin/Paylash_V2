@@ -13,8 +13,10 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      - app
-      - collabora
+      app:
+        condition: service_healthy
+      collabora:
+        condition: service_started
 
   postgres:
     image: postgres:16-alpine
@@ -100,6 +102,12 @@ services:
         condition: service_healthy
       collabora:
         condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 volumes:
   postgres_data:

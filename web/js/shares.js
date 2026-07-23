@@ -286,7 +286,7 @@ const SharesPage = {
                     <option value="view" ${p.permission === 'view' ? 'selected' : ''}>👁 ${I18N.t('shares.perm_view_option')}</option>
                     <option value="edit" ${p.permission === 'edit' ? 'selected' : ''}>✏️ ${I18N.t('shares.perm_edit_option')}</option>
                 </select>
-                <button class="btn btn-icon btn-sm btn-danger" onclick="SharesPage.removeRecipient(${p.id})" title="${I18N.t('shares.remove_title')}">✕</button>
+                <button class="btn btn-icon btn-sm btn-danger" onclick="SharesPage.removeRecipient(${p.id})" title="${I18N.t('shares.remove_title')}" aria-label="${I18N.t('shares.remove_title')}">✕</button>
             </div>`).join('');
     },
 
@@ -310,20 +310,19 @@ const SharesPage = {
                     file.visibility = newVis;
                 }
             }
-            // Share every selected file with every pending recipient.
-            const errors = [];
-            let shareCount = 0;
-            for (const file of this._currentFiles) {
-                for (const p of this._pendingRecipients) {
-                    try {
-                        await API.sharing.share(file.id, p.id, p.permission);
-                        shareCount++;
-                    } catch (e) { errors.push(`${file.name} → ${p.name}: ${e.message}`); }
-                }
-            }
+            // Share every selected file with every pending recipient — up to
+            // 4 (file, recipient) pairs in flight at once rather than one
+            // strictly-sequential round-trip per pair, which used to make a
+            // bulk share of several files to several people visibly slow.
+            const pairs = [];
+            for (const file of this._currentFiles) for (const p of this._pendingRecipients) pairs.push({ file, p });
+            const failures = await UI.runPooled(pairs, 4, async ({ file, p }) => {
+                await API.sharing.share(file.id, p.id, p.permission);
+            });
+            const shareCount = pairs.length - failures.length;
             UI.closeModal();
-            if (errors.length) {
-                UI.toast(I18N.t('shares.some_errors', { errors: errors.join('; ') }), 'error');
+            if (failures.length) {
+                UI.toast(I18N.t('shares.some_errors', { errors: failures.map(f => `${f.item.file.name} → ${f.item.p.name}: ${f.error.message}`).join('; ') }), 'error');
             } else if (shareCount) {
                 UI.toast(I18N.t('shares.shared_with_count', { count: this._pendingRecipients.length }), 'success');
             } else {
@@ -352,7 +351,7 @@ const SharesPage = {
                         <option value="view" ${s.permission === 'view' ? 'selected' : ''}>👁 ${I18N.t('shares.perm_view_option')}</option>
                         <option value="edit" ${s.permission === 'edit' ? 'selected' : ''}>✏️ ${I18N.t('shares.perm_edit_option')}</option>
                     </select>
-                    <button class="btn btn-icon btn-sm btn-danger" onclick="SharesPage.removeShare(${fileId},${s.shared_with})" title="${I18N.t('shares.remove_title')}">✕</button>
+                    <button class="btn btn-icon btn-sm btn-danger" onclick="SharesPage.removeShare(${fileId},${s.shared_with})" title="${I18N.t('shares.remove_title')}" aria-label="${I18N.t('shares.remove_title')}">✕</button>
                 </div>`).join('');
         } catch { el.innerHTML = ''; }
     },

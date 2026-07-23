@@ -1086,11 +1086,7 @@ func (h *Handler) DeleteFolder(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "bukjany pozup bolmady")
 		return
 	}
-	if err := h.db.SoftDeleteFilesInFolders(folderIDs); err != nil {
-		writeError(w, http.StatusInternalServerError, "bukjany pozup bolmady")
-		return
-	}
-	if err := h.db.SoftDeleteFolders(folderIDs); err != nil {
+	if err := h.db.SoftDeleteFolderTree(folderIDs); err != nil {
 		writeError(w, http.StatusInternalServerError, "bukjany pozup bolmady")
 		return
 	}

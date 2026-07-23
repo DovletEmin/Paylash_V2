@@ -19,6 +19,12 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "hasaba durmak öçürilen, admin bilen habarlaşyň")
 		return
 	}
+	ipKey := "ip:" + clientIP(r)
+	if h.registerLimiter.blocked(ipKey) {
+		writeError(w, http.StatusTooManyRequests, "köp synanyşyk boldy, birazdan gaýtadan synanyşyň")
+		return
+	}
+	h.registerLimiter.record(ipKey)
 	var req models.RegisterRequest
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "nädogry maglumat")
@@ -26,11 +32,11 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req.Username = strings.TrimSpace(req.Username)
-	if len(req.Username) < 3 {
+	if !authutil.ValidUsername(req.Username) {
 		writeError(w, http.StatusBadRequest, "ulanyjy ady azyndan 3 harp bolmaly")
 		return
 	}
-	if len(req.Password) < 6 {
+	if !authutil.ValidPassword(req.Password) {
 		writeError(w, http.StatusBadRequest, "parol azyndan 6 simwol bolmaly")
 		return
 	}
@@ -88,15 +94,15 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.db.GetUserByUsername(username)
 	if err != nil || user == nil {
-		h.loginLimiter.recordFailure(userKey)
-		h.loginLimiter.recordFailure(ipKey)
+		h.loginLimiter.record(userKey)
+		h.loginLimiter.record(ipKey)
 		writeError(w, http.StatusUnauthorized, "nädogry ulanyjy ady ýa-da parol")
 		return
 	}
 
 	if !authutil.CheckPassword(req.Password, user.PasswordHash) {
-		h.loginLimiter.recordFailure(userKey)
-		h.loginLimiter.recordFailure(ipKey)
+		h.loginLimiter.record(userKey)
+		h.loginLimiter.record(ipKey)
 		writeError(w, http.StatusUnauthorized, "nädogry ulanyjy ady ýa-da parol")
 		return
 	}
@@ -121,6 +127,28 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	})
 
 	writeJSON(w, http.StatusOK, user)
+}
+
+// LogoutOthers invalidates every session for the caller's account except the
+// one making this request — an explicit "log out of other devices" action,
+// independent of a password change (e.g. after losing a device, or just as
+// routine hygiene).
+func (h *Handler) LogoutOthers(w http.ResponseWriter, r *http.Request) {
+	user := authutil.GetUser(r)
+	if user == nil {
+		writeError(w, http.StatusUnauthorized, "ulgama giriň")
+		return
+	}
+	cookie, err := r.Cookie("session")
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "ulgama giriň")
+		return
+	}
+	if err := h.db.DeleteOtherSessions(user.ID, cookie.Value); err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk ýüze çykdy")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
@@ -169,7 +197,7 @@ func (h *Handler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if req.NewPassword != "" {
-		if len(req.NewPassword) < 6 {
+		if !authutil.ValidPassword(req.NewPassword) {
 			writeError(w, http.StatusBadRequest, "t\u00e4ze parol a\u017cyndan 6 simwol bolmaly")
 			return
 		}
@@ -191,6 +219,16 @@ func (h *Handler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "paroly \u00fc\u00fdtgedip bolmady")
 			return
 		}
+		// A changed password should immediately kick out any *other* session
+		// for this account \u2014 otherwise a session opened before the password
+		// leaked/was shared stays valid for up to 7 more days regardless.
+		// The request's own session (the one used to make this very change)
+		// is kept, so the user isn't logged out of the tab they're using.
+		if cookie, err := r.Cookie("session"); err == nil {
+			if err := h.db.DeleteOtherSessions(user.ID, cookie.Value); err != nil {
+				log.Printf("invalidate other sessions after password change for user %d: %v", user.ID, err)
+			}
+		}
 	}
 	updated, _ := h.db.GetUserByID(user.ID)
 	if updated != nil {
@@ -206,6 +244,12 @@ func (h *Handler) UploadAvatar(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "ulgama giriň")
 		return
 	}
+	userKey := strconv.Itoa(user.ID)
+	if h.avatarLimiter.blocked(userKey) {
+		writeError(w, http.StatusTooManyRequests, "köp synanyşyk boldy, birazdan gaýtadan synanyşyň")
+		return
+	}
+	h.avatarLimiter.record(userKey)
 	if err := r.ParseMultipartForm(5 << 20); err != nil {
 		writeError(w, http.StatusBadRequest, "faýl juda uly (maks 5MB)")
 		return

@@ -1,5 +1,25 @@
 /* Paylash — UI Components & Utilities */
 const ESC_CHARS = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+
+// Named once so every is*()/icon lookup in UI reads from the same list
+// instead of repeating its own inline array — the previous version had
+// fileIconClass's "image" check and isImage() quietly listing different
+// extensions (bmp/ico/tiff/tif were images to isImage() but not to the
+// icon-color class), exactly the kind of drift this centralizes against.
+// isThumbnailable still has to be hand-kept in sync with a SEPARATE list —
+// the Go backend's own decode support (see isThumbnailableImage in
+// internal/api/files.go) — that boundary can't be expressed in JS alone.
+const EXT_ICON_MAP = { pdf:'📄',doc:'📝',docx:'📝',txt:'📃',odt:'📝',xls:'📊',xlsx:'📊',ods:'📊',csv:'📊',ppt:'📽',pptx:'📽',odp:'📽',jpg:'🖼',jpeg:'🖼',png:'🖼',gif:'🖼',webp:'🖼',svg:'🖼',mp3:'🎵',wav:'🎵',mp4:'🎬',avi:'🎬',mkv:'🎬',zip:'📦',rar:'📦','7z':'📦' };
+const EXT_DOCUMENT = ['doc','docx','odt','txt','pdf','ppt','pptx','odp','xls','xlsx','ods','csv'];
+const EXT_IMAGE = ['jpg','jpeg','png','gif','webp','svg','bmp','ico','tiff','tif'];
+const EXT_THUMBNAILABLE = ['jpg','jpeg','png','gif'];
+const EXT_AUDIO = ['mp3','wav','ogg','flac','aac','m4a','wma','opus'];
+const EXT_VIDEO = ['mp4','webm','ogg','mov','avi','mkv','wmv','flv','m4v'];
+const EXT_TEXT = ['txt','log','md','json','xml','yaml','yml','ini','cfg','conf','sh','bat','ps1',
+                   'py','js','ts','go','java','c','cpp','h','hpp','css','html','htm','sql','env','toml'];
+const EXT_COLLABORA_EDIT = ['doc','docx','odt','xls','xlsx','ods','ppt','pptx','odp','csv'];
+const EXT_COLLABORA_VIEW = [...EXT_COLLABORA_EDIT, 'pdf'];
+
 const UI = {
     toast(msg, type = 'info') {
         const c = document.getElementById('toast-container');
@@ -11,24 +31,75 @@ const UI = {
         setTimeout(() => { el.classList.add('toast-removing'); setTimeout(() => el.remove(), 250); }, 3500);
     },
 
+    // title/hideClose describe the *last* modal shown — read by the
+    // Escape/focus-trap keydown handler below, which is bound once for the
+    // page's lifetime (see the SharesPage._bindDropdownClose /
+    // PreviewPage._bindKeyNav pattern this follows) rather than per-open.
+    _modalHideClose: false,
+    _modalTriggerEl: null,
+    _modalTitleSeq: 0,
     showModal(title, bodyHTML, footerHTML, hideClose) {
         const o = document.getElementById('modal-overlay');
-        o.innerHTML = `<div class="modal">
+        const titleId = 'modal-title-' + (this._modalTitleSeq++);
+        o.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="${titleId}">
             <div class="modal-header">
-                <h3 class="modal-title">${this.esc(title)}</h3>
+                <h3 class="modal-title" id="${titleId}">${this.esc(title)}</h3>
                 ${hideClose ? '' : `<button class="modal-close" onclick="UI.closeModal()" aria-label="${this.esc(I18N.t('common.close'))}">✕</button>`}
             </div>
             <div class="modal-body">${bodyHTML}</div>
             ${footerHTML ? `<div class="modal-footer">${footerHTML}</div>` : ''}
         </div>`;
         o.classList.remove('hidden');
-        requestAnimationFrame(() => o.classList.add('visible'));
+        this._modalHideClose = !!hideClose;
+        // Only remembered on the *first* showModal of a nested sequence
+        // (e.g. UI.confirmAction opened from inside an already-open custom
+        // modal) — otherwise closing the confirm dialog would try to focus
+        // an element that's about to be replaced by the modal underneath it
+        // reopening, instead of the thing the user originally had focused.
+        if (!document.getElementById('modal-overlay').classList.contains('visible')) {
+            this._modalTriggerEl = document.activeElement;
+        }
+        this._bindModalKeydown();
+        requestAnimationFrame(() => {
+            o.classList.add('visible');
+            const focusable = o.querySelector('input, textarea, select, button, [tabindex]');
+            if (focusable) focusable.focus();
+        });
+    },
+
+    _modalKeydownBound: false,
+    _bindModalKeydown() {
+        if (this._modalKeydownBound) return;
+        this._modalKeydownBound = true;
+        document.addEventListener('keydown', ev => {
+            const o = document.getElementById('modal-overlay');
+            if (!o.classList.contains('visible')) return;
+            if (ev.key === 'Escape') {
+                // A hideClose modal (forced password change) is mandatory —
+                // Escape must not be a silent way around the same rule the
+                // server now also enforces (see must_change_password).
+                if (this._modalHideClose) return;
+                ev.preventDefault();
+                this.closeModal();
+                return;
+            }
+            if (ev.key === 'Tab') {
+                const focusables = Array.from(o.querySelectorAll('button, [href], input, select, textarea, [tabindex]'))
+                    .filter(el => !el.disabled && el.tabIndex !== -1 && el.offsetParent !== null);
+                if (!focusables.length) return;
+                const first = focusables[0], last = focusables[focusables.length - 1];
+                if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
+                else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
+            }
+        });
     },
 
     closeModal() {
         const o = document.getElementById('modal-overlay');
         o.classList.remove('visible');
         setTimeout(() => { o.classList.add('hidden'); o.innerHTML = ''; }, 200);
+        if (this._modalTriggerEl && typeof this._modalTriggerEl.focus === 'function') this._modalTriggerEl.focus();
+        this._modalTriggerEl = null;
     },
 
     // Generic destructive-action confirmation — replaces window.confirm()
@@ -44,30 +115,72 @@ const UI = {
             `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-danger" onclick="UI.${cbName}()">${confirmLabel}</button>`);
     },
 
+    // Returns [x, y] to anchor a context menu at, from a click/contextmenu
+    // event — falls back to the triggering element's own position when the
+    // event was a keyboard-activated synthetic click (clientX/clientY are
+    // both 0 there), so the menu opens near the button that opened it
+    // instead of the page's top-left corner.
+    eventPos(e) {
+        if (e.clientX || e.clientY) return [e.clientX, e.clientY];
+        const el = e.currentTarget || e.target;
+        if (el && el.getBoundingClientRect) {
+            const r = el.getBoundingClientRect();
+            return [r.left, r.bottom];
+        }
+        return [0, 0];
+    },
+
+    _ctxMenuTriggerEl: null,
     showContextMenu(x, y, items) {
         const m = document.getElementById('context-menu');
         let html = '';
         for (const item of items) {
-            if (item.divider) { html += '<div class="context-menu-divider"></div>'; continue; }
-            html += `<div class="context-menu-item${item.danger ? ' danger' : ''}" data-action="${item.action}">${item.icon || ''} ${this.esc(item.label)}</div>`;
+            if (item.divider) { html += '<div class="context-menu-divider" role="separator"></div>'; continue; }
+            html += `<div class="context-menu-item${item.danger ? ' danger' : ''}" role="menuitem" tabindex="-1" data-action="${item.action}">${item.icon || ''} ${this.esc(item.label)}</div>`;
         }
+        m.setAttribute('role', 'menu');
         m.innerHTML = html;
         m.style.left = Math.min(x, innerWidth - 180) + 'px';
         m.style.top = Math.min(y, innerHeight - 220) + 'px';
         m.classList.remove('hidden');
-        m.querySelectorAll('.context-menu-item').forEach(el => {
+        this._ctxMenuTriggerEl = document.activeElement;
+        const entries = m.querySelectorAll('.context-menu-item');
+        entries.forEach(el => {
             el.addEventListener('click', () => {
                 const itm = items.find(i => i.action === el.dataset.action);
                 if (itm?.handler) itm.handler();
                 this.hideContextMenu();
             });
         });
+        entries[0]?.focus();
+        this._bindContextMenuKeydown();
     },
 
-    hideContextMenu() { document.getElementById('context-menu').classList.add('hidden'); },
+    _ctxMenuKeydownBound: false,
+    _bindContextMenuKeydown() {
+        if (this._ctxMenuKeydownBound) return;
+        this._ctxMenuKeydownBound = true;
+        document.addEventListener('keydown', ev => {
+            const m = document.getElementById('context-menu');
+            if (m.classList.contains('hidden')) return;
+            const entries = Array.from(m.querySelectorAll('.context-menu-item'));
+            if (!entries.length) return;
+            const idx = entries.indexOf(document.activeElement);
+            if (ev.key === 'Escape') { ev.preventDefault(); this.hideContextMenu(); }
+            else if (ev.key === 'ArrowDown') { ev.preventDefault(); (entries[idx + 1] || entries[0]).focus(); }
+            else if (ev.key === 'ArrowUp') { ev.preventDefault(); (entries[idx - 1] || entries[entries.length - 1]).focus(); }
+            else if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); document.activeElement?.click(); }
+        });
+    },
+
+    hideContextMenu() {
+        document.getElementById('context-menu').classList.add('hidden');
+        if (this._ctxMenuTriggerEl && typeof this._ctxMenuTriggerEl.focus === 'function') this._ctxMenuTriggerEl.focus();
+        this._ctxMenuTriggerEl = null;
+    },
 
     passwordField(id, placeholder) {
-        return `<div class="pw-field"><input type="password" id="${id}" class="form-control" placeholder="${this.esc(placeholder || '')}"><button type="button" class="pw-toggle" onclick="UI.togglePw('${id}')" tabindex="-1">👁</button></div>`;
+        return `<div class="pw-field"><input type="password" id="${id}" class="form-control" placeholder="${this.esc(placeholder || '')}"><button type="button" class="pw-toggle" onclick="UI.togglePw('${id}')" aria-label="${this.esc(I18N.t('auth.toggle_password_visibility'))}">👁</button></div>`;
     },
 
     togglePw(id) {
@@ -118,6 +231,28 @@ const UI = {
         span.className = img.className;
         span.textContent = img.alt || '?';
         img.replaceWith(span);
+    },
+
+    // Runs worker(item) for every item in `items`, at most `limit` at once —
+    // used by bulk actions (move/delete/share many files) so a large
+    // selection fires several requests in flight instead of awaiting them
+    // one at a time, while still bounding how many the server sees
+    // simultaneously (same idea as Uploader.CONCURRENCY for upload parts).
+    // Returns [{item, error}, ...] for every item whose worker call threw —
+    // one failure never stops the rest of the batch from running, matching
+    // the existing per-item try/catch loops this replaces.
+    async runPooled(items, limit, worker) {
+        const errors = [];
+        let cursor = 0;
+        const runners = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+            while (cursor < items.length) {
+                const item = items[cursor++];
+                try { await worker(item); }
+                catch (error) { errors.push({ item, error }); }
+            }
+        });
+        await Promise.all(runners);
+        return errors;
     },
 
     // Flattens a scope's folder list (parent_id links) into a depth-ordered
@@ -191,26 +326,23 @@ const UI = {
     fileIcon(name, isFolder) {
         if (isFolder) return '📁';
         const ext = name.split('.').pop().toLowerCase();
-        const map = { pdf:'📄',doc:'📝',docx:'📝',txt:'📃',odt:'📝',xls:'📊',xlsx:'📊',ods:'📊',csv:'📊',ppt:'📽',pptx:'📽',odp:'📽',jpg:'🖼',jpeg:'🖼',png:'🖼',gif:'🖼',webp:'🖼',svg:'🖼',mp3:'🎵',wav:'🎵',mp4:'🎬',avi:'🎬',mkv:'🎬',zip:'📦',rar:'📦','7z':'📦' };
-        return map[ext] || '📄';
+        return EXT_ICON_MAP[ext] || '📄';
     },
 
     fileIconClass(name, isFolder) {
         if (isFolder) return 'folder';
         const ext = name.split('.').pop().toLowerCase();
-        if (['doc','docx','odt','txt','pdf','ppt','pptx','odp','xls','xlsx','ods','csv'].includes(ext)) return 'document';
-        if (['jpg','jpeg','png','gif','webp','svg'].includes(ext)) return 'image';
+        if (EXT_DOCUMENT.includes(ext)) return 'document';
+        if (EXT_IMAGE.includes(ext)) return 'image';
         return 'other';
     },
 
     isCollaboraEditable(name) {
-        const ext = name.split('.').pop().toLowerCase();
-        return ['doc','docx','odt','xls','xlsx','ods','ppt','pptx','odp','csv'].includes(ext);
+        return EXT_COLLABORA_EDIT.includes(name.split('.').pop().toLowerCase());
     },
 
     isCollaboraViewable(name) {
-        const ext = name.split('.').pop().toLowerCase();
-        return ['doc','docx','odt','xls','xlsx','ods','ppt','pptx','odp','pdf','csv'].includes(ext);
+        return EXT_COLLABORA_VIEW.includes(name.split('.').pop().toLowerCase());
     },
 
     isMediaPreviewable(name) {
@@ -218,29 +350,18 @@ const UI = {
         return this.isImage(ext) || this.isAudio(ext) || this.isVideo(ext) || this.isText(ext);
     },
 
-    isImage(ext) {
-        return ['jpg','jpeg','png','gif','webp','svg','bmp','ico','tiff','tif'].includes(ext);
-    },
+    isImage(ext) { return EXT_IMAGE.includes(ext); },
 
     // Formats the server can actually decode and downscale into a cached
     // preview (see isThumbnailableImage in internal/api/files.go) — must be
     // kept in sync with that Go-side allowlist.
-    isThumbnailable(ext) {
-        return ['jpg','jpeg','png','gif'].includes(ext);
-    },
+    isThumbnailable(ext) { return EXT_THUMBNAILABLE.includes(ext); },
 
-    isAudio(ext) {
-        return ['mp3','wav','ogg','flac','aac','m4a','wma','opus'].includes(ext);
-    },
+    isAudio(ext) { return EXT_AUDIO.includes(ext); },
 
-    isVideo(ext) {
-        return ['mp4','webm','ogg','mov','avi','mkv','wmv','flv','m4v'].includes(ext);
-    },
+    isVideo(ext) { return EXT_VIDEO.includes(ext); },
 
-    isText(ext) {
-        return ['txt','log','md','json','xml','yaml','yml','ini','cfg','conf','sh','bat','ps1',
-                'py','js','ts','go','java','c','cpp','h','hpp','css','html','htm','sql','env','toml'].includes(ext);
-    },
+    isText(ext) { return EXT_TEXT.includes(ext); },
 
     mediaType(name) {
         const ext = name.split('.').pop().toLowerCase();

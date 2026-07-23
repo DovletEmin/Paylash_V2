@@ -118,30 +118,29 @@ func (d *DB) ListFiles(ownerID int, projectID *int, scope string, folderID *int,
 	return files, rows.Err()
 }
 
-// ReassignNonPersonalFiles moves ownership of every common/project-scope
-// file from fromUserID to toUserID. Used before deleting a user: their
-// contribution to shared/project work should survive them (files.owner_id
-// is ON DELETE CASCADE), only their private personal-scope files should not.
-func (d *DB) ReassignNonPersonalFiles(fromUserID, toUserID int) error {
-	_, err := d.Exec(
-		`UPDATE files SET owner_id = $2 WHERE owner_id = $1 AND scope != 'personal'`,
-		fromUserID, toUserID,
-	)
-	return err
-}
-
-// ReassignNonPersonalFolders is ReassignNonPersonalFiles' counterpart for
-// folders — just as necessary, and for a sharper reason: folders.parent_id
-// is ALSO ON DELETE CASCADE, so leaving a common/project folder's owner_id
-// cascading on user delete wouldn't just lose that one employee's own
-// folder, it would take every subfolder nested under it with it — created
-// by anyone, not just the deleted user.
-func (d *DB) ReassignNonPersonalFolders(fromUserID, toUserID int) error {
-	_, err := d.Exec(
-		`UPDATE folders SET owner_id = $2 WHERE owner_id = $1 AND scope != 'personal'`,
-		fromUserID, toUserID,
-	)
-	return err
+// ReassignNonPersonalContent moves ownership of every common/project-scope
+// file AND folder from fromUserID to toUserID, in one transaction. Used
+// before deleting a user: their contribution to shared/project work should
+// survive them (files.owner_id/folders.owner_id are both ON DELETE CASCADE),
+// only their private personal-scope files/folders should not. Folders in
+// particular need this covered atomically with files — folders.parent_id is
+// ALSO ON DELETE CASCADE, so a crash between two separate statements could
+// leave a folder still cascading toward deletion (taking every subtree
+// nested under it, created by anyone, not just this user) while its files
+// were already safely reassigned, or vice versa.
+func (d *DB) ReassignNonPersonalContent(fromUserID, toUserID int) error {
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE files SET owner_id = $2 WHERE owner_id = $1 AND scope != 'personal'`, fromUserID, toUserID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE folders SET owner_id = $2 WHERE owner_id = $1 AND scope != 'personal'`, fromUserID, toUserID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (d *DB) RenameFile(id int, name string) error {

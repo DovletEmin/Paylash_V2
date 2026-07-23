@@ -9,9 +9,17 @@
 
 	header {
 		X-Content-Type-Options nosniff
-		X-XSS-Protection "1; mode=block"
 		Referrer-Policy strict-origin-when-cross-origin
 		X-Frame-Options SAMEORIGIN
+		# Defense-in-depth: no script/style/image/media/frame may load from any
+		# third-party origin (blocks the exact "external CDN" pattern the removed
+		# Google Fonts dependency used, and a large class of exfiltration/backdoor
+		# payloads that rely on fetching a remote resource). 'unsafe-inline' stays
+		# on script-src/style-src because this frontend is built with inline
+		# onclick="..." handlers and inline style="..." throughout (no build step,
+		# no framework) — a real script-src without it would need rewriting every
+		# handler to addEventListener first, which is its own separate project.
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self'; connect-src 'self'; frame-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'"
 	}
 
 	# Collabora — static assets, WOPI discovery, WebSocket/API.

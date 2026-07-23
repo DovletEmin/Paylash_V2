@@ -82,7 +82,6 @@ const FilesPage = {
 
     async init() { await this.loadFiles(); this.initDragDrop(); },
 
-    _dragInited: false,
     async loadFiles() {
         const c = document.getElementById('files-content');
         if (!c) return;
@@ -291,19 +290,22 @@ const FilesPage = {
         } catch (e) { UI.toast(e.message, 'error'); }
     },
 
+    // BULK_CONCURRENCY caps how many move/delete/share requests for a
+    // multi-select batch are ever in flight at once — high enough that a
+    // 50-item selection doesn't wait on 50 sequential round-trips, low
+    // enough not to hammer the server with one request per item at once.
+    BULK_CONCURRENCY: 4,
+
     async doBulkMove() {
         const val = document.getElementById('move-target').value;
         const targetId = val ? parseInt(val) : null;
         const items = this.selectedItems();
-        const errors = [];
-        for (const item of items) {
-            try {
-                if (item.isFolder) await API.folders.move(item.id, targetId);
-                else await API.files.move(item.id, targetId);
-            } catch (e) { errors.push(`${item.name}: ${e.message}`); }
-        }
+        const failures = await UI.runPooled(items, this.BULK_CONCURRENCY, async item => {
+            if (item.isFolder) await API.folders.move(item.id, targetId);
+            else await API.files.move(item.id, targetId);
+        });
         UI.closeModal();
-        if (errors.length) UI.toast(I18N.t('shares.some_errors', { errors: errors.join('; ') }), 'error');
+        if (failures.length) UI.toast(I18N.t('shares.some_errors', { errors: failures.map(f => `${f.item.name}: ${f.error.message}`).join('; ') }), 'error');
         else UI.toast(I18N.t('files.move_done'), 'success');
         this.clearSelection();
         this.loadFiles();
@@ -315,14 +317,11 @@ const FilesPage = {
         UI.confirmAction(I18N.t('files.bulk_delete_title'),
             I18N.t('files.bulk_delete_body', { count: items.length }),
             I18N.t('common.delete'), async () => {
-                const errors = [];
-                for (const item of items) {
-                    try {
-                        if (item.isFolder) await API.folders.delete(item.id);
-                        else await API.files.delete(item.id);
-                    } catch (e) { errors.push(`${item.name}: ${e.message}`); }
-                }
-                if (errors.length) UI.toast(I18N.t('shares.some_errors', { errors: errors.join('; ') }), 'error');
+                const failures = await UI.runPooled(items, this.BULK_CONCURRENCY, async item => {
+                    if (item.isFolder) await API.folders.delete(item.id);
+                    else await API.files.delete(item.id);
+                });
+                if (failures.length) UI.toast(I18N.t('shares.some_errors', { errors: failures.map(f => `${f.item.name}: ${f.error.message}`).join('; ') }), 'error');
                 else UI.toast(I18N.t('files.bulk_delete_done'), 'success');
                 this.clearSelection();
                 this.loadFiles();
@@ -352,7 +351,7 @@ const FilesPage = {
             : !item.isFolder && UI.isImage(ext)
             ? `<img class="file-card-thumb" src="/api/files/${item.id}/download" loading="lazy" alt="" onerror="FilesPage.thumbError(this)">`
             : `<div class="file-card-icon ${cls}">${UI.fileIcon(item.name, item.isFolder)}</div>`;
-        return `<div class="file-card${isSelected ? ' selected' : ''}" ondblclick="${dbl}" oncontextmenu="FilesPage.showMenu(event,${itemJson})">
+        return `<div class="file-card${isSelected ? ' selected' : ''}" tabindex="0" role="button" aria-label="${UI.esc(item.name)}" ondblclick="${dbl}" oncontextmenu="FilesPage.showMenu(event,${itemJson})" onkeydown="FilesPage.onCardKeydown(event,${itemJson})">
             <label class="file-card-select" onclick="event.stopPropagation()" ondblclick="event.stopPropagation()">
                 <input type="checkbox" ${isSelected ? 'checked' : ''} onchange="FilesPage.toggleSelect('${key}',event)" aria-label="${I18N.t('files.select_item')}">
             </label>
@@ -365,6 +364,28 @@ const FilesPage = {
     // Falls back to the generic file icon if a thumbnail fails to load
     // (e.g. the image was deleted between listing and rendering).
     thumbError(img) { img.outerHTML = '<div class="file-card-icon image">🖼</div>'; },
+
+    // Grid cards are focusable (tabindex="0", see gridCard) but previously
+    // had no keyboard interaction at all — a mouse was the only way to open,
+    // select, or reach the context menu for anything in grid view. Enter
+    // opens (same as a double-click), Space toggles selection, and the
+    // "ContextMenu" key / Shift+F10 opens the same menu a right-click gets.
+    // Ignored when the key came from an inner focusable control (the
+    // checkbox) so this doesn't double-handle keys that element already owns.
+    onCardKeydown(ev, item) {
+        if (ev.target !== ev.currentTarget) return;
+        if (ev.key === 'Enter') {
+            ev.preventDefault();
+            if (item.isFolder) this.goToFolder(item.id);
+            else UI.openFile(item.id, item.name, item.size_bytes || 0);
+        } else if (ev.key === ' ') {
+            ev.preventDefault();
+            this.toggleSelect(this.selectionKey(item));
+        } else if (ev.key === 'ContextMenu' || (ev.shiftKey && ev.key === 'F10')) {
+            ev.preventDefault();
+            this.showMenu(ev, item);
+        }
+    },
 
     listRow(item) {
         const icon = UI.fileIcon(item.name, item.isFolder);
@@ -413,7 +434,8 @@ const FilesPage = {
                 items.push({ action: 'delete', label: I18N.t('files.action_delete'), icon: '🗑', danger: true, handler: () => this.deleteFile(item) });
             }
         }
-        UI.showContextMenu(e.clientX, e.clientY, items);
+        const [x, y] = UI.eventPos(e);
+        UI.showContextMenu(x, y, items);
     },
 
     async showVersionsModal(item) {
@@ -429,7 +451,7 @@ const FilesPage = {
                             <div class="text-muted" style="font-size:.78rem">${UI.formatBytes(v.size_bytes)}${v.is_latest ? '' : ' · ' + new Date(v.last_modified).toLocaleString(I18N.dateLocale())}</div>
                         </div>
                         <div style="display:flex;gap:6px">
-                            <button class="btn btn-sm btn-ghost" onclick="API.files.downloadVersion(${item.id},'${v.version_id}')">${UI.icons.download}</button>
+                            <button class="btn btn-sm btn-ghost" onclick="API.files.downloadVersion(${item.id},'${v.version_id}')" title="${I18N.t('files.action_download')}" aria-label="${I18N.t('files.action_download')}">${UI.icons.download}</button>
                             ${!v.is_latest ? `<button class="btn btn-sm btn-ghost" onclick="FilesPage.restoreVersion(${item.id},'${v.version_id}')">${I18N.t('files.version_restore')}</button>` : ''}
                         </div>
                     </div>`).join('')}</div>`;
@@ -454,7 +476,6 @@ const FilesPage = {
         this.currentProjectName = s === 'project' ? (projectName || '') : '';
         this.currentProjectPermission = s === 'project' ? (permission || 'view') : null;
         this.currentFolder = null;
-        this._dragInited = false;
         App.renderPage('files');
     },
     setView(m) { this.viewMode = m; this.renderFiles(); },
@@ -556,13 +577,19 @@ const FilesPage = {
         document.getElementById('folder-input').value = '';
     },
 
+    // Guarded per-DOM-node (pg.dataset.dragInited), not a page-singleton
+    // flag: renderShell/renderPage swap #page-content's innerHTML on every
+    // navigation, so a fresh .files-page element exists each time this runs.
+    // A singleton flag used to survive that swap (only setScope() reset it),
+    // so navigating Files -> Shared/Trash/Admin -> Files via the plain
+    // sidebar link left the new element with no listeners at all — drag-and-
+    // drop silently stopped working for the rest of the session.
     initDragDrop() {
-        if (this._dragInited) return;
         if (!this.canManage()) return;
         const pg = document.querySelector('.files-page');
         const ov = document.getElementById('drop-overlay');
-        if (!pg || !ov) return;
-        this._dragInited = true;
+        if (!pg || !ov || pg.dataset.dragInited) return;
+        pg.dataset.dragInited = '1';
         let dragCounter = 0;
         pg.addEventListener('dragenter', ev => { ev.preventDefault(); dragCounter++; ov.classList.remove('hidden'); });
         pg.addEventListener('dragover', ev => { ev.preventDefault(); });
@@ -706,18 +733,18 @@ const FilesPage = {
     },
 
     deleteFile(item) {
-        UI.showModal(I18N.t('files.delete_file_title'),
-            I18N.t('files.delete_file_body', { name: UI.esc(item.name) }),
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-danger" onclick="FilesPage.doDeleteFile(${item.id})">${I18N.t('common.delete')}</button>`);
+        UI.confirmAction(I18N.t('files.delete_file_title'), I18N.t('files.delete_file_body', { name: UI.esc(item.name) }), I18N.t('common.delete'), async () => {
+            try { await API.files.delete(item.id); UI.toast(I18N.t('files.delete_file_done'), 'success'); this.loadFiles(); App.loadStorageUsage(); }
+            catch (e) { UI.toast(e.message, 'error'); }
+        });
     },
-    async doDeleteFile(id) { try { await API.files.delete(id); UI.closeModal(); UI.toast(I18N.t('files.delete_file_done'), 'success'); this.loadFiles(); App.loadStorageUsage(); } catch (e) { UI.toast(e.message, 'error'); } },
 
     deleteFolder(item) {
-        UI.showModal(I18N.t('files.delete_folder_title'),
-            I18N.t('files.delete_folder_body', { name: UI.esc(item.name) }),
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-danger" onclick="FilesPage.doDeleteFolder(${item.id})">${I18N.t('common.delete')}</button>`);
+        UI.confirmAction(I18N.t('files.delete_folder_title'), I18N.t('files.delete_folder_body', { name: UI.esc(item.name) }), I18N.t('common.delete'), async () => {
+            try { await API.folders.delete(item.id); UI.toast(I18N.t('files.delete_folder_done'), 'success'); this.loadFiles(); }
+            catch (e) { UI.toast(e.message, 'error'); }
+        });
     },
-    async doDeleteFolder(id) { try { await API.folders.delete(id); UI.closeModal(); UI.toast(I18N.t('files.delete_folder_done'), 'success'); this.loadFiles(); } catch (e) { UI.toast(e.message, 'error'); } },
 
     showNewFolderModal() {
         UI.showModal(I18N.t('files.new_folder_title'), `<div class="form-group"><label>${I18N.t('files.new_folder_name_label')}</label><input type="text" id="new-folder-name" class="form-control" placeholder="${I18N.t('files.new_folder_name_placeholder')}"></div>`,

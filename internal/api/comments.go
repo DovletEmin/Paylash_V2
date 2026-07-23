@@ -54,6 +54,13 @@ func (h *Handler) CreateFileComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userKey := strconv.Itoa(user.ID)
+	if h.commentLimiter.blocked(userKey) {
+		writeError(w, http.StatusTooManyRequests, "köp synanyşyk boldy, birazdan gaýtadan synanyşyň")
+		return
+	}
+	h.commentLimiter.record(userKey)
+
 	var req struct {
 		Body string   `json:"body"`
 		XPct *float64 `json:"x_pct"`

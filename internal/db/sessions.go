@@ -37,6 +37,24 @@ func (d *DB) DeleteSession(token string) error {
 	return err
 }
 
+// DeleteOtherSessions removes every session belonging to userID except
+// keepToken (the session making the request) — used after a password change
+// so a stolen/shared session doesn't quietly survive the very fix meant to
+// kick it out.
+func (d *DB) DeleteOtherSessions(userID int, keepToken string) error {
+	_, err := d.Exec(`DELETE FROM sessions WHERE user_id = $1 AND id != $2`, userID, keepToken)
+	return err
+}
+
+// DeleteAllSessionsForUser removes every session belonging to userID,
+// including the caller's own if they happen to share one — used when an
+// admin resets someone else's password, where there's no "current session"
+// to exempt.
+func (d *DB) DeleteAllSessionsForUser(userID int) error {
+	_, err := d.Exec(`DELETE FROM sessions WHERE user_id = $1`, userID)
+	return err
+}
+
 func (d *DB) CleanExpiredSessions() error {
 	_, err := d.Exec(`DELETE FROM sessions WHERE expires_at < NOW()`)
 	return err

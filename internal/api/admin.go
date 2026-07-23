@@ -11,6 +11,7 @@ import (
 	"paylash/internal/storage"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/xuri/excelize/v2"
 )
@@ -39,6 +40,40 @@ func (h *Handler) AdminAuditLog(w http.ResponseWriter, r *http.Request) {
 		entries = []models.AuditLogEntry{}
 	}
 	writeJSON(w, http.StatusOK, entries)
+}
+
+// AdminExportAuditLog streams the audit log as a CSV download — same
+// optional ?action=/?actor_id= filters as AdminAuditLog, but with no page
+// limit, since a full export is the point of downloading it in the first
+// place. Written straight to the response as rows arrive (StreamAuditLog),
+// not buffered into one big JSON-then-CSV conversion first.
+func (h *Handler) AdminExportAuditLog(w http.ResponseWriter, r *http.Request) {
+	action := r.URL.Query().Get("action")
+	actorID, _ := strconv.Atoi(r.URL.Query().Get("actor_id"))
+
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="paylash-audit-log.csv"`)
+
+	cw := csv.NewWriter(w)
+	cw.Write([]string{"id", "created_at", "actor_id", "actor_name", "action", "target_type", "target_id", "target_name", "details"})
+
+	err := h.db.StreamAuditLog(action, actorID, func(e models.AuditLogEntry) error {
+		actorIDStr, targetIDStr := "", ""
+		if e.ActorID != nil {
+			actorIDStr = strconv.Itoa(*e.ActorID)
+		}
+		if e.TargetID != nil {
+			targetIDStr = strconv.Itoa(*e.TargetID)
+		}
+		return cw.Write([]string{
+			strconv.Itoa(e.ID), e.CreatedAt.Format(time.RFC3339), actorIDStr, e.ActorName,
+			e.Action, e.TargetType, targetIDStr, e.TargetName, string(e.Details),
+		})
+	})
+	if err != nil {
+		log.Printf("export audit log: %v", err)
+	}
+	cw.Flush()
 }
 
 // Admin Dashboard
@@ -267,7 +302,7 @@ func (h *Handler) AdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	var hash string
 	if req.Password != "" {
-		if len(req.Password) < 6 {
+		if !authutil.ValidPassword(req.Password) {
 			writeError(w, http.StatusBadRequest, "parol azyndan 6 simwol bolmaly")
 			return
 		}
@@ -281,6 +316,14 @@ func (h *Handler) AdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 	if err := h.db.UpdateUser(id, req.Role, req.QuotaBytes, req.DisplayName, hash); err != nil {
 		writeError(w, http.StatusInternalServerError, "üýtgedip bolmady")
 		return
+	}
+	// An admin-set password means the account may have just been recovered
+	// from a compromise (or handed to a different employee) — every existing
+	// session for it should end, not just the ones after next expiry.
+	if req.Password != "" {
+		if err := h.db.DeleteAllSessionsForUser(id); err != nil {
+			log.Printf("invalidate sessions after admin password reset for user %d: %v", id, err)
+		}
 	}
 	h.logAction(r, "user.update", "user", id, req.DisplayName, map[string]any{
 		"role": req.Role, "quota_bytes": req.QuotaBytes, "password_changed": req.Password != "",
@@ -307,17 +350,11 @@ func (h *Handler) AdminDeleteUser(w http.ResponseWriter, r *http.Request) {
 	// leaving, so ownership moves to the admin performing the deletion
 	// instead of being cascade-deleted along with the rest of the user's
 	// rows. Personal-scope files/folders stay theirs alone and are removed
-	// below.
-	if err := h.db.ReassignNonPersonalFiles(id, actor.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, "pozup bolmady")
-		return
-	}
-	if err := h.db.ReassignNonPersonalFolders(id, actor.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, "pozup bolmady")
-		return
-	}
+	// below. Reassignment + the user delete itself happen in one
+	// transaction, so a crash mid-operation can't leave the account
+	// half-deleted.
 	h.abortUserUploadSessions(r.Context(), id)
-	if err := h.db.DeleteUser(id); err != nil {
+	if err := h.db.ReassignAndDeleteUser(id, actor.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "pozup bolmady")
 		return
 	}
@@ -338,11 +375,7 @@ func (h *Handler) AdminDeleteAllUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, id := range ids {
-		if err := h.db.ReassignNonPersonalFiles(id, actor.ID); err != nil {
-			writeError(w, http.StatusInternalServerError, "pozup bolmady")
-			return
-		}
-		if err := h.db.ReassignNonPersonalFolders(id, actor.ID); err != nil {
+		if err := h.db.ReassignNonPersonalContent(id, actor.ID); err != nil {
 			writeError(w, http.StatusInternalServerError, "pozup bolmady")
 			return
 		}
@@ -426,11 +459,11 @@ func (h *Handler) AdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Username = strings.TrimSpace(req.Username)
-	if len(req.Username) < 3 {
+	if !authutil.ValidUsername(req.Username) {
 		writeError(w, http.StatusBadRequest, "ulanyjy ady azyndan 3 harp bolmaly")
 		return
 	}
-	if len(req.Password) < 6 {
+	if !authutil.ValidPassword(req.Password) {
 		writeError(w, http.StatusBadRequest, "parol azyndan 6 simwol bolmaly")
 		return
 	}
@@ -567,11 +600,11 @@ func (h *Handler) AdminImportUsers(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		if len(username) < 3 {
+		if !authutil.ValidUsername(username) {
 			results = append(results, importResult{Username: username, Error: "ulanyjy ady azyndan 3 harp"})
 			continue
 		}
-		if len(password) < 6 {
+		if !authutil.ValidPassword(password) {
 			results = append(results, importResult{Username: username, Error: "parol azyndan 6 simwol"})
 			continue
 		}

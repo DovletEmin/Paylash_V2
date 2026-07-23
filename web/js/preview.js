@@ -46,9 +46,8 @@ const PreviewPage = {
     _findSiblings() {
         const lists = [];
         if (typeof FilesPage !== 'undefined' && Array.isArray(FilesPage.files)) lists.push(FilesPage.files);
-        if (typeof AdminPage !== 'undefined') {
-            if (AdminPage._adminProjectFiles && Array.isArray(AdminPage._adminProjectFiles.files)) lists.push(AdminPage._adminProjectFiles.files);
-            if (AdminPage._adminCommonFiles && Array.isArray(AdminPage._adminCommonFiles.files)) lists.push(AdminPage._adminCommonFiles.files);
+        if (typeof AdminPage !== 'undefined' && AdminPage._adminBrowser && Array.isArray(AdminPage._adminBrowser.files)) {
+            lists.push(AdminPage._adminBrowser.files);
         }
         for (const list of lists) {
             if (list.some(f => f.id === this.currentFileId)) {

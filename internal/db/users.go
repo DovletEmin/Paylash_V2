@@ -118,6 +118,29 @@ func (d *DB) DeleteUser(id int) error {
 	return err
 }
 
+// ReassignAndDeleteUser reassigns fromUserID's common/project-scope content
+// to toUserID and then deletes fromUserID, all in one transaction — so a
+// crash mid-operation can never leave the account half-deleted (reassigned
+// but not removed, which would just retry cleanly next time) or, worse,
+// deleted while its shared contribution was still cascading away with it.
+func (d *DB) ReassignAndDeleteUser(fromUserID, toUserID int) error {
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE files SET owner_id = $2 WHERE owner_id = $1 AND scope != 'personal'`, fromUserID, toUserID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE folders SET owner_id = $2 WHERE owner_id = $1 AND scope != 'personal'`, fromUserID, toUserID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM users WHERE id = $1`, fromUserID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // ListNonAdminUserIDs returns the IDs that DeleteAllUsersExceptAdmin would
 // remove — callers use it to clean up per-user MinIO storage beforehand.
 func (d *DB) ListNonAdminUserIDs() ([]int, error) {

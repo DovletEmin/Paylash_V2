@@ -36,6 +36,12 @@ const App = {
             this.user = updated;
             UI.closeModal();
             UI.toast(I18N.t('app.password_changed'), 'success');
+            // Every API call made while must_change_password was still true
+            // 403'd server-side (see AuthMiddleware) — files/projects/storage
+            // usage never actually loaded behind the modal. Re-render now
+            // that the block is lifted so the shell shows real content
+            // instead of whatever error state those failed calls left behind.
+            this.renderPage(this.currentPage);
         } catch (e) { UI.toast(e.message, 'error'); }
     },
 
@@ -265,8 +271,21 @@ const App = {
             <div class="form-group"><label>${I18N.t('auth.fullname_label')}</label><input type="text" id="prof-name" value="${UI.esc(u.full_name)}" class="form-control"></div>
             <hr style="border:none;border-top:1px solid var(--border);margin:12px 0">
             <div class="form-group"><label>${I18N.t('app.old_password_label')}</label>${UI.passwordField('prof-old-pw', I18N.t('app.old_password_placeholder'))}</div>
-            <div class="form-group"><label>${I18N.t('app.new_password_label')}</label>${UI.passwordField('prof-new-pw', I18N.t('auth.password_min_placeholder'))}</div>`,
+            <div class="form-group"><label>${I18N.t('app.new_password_label')}</label>${UI.passwordField('prof-new-pw', I18N.t('auth.password_min_placeholder'))}</div>
+            <hr style="border:none;border-top:1px solid var(--border);margin:12px 0">
+            <button type="button" class="btn btn-ghost btn-sm" style="width:100%" onclick="App.logoutOtherDevices()">${I18N.t('app.logout_others_button')}</button>
+            <p class="text-muted" style="font-size:.72rem;margin-top:4px">${I18N.t('app.logout_others_hint')}</p>`,
             `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="App.saveProfile()">${I18N.t('common.save')}</button>`);
+    },
+
+    logoutOtherDevices() {
+        UI.confirmAction(I18N.t('app.logout_others_confirm_title'), I18N.t('app.logout_others_confirm_body'), I18N.t('app.logout_others_button'), async () => {
+            try {
+                await API.auth.logoutOthers();
+                UI.toast(I18N.t('app.logout_others_done'), 'success');
+                this.showProfileModal();
+            } catch (e) { UI.toast(e.message, 'error'); }
+        });
     },
 
     async uploadAvatar(input) {

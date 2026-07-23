@@ -1,16 +1,21 @@
 package server
 
 import (
+	"context"
 	"embed"
 	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"paylash/internal/api"
 	"paylash/internal/config"
 	"paylash/internal/db"
 	"paylash/internal/storage"
 	"paylash/internal/wopi"
+	"syscall"
+	"time"
 )
 
 type Server struct {
@@ -36,6 +41,11 @@ func (s *Server) routes(webFS embed.FS) {
 	h := api.NewHandler(s.db, s.minio, s.cfg)
 	wopiH := wopi.NewHandler(s.db, s.minio, s.cfg)
 
+	// Health check — no auth, just enough to tell an orchestrator/reverse
+	// proxy the process is up AND can actually reach its database, not just
+	// that the HTTP listener is bound.
+	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
+
 	// Public routes
 	s.mux.HandleFunc("GET /api/public/config", h.PublicConfig)
 	s.mux.HandleFunc("POST /api/auth/register", h.Register)
@@ -46,6 +56,7 @@ func (s *Server) routes(webFS embed.FS) {
 	s.mux.Handle("GET /api/auth/me", auth(http.HandlerFunc(h.Me)))
 	s.mux.Handle("PATCH /api/auth/profile", auth(http.HandlerFunc(h.UpdateProfile)))
 	s.mux.Handle("POST /api/auth/avatar", auth(http.HandlerFunc(h.UploadAvatar)))
+	s.mux.Handle("POST /api/auth/logout-others", auth(http.HandlerFunc(h.LogoutOthers)))
 	s.mux.Handle("GET /api/avatar/{id}", auth(http.HandlerFunc(h.ServeAvatar)))
 
 	// Files
@@ -116,6 +127,7 @@ func (s *Server) routes(webFS embed.FS) {
 	// Admin routes
 	s.mux.Handle("GET /api/admin/dashboard", auth(AdminMiddleware(http.HandlerFunc(h.AdminDashboard))))
 	s.mux.Handle("GET /api/admin/audit-log", auth(AdminMiddleware(http.HandlerFunc(h.AdminAuditLog))))
+	s.mux.Handle("GET /api/admin/audit-log/export", auth(AdminMiddleware(http.HandlerFunc(h.AdminExportAuditLog))))
 	s.mux.Handle("GET /api/admin/projects", auth(AdminMiddleware(http.HandlerFunc(h.AdminListProjects))))
 	s.mux.Handle("POST /api/admin/projects", auth(AdminMiddleware(http.HandlerFunc(h.AdminCreateProject))))
 	s.mux.Handle("PATCH /api/admin/projects/{id}", auth(AdminMiddleware(http.HandlerFunc(h.AdminUpdateProject))))
@@ -162,12 +174,52 @@ func (s *Server) routes(webFS embed.FS) {
 	})
 }
 
+func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	if err := s.db.PingContext(r.Context()); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte(`{"status":"error"}`))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"status":"ok"}`))
+}
+
+// Start blocks until the process receives SIGINT/SIGTERM, then gives
+// in-flight requests (an upload streaming through the app, a Collabora
+// autosave hitting the WOPI PutFile endpoint) up to 15s to finish before the
+// process exits — plain http.ListenAndServe has no such grace period, so a
+// `docker compose stop`/`restart` would otherwise cut those connections dead
+// mid-transfer instead of just refusing new ones.
 func (s *Server) Start() error {
 	addr := fmt.Sprintf(":%d", s.cfg.Port)
 	// The frontend and API are always served same-origin (embedded SPA +
 	// API on this same binary, fronted by Caddy under one hostname) — no
 	// cross-origin CORS headers are needed, so none are sent.
-	handler := LoggingMiddleware(s.mux)
-	log.Printf("Paylash server starting on http://localhost%s", addr)
-	return http.ListenAndServe(addr, handler)
+	httpSrv := &http.Server{Addr: addr, Handler: LoggingMiddleware(s.mux)}
+
+	serveErr := make(chan error, 1)
+	go func() {
+		log.Printf("Paylash server starting on http://localhost%s", addr)
+		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			serveErr <- err
+		}
+	}()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
+	select {
+	case err := <-serveErr:
+		return err
+	case <-stop:
+		log.Println("shutdown signal received, draining in-flight requests...")
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := httpSrv.Shutdown(ctx); err != nil {
+			return fmt.Errorf("graceful shutdown: %w", err)
+		}
+		log.Println("shutdown complete")
+		return nil
+	}
 }

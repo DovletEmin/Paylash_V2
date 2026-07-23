@@ -86,3 +86,54 @@ func (d *DB) ListAuditLog(limit, offset int, action string, actorID int) ([]mode
 	}
 	return entries, rows.Err()
 }
+
+// StreamAuditLog calls fn once per matching entry, newest first — the same
+// optional action/actor filters as ListAuditLog but with no page limit,
+// since a full CSV export is the whole point of calling this. Streaming
+// through a callback instead of returning a slice keeps the export from
+// ever having to hold the entire audit log in memory at once.
+func (d *DB) StreamAuditLog(action string, actorID int, fn func(models.AuditLogEntry) error) error {
+	q := `SELECT id, actor_id, actor_name, action, target_type, target_id, target_name, details, created_at FROM audit_log WHERE 1=1`
+	var args []any
+	n := 0
+	if action != "" {
+		n++
+		q += ` AND action = $` + strconv.Itoa(n)
+		args = append(args, action)
+	}
+	if actorID > 0 {
+		n++
+		q += ` AND actor_id = $` + strconv.Itoa(n)
+		args = append(args, actorID)
+	}
+	q += ` ORDER BY created_at DESC`
+
+	rows, err := d.Query(q, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var e models.AuditLogEntry
+		var actorIDN, targetIDN sql.NullInt64
+		var details []byte
+		if err := rows.Scan(&e.ID, &actorIDN, &e.ActorName, &e.Action, &e.TargetType, &targetIDN, &e.TargetName, &details, &e.CreatedAt); err != nil {
+			return err
+		}
+		if actorIDN.Valid {
+			v := int(actorIDN.Int64)
+			e.ActorID = &v
+		}
+		if targetIDN.Valid {
+			v := int(targetIDN.Int64)
+			e.TargetID = &v
+		}
+		if len(details) > 0 {
+			e.Details = details
+		}
+		if err := fn(e); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}

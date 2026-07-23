@@ -41,6 +41,7 @@ const API = {
             return fetch('/api/auth/avatar', { method: 'POST', body: form, credentials: 'same-origin' })
                 .then(r => r.json().then(d => r.ok ? d : Promise.reject(new Error(d.error || I18N.t('common.error_short')))));
         },
+        logoutOthers() { return API._request('POST', '/api/auth/logout-others'); },
     },
 
     // Projects the current employee can see (personal sidebar)
@@ -77,7 +78,13 @@ const API = {
                 }
                 xhr.onload = () => {
                     if (xhr.status >= 200 && xhr.status < 300) {
-                        resolve(JSON.parse(xhr.responseText));
+                        // A 2xx with a malformed/empty body (proxy hiccup, truncated
+                        // response) must still settle the promise — an unguarded
+                        // JSON.parse throwing inside this event-handler callback
+                        // does NOT become a promise rejection, it just leaves the
+                        // upload hanging on "uploading..." forever.
+                        try { resolve(JSON.parse(xhr.responseText)); }
+                        catch { reject(new Error(I18N.t('common.upload_failed'))); }
                     } else {
                         try { reject(new Error(JSON.parse(xhr.responseText).error)); }
                         catch { reject(new Error(I18N.t('common.upload_failed'))); }
@@ -202,6 +209,7 @@ const API = {
     admin: {
         dashboard() { return API._request('GET', '/api/admin/dashboard'); },
         auditLog(limit) { return API._request('GET', `/api/admin/audit-log${limit ? '?limit=' + limit : ''}`); },
+        auditLogExportURL() { return '/api/admin/audit-log/export'; },
         uploads: {
             list() { return API._request('GET', '/api/admin/uploads'); },
             abort(id) { return API._request('DELETE', `/api/admin/uploads/${id}`); },

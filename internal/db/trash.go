@@ -16,22 +16,28 @@ func (d *DB) SoftDeleteFile(id int) error {
 	return err
 }
 
-// SoftDeleteFilesInFolders marks every file in the given folders as trashed.
-func (d *DB) SoftDeleteFilesInFolders(folderIDs []int) error {
+// SoftDeleteFolderTree marks every file inside folderIDs and every folder in
+// folderIDs as trashed, in one transaction — DeleteFolder walks a whole
+// subtree and needs both halves to land together, or neither: without a
+// transaction, a crash between the two updates could leave files trashed
+// under a folder that itself wasn't (or vice versa), an odd half-deleted
+// state to have to explain in the trash UI later.
+func (d *DB) SoftDeleteFolderTree(folderIDs []int) error {
 	if len(folderIDs) == 0 {
 		return nil
 	}
-	_, err := d.Exec(`UPDATE files SET deleted_at = NOW() WHERE folder_id = ANY($1)`, pq.Array(folderIDs))
-	return err
-}
-
-// SoftDeleteFolders marks every given folder as trashed.
-func (d *DB) SoftDeleteFolders(folderIDs []int) error {
-	if len(folderIDs) == 0 {
-		return nil
+	tx, err := d.Begin()
+	if err != nil {
+		return err
 	}
-	_, err := d.Exec(`UPDATE folders SET deleted_at = NOW() WHERE id = ANY($1)`, pq.Array(folderIDs))
-	return err
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE files SET deleted_at = NOW() WHERE folder_id = ANY($1)`, pq.Array(folderIDs)); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE folders SET deleted_at = NOW() WHERE id = ANY($1)`, pq.Array(folderIDs)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // RestoreFile clears deleted_at, sets its final name/folder (the caller
