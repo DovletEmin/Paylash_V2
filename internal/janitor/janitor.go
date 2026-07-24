@@ -13,9 +13,10 @@ import (
 )
 
 const (
-	trashRetention    = 30 * 24 * time.Hour
-	versionRetention  = 90 * 24 * time.Hour
-	staleUploadCutoff = 24 * time.Hour
+	trashRetention             = 30 * 24 * time.Hour
+	versionRetention           = 90 * 24 * time.Hour
+	staleUploadCutoff          = 24 * time.Hour
+	chatAttachmentOrphanCutoff = 24 * time.Hour
 )
 
 // Run performs an immediate cleanup pass and then repeats it once a day.
@@ -45,6 +46,38 @@ func runOnce(database *db.DB, minioClient *storage.MinioClient) {
 	if err := database.CleanExpiredTokens(); err != nil {
 		log.Printf("janitor: clean expired WOPI tokens: %v", err)
 	}
+	if err := purgeOrphanedChatAttachments(database, minioClient); err != nil {
+		log.Printf("janitor: purge orphaned chat attachments: %v", err)
+	}
+}
+
+// purgeOrphanedChatAttachments removes attachments a user uploaded but never
+// actually sent in a message — otherwise those objects would occupy storage
+// forever with nothing ever referencing them.
+func purgeOrphanedChatAttachments(database *db.DB, minioClient *storage.MinioClient) error {
+	ctx := context.Background()
+	cutoff := time.Now().Add(-chatAttachmentOrphanCutoff)
+
+	attachments, err := database.ListOrphanedChatAttachments(cutoff)
+	if err != nil {
+		return err
+	}
+	purged := 0
+	for _, a := range attachments {
+		if err := minioClient.Delete(ctx, storage.ChatAttachmentsBucket, a.MinioKey); err != nil {
+			log.Printf("janitor: delete orphaned chat attachment object %s: %v", a.MinioKey, err)
+			continue
+		}
+		if err := database.DeleteChatAttachment(a.ID); err != nil {
+			log.Printf("janitor: delete orphaned chat attachment row %d: %v", a.ID, err)
+			continue
+		}
+		purged++
+	}
+	if purged > 0 {
+		log.Printf("janitor: purged %d orphaned chat attachment(s)", purged)
+	}
+	return nil
 }
 
 // abortStaleUploads cancels multipart uploads nobody has touched (via

@@ -28,6 +28,17 @@ const (
 	// burn storage/CPU (every upload re-encodes and re-checks quota).
 	avatarMaxAttempts = 10
 	avatarWindow      = time.Hour
+
+	// messageMaxAttempts is generous like commentMaxAttempts — an active
+	// conversation can be rapid-fire; this brakes scripted spam, not typing.
+	messageMaxAttempts = 60
+	messageWindow      = time.Minute
+
+	// chatAttachmentMaxAttempts mirrors avatarMaxAttempts' reasoning: a cap
+	// on storage/CPU abuse via repeated uploads, not something a real
+	// conversation legitimately brushes up against.
+	chatAttachmentMaxAttempts = 20
+	chatAttachmentWindow      = 10 * time.Minute
 )
 
 // keyedLimiter throttles repeated actions per key (username, IP, user id...)

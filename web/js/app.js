@@ -47,7 +47,16 @@ const App = {
 
     async checkAuth() {
         try { this.user = await API.auth.me(); } catch { this.user = null; }
-        if (this.user) this.startNotifPolling(); else this.stopNotifPolling();
+        if (this.user) {
+            this.startNotifPolling();
+            this.startChatUnreadPolling();
+            this._bindChatSocketListeners();
+            ChatSocket.connect();
+        } else {
+            this.stopNotifPolling();
+            this.stopChatUnreadPolling();
+            ChatSocket.disconnect();
+        }
     },
 
     /* ── Shared-file notifications ──
@@ -86,6 +95,63 @@ const App = {
         if (!el) return;
         el.textContent = count > 99 ? '99+' : String(count);
         el.classList.toggle('hidden', count <= 0);
+    },
+
+    /* ── Chat ──
+       Real-time delivery comes from ChatSocket (see chatSocket.js), but this
+       slow fallback poll is kept alongside it — same resilience reasoning
+       as the share-notification poll above — for the rare stuck-reconnect
+       case, and because it's also how the badge gets its very first value
+       before any WS event has arrived. */
+    _lastChatUnread: 0,
+    _chatUnreadPollHandle: null,
+    _chatSocketListenersBound: false,
+
+    startChatUnreadPolling() {
+        if (this._chatUnreadPollHandle) return;
+        this.checkChatUnread();
+        this._chatUnreadPollHandle = setInterval(() => this.checkChatUnread(), 60000);
+    },
+
+    stopChatUnreadPolling() {
+        if (this._chatUnreadPollHandle) { clearInterval(this._chatUnreadPollHandle); this._chatUnreadPollHandle = null; }
+        this._lastChatUnread = 0;
+    },
+
+    async checkChatUnread() {
+        try {
+            const { count } = await API.chat.unreadCount();
+            this._lastChatUnread = count;
+            this.renderChatBadge(count);
+        } catch { /* transient network hiccup — next poll/WS event tries again */ }
+    },
+
+    renderChatBadge(count) {
+        const el = document.getElementById('chat-notif-badge');
+        if (!el) return;
+        el.textContent = count > 99 ? '99+' : String(count);
+        el.classList.toggle('hidden', count <= 0);
+    },
+
+    // Bound once for the whole session (ChatSocket itself persists across
+    // page navigation, unlike a page object) — refreshes the badge on every
+    // relevant event and fires a desktop notification when the message
+    // isn't from the viewer themselves and isn't currently on-screen.
+    _bindChatSocketListeners() {
+        if (this._chatSocketListenersBound) return;
+        this._chatSocketListenersBound = true;
+        ChatSocket.on('message.new', (data) => {
+            if (App.user && data.message && data.message.sender_id === App.user.id) return;
+            App.checkChatUnread();
+            const viewingThisConv = App.currentPage === 'chat' && typeof ChatPage !== 'undefined' && ChatPage._activeId === data.conversation_id;
+            if (!viewingThisConv || document.hidden) {
+                const title = data.message ? (data.message.sender_name || I18N.t('chat.title')) : I18N.t('chat.title');
+                const body = data.message && data.message.body ? data.message.body : I18N.t('chat.attachment_notification');
+                ChatSocket.notify(title, body);
+            }
+        });
+        ChatSocket.on('message.deleted', () => App.checkChatUnread());
+        ChatSocket.on('conversation.updated', () => App.checkChatUnread());
     },
 
     async loadProjects() {
@@ -138,6 +204,7 @@ const App = {
         this.initPage(page);
         this.loadStorageUsage();
         this.renderNotifBadge(this._lastNotifCount);
+        this.renderChatBadge(this._lastChatUnread);
     },
 
     renderShell(page) {
@@ -167,6 +234,10 @@ const App = {
                     <a class="nav-item ${page === 'shared' ? 'active' : ''}" onclick="App.navigate('shared')">
                         ${UI.icons.share} <span>${I18N.t('app.nav_shared')}</span>
                         <span class="nav-badge hidden" id="shared-notif-badge"></span>
+                    </a>
+                    <a class="nav-item ${page === 'chat' ? 'active' : ''}" onclick="App.navigate('chat')">
+                        💬 <span>${I18N.t('app.nav_chat')}</span>
+                        <span class="nav-badge hidden" id="chat-notif-badge"></span>
                     </a>
                     <a class="nav-item ${page === 'trash' ? 'active' : ''}" onclick="App.navigate('trash')">
                         ${UI.icons.trash} <span>${I18N.t('app.nav_trash')}</span>
@@ -216,6 +287,7 @@ const App = {
         switch (page) {
             case 'files':  c.innerHTML = FilesPage.render(); FilesPage.init(); break;
             case 'shared': c.innerHTML = SharesPage.renderSharedWithMe(); SharesPage.initSharedWithMe(); break;
+            case 'chat':   c.innerHTML = ChatPage.render(); ChatPage.init(); break;
             case 'trash':  c.innerHTML = TrashPage.render(); TrashPage.init(); break;
             case 'admin':  c.innerHTML = AdminPage.render(); AdminPage.init(); break;
             default:       c.innerHTML = `<div class="empty-state"><p>${I18N.t('app.page_not_found')}</p></div>`;
@@ -226,6 +298,8 @@ const App = {
         try { await API.auth.logout(); } catch {}
         this.user = null;
         this.stopNotifPolling();
+        this.stopChatUnreadPolling();
+        ChatSocket.disconnect();
         this.navigate('login', true);
         UI.toast(I18N.t('app.logged_out'), 'info');
     },

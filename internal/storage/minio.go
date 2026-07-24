@@ -328,6 +328,13 @@ func ProjectBucket(projectID int) string {
 	return fmt.Sprintf("project-%d", projectID)
 }
 
+// ChatAttachmentsBucket holds files attached to chat messages, across every
+// conversation — same shape as ThumbnailBucket: one shared bucket, never
+// listed or exposed directly, only ever served through an authenticated
+// endpoint that re-checks the requester is a participant of the owning
+// conversation.
+const ChatAttachmentsBucket = "chat-attachments"
+
 // ThumbnailBucket holds generated preview JPEGs for every scope, keyed by
 // ThumbnailKey — a single shared bucket rather than one per scope, since
 // thumbnails are only ever served through the authenticated /thumbnail

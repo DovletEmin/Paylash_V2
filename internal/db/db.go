@@ -192,6 +192,69 @@ func (d *DB) Migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_files_name_trgm ON files USING GIN (name gin_trgm_ops)`,
 		`CREATE INDEX IF NOT EXISTS idx_users_username_trgm ON users USING GIN (username gin_trgm_ops)`,
 		`CREATE INDEX IF NOT EXISTS idx_users_display_name_trgm ON users USING GIN (display_name gin_trgm_ops)`,
+
+		// Chat: direct + group conversations. direct_user_low/high (always
+		// min/max of the two participant ids) let a direct conversation be
+		// found-or-created race-free with one INSERT ... ON CONFLICT rather
+		// than a query-then-create that two people opening a DM at the same
+		// instant could duplicate.
+		`CREATE TABLE IF NOT EXISTS conversations (
+			id               SERIAL PRIMARY KEY,
+			type             VARCHAR(20) NOT NULL,
+			name             VARCHAR(255),
+			project_id       INT REFERENCES projects(id) ON DELETE SET NULL,
+			created_by       INT REFERENCES users(id) ON DELETE SET NULL,
+			direct_user_low  INT REFERENCES users(id) ON DELETE SET NULL,
+			direct_user_high INT REFERENCES users(id) ON DELETE SET NULL,
+			last_message_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_direct_pair
+			ON conversations(direct_user_low, direct_user_high) WHERE type = 'direct'`,
+		`CREATE INDEX IF NOT EXISTS idx_conversations_last_message ON conversations(last_message_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS conversation_participants (
+			id              SERIAL PRIMARY KEY,
+			conversation_id INT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+			user_id         INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			last_read_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			joined_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE(conversation_id, user_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_conv_participants_conversation ON conversation_participants(conversation_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_conv_participants_user ON conversation_participants(user_id)`,
+		// sender_id is SET NULL (not CASCADE like file_comments.user_id) —
+		// deleting an employee must not silently erase their half of every
+		// group conversation's history. Delete is soft (deleted_at + blank
+		// body, row stays) so an already-open tab on another device can be
+		// told "this message was deleted" via the same live WS event instead
+		// of having to splice an id out of an in-memory list.
+		`CREATE TABLE IF NOT EXISTS messages (
+			id              SERIAL PRIMARY KEY,
+			conversation_id INT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+			sender_id       INT REFERENCES users(id) ON DELETE SET NULL,
+			body            TEXT NOT NULL DEFAULT '',
+			deleted_at      TIMESTAMPTZ,
+			created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_conversation_created
+			ON messages(conversation_id, created_at DESC, id DESC)`,
+		// message_id stays NULL until a composer actually sends the message
+		// that references it — an attachment uploaded but never sent is an
+		// "unclaimed" row the janitor purges after a day (see
+		// idx_msg_attachments_unclaimed / ListOrphanedChatAttachments).
+		`CREATE TABLE IF NOT EXISTS message_attachments (
+			id              SERIAL PRIMARY KEY,
+			message_id      INT REFERENCES messages(id) ON DELETE CASCADE,
+			conversation_id INT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+			uploaded_by     INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			minio_key       VARCHAR(1000) NOT NULL,
+			file_name       VARCHAR(500) NOT NULL,
+			size_bytes      BIGINT NOT NULL,
+			content_type    VARCHAR(255) NOT NULL DEFAULT 'application/octet-stream',
+			created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_msg_attachments_message ON message_attachments(message_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_msg_attachments_unclaimed ON message_attachments(created_at) WHERE message_id IS NULL`,
 	}
 
 	for _, m := range migrations {

@@ -279,3 +279,75 @@ type UserSearchResult struct {
 	Username    string `json:"username"`
 	DisplayName string `json:"full_name"`
 }
+
+// Conversation is a direct (1-on-1) or group chat. ProjectID is a
+// prefill-only convenience (pre-populates the participant picker at
+// creation time) — it has no ongoing effect on membership or access.
+type Conversation struct {
+	ID             int        `json:"id"`
+	Type           string     `json:"type"` // "direct" | "group"
+	Name           *string    `json:"name,omitempty"`
+	ProjectID      *int       `json:"project_id,omitempty"`
+	CreatedBy      *int       `json:"created_by"`
+	DirectUserLow  *int       `json:"-"`
+	DirectUserHigh *int       `json:"-"`
+	LastMessageAt  time.Time  `json:"last_message_at"`
+	CreatedAt      time.Time  `json:"created_at"`
+}
+
+// ConversationView is a conversation as rendered in the conversation list —
+// joined with enough to show a preview without a second round-trip.
+type ConversationView struct {
+	Conversation
+	UnreadCount     int     `json:"unread_count"`
+	LastMessageBody string  `json:"last_message_body,omitempty"`
+	LastMessageAt   *time.Time `json:"last_message_preview_at,omitempty"`
+	// OtherParticipant is set only for type="direct" — the one other person
+	// in the DM, so the client never needs a second call to know who it's
+	// showing.
+	OtherParticipant *ParticipantView `json:"other_participant,omitempty"`
+}
+
+type ParticipantView struct {
+	UserID      int    `json:"user_id"`
+	Username    string `json:"username"`
+	DisplayName string `json:"full_name"`
+	AvatarURL   string `json:"avatar_url"`
+}
+
+// Message is a chat message, optionally soft-deleted (DeletedAt set, Body
+// blanked) — the row stays so already-open tabs can be told it was deleted
+// instead of just having an id vanish from an in-memory list.
+type Message struct {
+	ID             int        `json:"id"`
+	ConversationID int        `json:"conversation_id"`
+	SenderID       *int       `json:"sender_id"`
+	Body           string     `json:"body"`
+	DeletedAt      *time.Time `json:"deleted_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+}
+
+// MessageView is a message joined with its sender's display info and
+// resolved attachments — what the client actually renders.
+type MessageView struct {
+	Message
+	SenderName   string              `json:"sender_name"`
+	SenderAvatar string              `json:"sender_avatar,omitempty"`
+	Attachments  []MessageAttachment `json:"attachments,omitempty"`
+}
+
+// MessageAttachment is a file attached to a chat message. MinioKey is never
+// sent to the client (tighter than File.MinioKey, which is) — attachments
+// are only ever fetched by id through an authenticated download endpoint
+// that re-checks conversation membership.
+type MessageAttachment struct {
+	ID             int       `json:"id"`
+	MessageID      *int      `json:"message_id,omitempty"`
+	ConversationID int       `json:"conversation_id"`
+	UploadedBy     int       `json:"uploaded_by"`
+	MinioKey       string    `json:"-"`
+	FileName       string    `json:"file_name"`
+	SizeBytes      int64     `json:"size_bytes"`
+	ContentType    string    `json:"content_type"`
+	CreatedAt      time.Time `json:"created_at"`
+}

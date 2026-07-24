@@ -206,6 +206,39 @@ const API = {
         editorURL(fileId) { return API._request('GET', `/api/collabora/editor-url?file_id=${fileId}`); },
     },
 
+    chat: {
+        searchUsers(q) { return API._request('GET', `/api/chat/users/search?q=${encodeURIComponent(q)}`); },
+        list() { return API._request('GET', '/api/chat/conversations'); },
+        createDirect(userId) { return API._request('POST', '/api/chat/conversations', { type: 'direct', user_id: userId }); },
+        createGroup(name, participantIds, projectId) {
+            const body = { type: 'group', name, participant_ids: participantIds };
+            if (projectId) body.project_id = projectId;
+            return API._request('POST', '/api/chat/conversations', body);
+        },
+        get(id) { return API._request('GET', `/api/chat/conversations/${id}`); },
+        rename(id, name) { return API._request('PATCH', `/api/chat/conversations/${id}`, { name }); },
+        addParticipants(id, userIds) { return API._request('POST', `/api/chat/conversations/${id}/participants`, { user_ids: userIds }); },
+        removeParticipant(id, userId) { return API._request('DELETE', `/api/chat/conversations/${id}/participants/${userId}`); },
+        listMessages(id, beforeId, limit) {
+            let url = `/api/chat/conversations/${id}/messages?limit=${limit || 50}`;
+            if (beforeId) url += `&before_id=${beforeId}`;
+            return API._request('GET', url);
+        },
+        send(id, body, attachmentIds) {
+            return API._request('POST', `/api/chat/conversations/${id}/messages`, { body, attachment_ids: attachmentIds || [] });
+        },
+        deleteMessage(id, messageId) { return API._request('DELETE', `/api/chat/conversations/${id}/messages/${messageId}`); },
+        uploadAttachment(conversationId, file) {
+            const form = new FormData();
+            form.append('file', file);
+            return fetch(`/api/chat/conversations/${conversationId}/attachments`, { method: 'POST', body: form, credentials: 'same-origin' })
+                .then(r => r.json().then(d => r.ok ? d : Promise.reject(new Error(d.error || I18N.t('common.error_short')))));
+        },
+        attachmentDownloadURL(attachmentId) { return `/api/chat/attachments/${attachmentId}/download`; },
+        markRead(id) { return API._request('POST', `/api/chat/conversations/${id}/read`); },
+        unreadCount() { return API._request('GET', '/api/chat/unread-count'); },
+    },
+
     admin: {
         dashboard() { return API._request('GET', '/api/admin/dashboard'); },
         auditLog(limit) { return API._request('GET', `/api/admin/audit-log${limit ? '?limit=' + limit : ''}`); },
