@@ -11,6 +11,7 @@ import (
 	"paylash/internal/storage"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -40,6 +41,17 @@ func requireParticipant(h *Handler, w http.ResponseWriter, r *http.Request, conv
 
 func conversationIDFromPath(r *http.Request) (int, error) {
 	return strconv.Atoi(r.PathValue("id"))
+}
+
+// participantIDs pulls just the user ids out of a participant list — the
+// shape hub.broadcast wants, needed at every send/edit/delete/forward call
+// site.
+func participantIDs(participants []models.ParticipantView) []int {
+	ids := make([]int, 0, len(participants))
+	for _, p := range participants {
+		ids = append(ids, p.UserID)
+	}
+	return ids
 }
 
 // SearchChatUsers backs the "new DM" / "add to group" picker.
@@ -260,7 +272,8 @@ func (h *Handler) ListMessages(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "nädogry ID")
 		return
 	}
-	if _, ok := requireParticipant(h, w, r, convID); !ok {
+	user, ok := requireParticipant(h, w, r, convID)
+	if !ok {
 		return
 	}
 	beforeID := 0
@@ -275,7 +288,7 @@ func (h *Handler) ListMessages(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	list, err := h.db.ListMessages(convID, beforeID, limit)
+	list, err := h.db.ListMessages(convID, user.ID, beforeID, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "habarlary alyp bolmady")
 		return
@@ -307,26 +320,57 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Body          string `json:"body"`
 		AttachmentIDs []int  `json:"attachment_ids"`
+		Kind          string `json:"kind"`
+		ReplyToID     *int   `json:"reply_to_id"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "nädogry maglumat")
 		return
 	}
-	body := strings.TrimSpace(req.Body)
-	if body == "" && len(req.AttachmentIDs) == 0 {
-		writeError(w, http.StatusBadRequest, "habar boş bolup bilmez")
+
+	kind := req.Kind
+	if kind == "" {
+		kind = "text"
+	}
+	if kind != "text" && kind != "sticker" {
+		writeError(w, http.StatusBadRequest, "nädogry görnüş")
 		return
 	}
-	if len(body) > maxMessageLength {
-		writeError(w, http.StatusBadRequest, "habar gaty uzyn")
-		return
+	body := strings.TrimSpace(req.Body)
+	if kind == "sticker" {
+		// A sticker message IS the emoji (no separate text), and sends alone
+		// — matches how every sticker-supporting chat app treats them.
+		if body == "" || len(body) > 32 {
+			writeError(w, http.StatusBadRequest, "nädogry stiker")
+			return
+		}
+		if len(req.AttachmentIDs) > 0 {
+			writeError(w, http.StatusBadRequest, "stikere goşundy goşup bolmaz")
+			return
+		}
+	} else {
+		if body == "" && len(req.AttachmentIDs) == 0 {
+			writeError(w, http.StatusBadRequest, "habar boş bolup bilmez")
+			return
+		}
+		if len(body) > maxMessageLength {
+			writeError(w, http.StatusBadRequest, "habar gaty uzyn")
+			return
+		}
 	}
 	if len(req.AttachmentIDs) > maxAttachmentsPerMessage {
 		writeError(w, http.StatusBadRequest, "goşundylar gaty köp")
 		return
 	}
+	if req.ReplyToID != nil {
+		replyMsg, err := h.db.GetMessage(*req.ReplyToID)
+		if err != nil || replyMsg == nil || replyMsg.ConversationID != convID {
+			writeError(w, http.StatusBadRequest, "nädogry jogap")
+			return
+		}
+	}
 
-	msg, err := h.db.CreateMessage(convID, user.ID, body, req.AttachmentIDs)
+	msg, err := h.db.CreateMessage(convID, user.ID, body, kind, req.ReplyToID, req.AttachmentIDs)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "habar iberip bolmady")
 		return
@@ -343,20 +387,15 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 
 	participants, err := h.db.ListParticipants(convID)
 	if err == nil {
-		ids := make([]int, 0, len(participants))
-		for _, p := range participants {
-			ids = append(ids, p.UserID)
-		}
-		h.chatHub.broadcast(ids, map[string]any{
+		h.chatHub.broadcast(participantIDs(participants), map[string]any{
 			"type": "message.new", "conversation_id": convID, "message": msg,
 		})
 	}
 }
 
-// DeleteMessage is author-only — no admin override, consistent with chats
-// being fully private: an admin who can't see a conversation's content has
-// no way to legitimately decide it needs moderating.
-func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
+// EditMessage updates a text message's body — sender-only, text-kind-only,
+// and only while the message hasn't been (delete-for-everyone) deleted.
+func (h *Handler) EditMessage(w http.ResponseWriter, r *http.Request) {
 	convID, err := conversationIDFromPath(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "nädogry ID")
@@ -380,6 +419,164 @@ func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "rugsat ýok")
 		return
 	}
+	if msg.DeletedAt != nil {
+		writeError(w, http.StatusBadRequest, "pozulan habary üýtgedip bolmaz")
+		return
+	}
+	if msg.Kind != "text" {
+		writeError(w, http.StatusBadRequest, "diňe tekst habaryny üýtgedip bolar")
+		return
+	}
+
+	var req struct {
+		Body string `json:"body"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry maglumat")
+		return
+	}
+	body := strings.TrimSpace(req.Body)
+	if body == "" {
+		writeError(w, http.StatusBadRequest, "habar boş bolup bilmez")
+		return
+	}
+	if len(body) > maxMessageLength {
+		writeError(w, http.StatusBadRequest, "habar gaty uzyn")
+		return
+	}
+
+	updated, err := h.db.EditMessage(msgID, body)
+	if err != nil || updated == nil {
+		writeError(w, http.StatusInternalServerError, "üýtgedip bolmady")
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+
+	participants, err := h.db.ListParticipants(convID)
+	if err == nil {
+		h.chatHub.broadcast(participantIDs(participants), map[string]any{
+			"type": "message.edited", "conversation_id": convID, "message": updated,
+		})
+	}
+}
+
+// ForwardMessage copies a message (text/kind/attachments) into one or more
+// conversations the requester is a participant of — the requester must also
+// be a participant of the source conversation, but the recipients of the
+// forward don't need to be (that's the whole point of forwarding).
+func (h *Handler) ForwardMessage(w http.ResponseWriter, r *http.Request) {
+	user := authutil.GetUser(r)
+	msgID, err := strconv.Atoi(r.PathValue("messageId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry habar ID")
+		return
+	}
+	msg, err := h.db.GetMessage(msgID)
+	if err != nil || msg == nil || msg.DeletedAt != nil {
+		writeError(w, http.StatusNotFound, "habar tapylmady")
+		return
+	}
+	if ok, err := h.db.IsParticipant(msg.ConversationID, user.ID); err != nil || !ok {
+		writeError(w, http.StatusForbidden, "rugsat ýok")
+		return
+	}
+
+	var req struct {
+		ConversationIDs []int `json:"conversation_ids"`
+	}
+	if err := readJSON(r, &req); err != nil || len(req.ConversationIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "nädogry maglumat")
+		return
+	}
+	if len(req.ConversationIDs) > 20 {
+		writeError(w, http.StatusBadRequest, "gaty köp sözleşme saýlandy")
+		return
+	}
+	for _, cid := range req.ConversationIDs {
+		if ok, err := h.db.IsParticipant(cid, user.ID); err != nil || !ok {
+			writeError(w, http.StatusForbidden, "rugsat ýok")
+			return
+		}
+	}
+
+	userKey := strconv.Itoa(user.ID)
+	if h.messageLimiter.blocked(userKey) {
+		writeError(w, http.StatusTooManyRequests, "köp synanyşyk boldy, birazdan gaýtadan synanyşyň")
+		return
+	}
+	h.messageLimiter.record(userKey)
+
+	forwarded, err := h.db.ForwardMessage(msgID, user.ID, req.ConversationIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ugradyp bolmady")
+		return
+	}
+	writeJSON(w, http.StatusOK, forwarded)
+
+	for i, cid := range req.ConversationIDs {
+		if i >= len(forwarded) {
+			break
+		}
+		participants, err := h.db.ListParticipants(cid)
+		if err == nil {
+			h.chatHub.broadcast(participantIDs(participants), map[string]any{
+				"type": "message.new", "conversation_id": cid, "message": forwarded[i],
+			})
+		}
+	}
+}
+
+// DeleteMessage supports two modes via ?for=me|everyone (default
+// "everyone", matching the original behavior before delete-for-me existed):
+//   - for=me: hides the message for the requester only, any participant,
+//     no broadcast (purely local, but persisted so it stays hidden across
+//     that user's other devices/tabs too).
+//   - for=everyone: the original sender-only soft delete — no admin
+//     override, consistent with chats being fully private: an admin who
+//     can't see a conversation's content has no way to legitimately decide
+//     it needs moderating.
+func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
+	convID, err := conversationIDFromPath(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry ID")
+		return
+	}
+	msgID, err := strconv.Atoi(r.PathValue("messageId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry habar ID")
+		return
+	}
+	user, ok := requireParticipant(h, w, r, convID)
+	if !ok {
+		return
+	}
+	msg, err := h.db.GetMessage(msgID)
+	if err != nil || msg == nil || msg.ConversationID != convID {
+		writeError(w, http.StatusNotFound, "habar tapylmady")
+		return
+	}
+
+	forWhom := r.URL.Query().Get("for")
+	if forWhom == "" {
+		forWhom = "everyone"
+	}
+	if forWhom == "me" {
+		if err := h.db.HideMessageForUser(msgID, user.ID); err != nil {
+			writeError(w, http.StatusInternalServerError, "ýalňyşlyk")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return
+	}
+	if forWhom != "everyone" {
+		writeError(w, http.StatusBadRequest, "nädogry parametr")
+		return
+	}
+
+	if msg.SenderID == nil || *msg.SenderID != user.ID {
+		writeError(w, http.StatusForbidden, "rugsat ýok")
+		return
+	}
 
 	// Soft-delete the message FIRST — this is the fast, reliable, purely-DB
 	// state change that must actually happen. Attachment cleanup below talks
@@ -396,23 +593,32 @@ func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 	attachments, err := h.db.ListMessageAttachments(msgID)
 	if err == nil {
 		for _, a := range attachments {
-			if err := h.minio.Delete(r.Context(), storage.ChatAttachmentsBucket, a.MinioKey); err != nil {
-				log.Printf("delete chat attachment object %s: %v", a.MinioKey, err)
-				continue
-			}
+			// Delete this row FIRST, then only remove the underlying MinIO
+			// object once nothing else references the same minio_key —
+			// forwarding a message copies its attachment rows onto the SAME
+			// object rather than re-uploading, so removing one message's
+			// copy must never take the object out from under another
+			// message (in another conversation) that still points at it.
 			if err := h.db.DeleteChatAttachment(a.ID); err != nil {
 				log.Printf("delete chat attachment row %d: %v", a.ID, err)
+				continue
+			}
+			remaining, err := h.db.CountAttachmentsByMinioKey(a.MinioKey)
+			if err != nil {
+				log.Printf("count chat attachment refs %s: %v", a.MinioKey, err)
+				continue
+			}
+			if remaining == 0 {
+				if err := h.minio.Delete(r.Context(), storage.ChatAttachmentsBucket, a.MinioKey); err != nil {
+					log.Printf("delete chat attachment object %s: %v", a.MinioKey, err)
+				}
 			}
 		}
 	}
 
 	participants, err := h.db.ListParticipants(convID)
 	if err == nil {
-		ids := make([]int, 0, len(participants))
-		for _, p := range participants {
-			ids = append(ids, p.UserID)
-		}
-		h.chatHub.broadcast(ids, map[string]any{
+		h.chatHub.broadcast(participantIDs(participants), map[string]any{
 			"type": "message.deleted", "conversation_id": convID, "message_id": msgID,
 		})
 	}
@@ -521,6 +727,22 @@ func (h *Handler) MarkConversationRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+
+	// Tell every OTHER open tab in this conversation that this reader just
+	// caught up, so they can flip that reader's message ticks from "sent" to
+	// "read" live instead of waiting for a full reload.
+	participants, err := h.db.ListParticipants(convID)
+	if err == nil {
+		others := make([]int, 0, len(participants))
+		for _, p := range participants {
+			if p.UserID != user.ID {
+				others = append(others, p.UserID)
+			}
+		}
+		h.chatHub.broadcast(others, map[string]any{
+			"type": "conversation.read", "conversation_id": convID, "user_id": user.ID, "last_read_at": time.Now(),
+		})
+	}
 }
 
 func (h *Handler) ChatUnreadCount(w http.ResponseWriter, r *http.Request) {
@@ -531,6 +753,35 @@ func (h *Handler) ChatUnreadCount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"count": count})
+}
+
+// UpdateNotificationPrefs is not conversation-scoped — it's a per-user
+// setting, same privacy-preference surface as theme/password (see
+// App.showProfileModal on the frontend).
+func (h *Handler) UpdateNotificationPrefs(w http.ResponseWriter, r *http.Request) {
+	user := authutil.GetUser(r)
+	var req struct {
+		Level string `json:"level"`
+		Sound bool   `json:"sound"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry maglumat")
+		return
+	}
+	if req.Level != "full" && req.Level != "sender_only" && req.Level != "hidden" {
+		writeError(w, http.StatusBadRequest, "nädogry derejesi")
+		return
+	}
+	if err := h.db.UpdateChatNotifyPrefs(user.ID, req.Level, req.Sound); err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk")
+		return
+	}
+	updated, err := h.db.GetUserByID(user.ID)
+	if err != nil || updated == nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk")
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
 }
 
 // randomHexToken mirrors internal/db's unexported generateToken — package
@@ -551,9 +802,5 @@ func notifyConversationUpdated(h *Handler, convID int) {
 	if err != nil {
 		return
 	}
-	ids := make([]int, 0, len(participants))
-	for _, p := range participants {
-		ids = append(ids, p.UserID)
-	}
-	h.chatHub.broadcast(ids, map[string]any{"type": "conversation.updated", "conversation_id": convID})
+	h.chatHub.broadcast(participantIDs(participants), map[string]any{"type": "conversation.updated", "conversation_id": convID})
 }

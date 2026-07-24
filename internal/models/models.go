@@ -14,7 +14,13 @@ type User struct {
 	QuotaBytes         int64     `json:"quota_bytes"`
 	AvatarURL          string    `json:"avatar_url"`
 	MustChangePassword bool      `json:"must_change_password"`
-	CreatedAt          time.Time `json:"created_at"`
+	// ChatNotifyLevel controls how much a chat notification reveals:
+	// "full" (sender + text), "sender_only" (sender, generic text), or
+	// "hidden" (generic title + text) — mirrors Telegram's notification
+	// privacy options.
+	ChatNotifyLevel string    `json:"chat_notify_level"`
+	ChatNotifySound bool      `json:"chat_notify_sound"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 // Project is an admin-created folder with an explicit member list (ACL).
@@ -309,31 +315,51 @@ type ConversationView struct {
 }
 
 type ParticipantView struct {
-	UserID      int    `json:"user_id"`
-	Username    string `json:"username"`
-	DisplayName string `json:"full_name"`
-	AvatarURL   string `json:"avatar_url"`
+	UserID      int       `json:"user_id"`
+	Username    string    `json:"username"`
+	DisplayName string    `json:"full_name"`
+	AvatarURL   string    `json:"avatar_url"`
+	LastReadAt  time.Time `json:"last_read_at"`
 }
 
 // Message is a chat message, optionally soft-deleted (DeletedAt set, Body
 // blanked) — the row stays so already-open tabs can be told it was deleted
 // instead of just having an id vanish from an in-memory list.
 type Message struct {
-	ID             int        `json:"id"`
-	ConversationID int        `json:"conversation_id"`
-	SenderID       *int       `json:"sender_id"`
-	Body           string     `json:"body"`
-	DeletedAt      *time.Time `json:"deleted_at,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
+	ID                int        `json:"id"`
+	ConversationID    int        `json:"conversation_id"`
+	SenderID          *int       `json:"sender_id"`
+	Body              string     `json:"body"`
+	Kind              string     `json:"kind"` // "text" | "sticker"
+	EditedAt          *time.Time `json:"edited_at,omitempty"`
+	ReplyToID         *int       `json:"reply_to_id,omitempty"`
+	ForwardedFromName *string    `json:"forwarded_from_name,omitempty"`
+	DeletedAt         *time.Time `json:"deleted_at,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+}
+
+// MessageReplyPreview is the lightweight snapshot of a replied-to message
+// shown atop the reply — captured at read time so a long deleted/edited
+// original doesn't change what the reply preview shows.
+type MessageReplyPreview struct {
+	ID         int    `json:"id"`
+	SenderName string `json:"sender_name"`
+	Body       string `json:"body"`
+	Kind       string `json:"kind"`
 }
 
 // MessageView is a message joined with its sender's display info and
 // resolved attachments — what the client actually renders.
 type MessageView struct {
 	Message
-	SenderName   string              `json:"sender_name"`
-	SenderAvatar string              `json:"sender_avatar,omitempty"`
-	Attachments  []MessageAttachment `json:"attachments,omitempty"`
+	SenderName   string                `json:"sender_name"`
+	SenderAvatar string                `json:"sender_avatar,omitempty"`
+	Attachments  []MessageAttachment   `json:"attachments,omitempty"`
+	ReplyTo      *MessageReplyPreview  `json:"reply_to,omitempty"`
+	// Status is computed, not stored — "sent" or "read", meaningful only for
+	// the requester's own messages in direct conversations (group read
+	// receipts are out of scope; group messages are always "sent").
+	Status string `json:"status,omitempty"`
 }
 
 // MessageAttachment is a file attached to a chat message. MinioKey is never

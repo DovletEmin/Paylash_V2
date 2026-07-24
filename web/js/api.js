@@ -224,10 +224,21 @@ const API = {
             if (beforeId) url += `&before_id=${beforeId}`;
             return API._request('GET', url);
         },
-        send(id, body, attachmentIds) {
-            return API._request('POST', `/api/chat/conversations/${id}/messages`, { body, attachment_ids: attachmentIds || [] });
+        send(id, body, attachmentIds, kind, replyToId) {
+            const payload = { body, attachment_ids: attachmentIds || [] };
+            if (kind) payload.kind = kind;
+            if (replyToId) payload.reply_to_id = replyToId;
+            return API._request('POST', `/api/chat/conversations/${id}/messages`, payload);
         },
-        deleteMessage(id, messageId) { return API._request('DELETE', `/api/chat/conversations/${id}/messages/${messageId}`); },
+        editMessage(id, messageId, body) {
+            return API._request('PATCH', `/api/chat/conversations/${id}/messages/${messageId}`, { body });
+        },
+        deleteMessage(id, messageId, forWhom) {
+            return API._request('DELETE', `/api/chat/conversations/${id}/messages/${messageId}?for=${forWhom || 'everyone'}`);
+        },
+        forward(messageId, conversationIds) {
+            return API._request('POST', `/api/chat/messages/${messageId}/forward`, { conversation_ids: conversationIds });
+        },
         uploadAttachment(conversationId, file) {
             const form = new FormData();
             form.append('file', file);
@@ -237,6 +248,7 @@ const API = {
         attachmentDownloadURL(attachmentId) { return `/api/chat/attachments/${attachmentId}/download`; },
         markRead(id) { return API._request('POST', `/api/chat/conversations/${id}/read`); },
         unreadCount() { return API._request('GET', '/api/chat/unread-count'); },
+        updateNotifyPrefs(level, sound) { return API._request('PATCH', '/api/chat/notification-prefs', { level, sound }); },
     },
 
     admin: {

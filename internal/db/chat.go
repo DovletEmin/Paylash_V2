@@ -289,7 +289,7 @@ func (d *DB) RemoveParticipant(conversationID, userID int) error {
 
 func (d *DB) ListParticipants(conversationID int) ([]models.ParticipantView, error) {
 	rows, err := d.Query(
-		`SELECT u.id, u.username, COALESCE(u.display_name, u.username, ''), u.avatar_url
+		`SELECT u.id, u.username, COALESCE(u.display_name, u.username, ''), u.avatar_url, cp.last_read_at
 		 FROM conversation_participants cp
 		 JOIN users u ON u.id = cp.user_id
 		 WHERE cp.conversation_id = $1
@@ -302,7 +302,7 @@ func (d *DB) ListParticipants(conversationID int) ([]models.ParticipantView, err
 	var list []models.ParticipantView
 	for rows.Next() {
 		var p models.ParticipantView
-		if err := rows.Scan(&p.UserID, &p.Username, &p.DisplayName, &p.AvatarURL); err != nil {
+		if err := rows.Scan(&p.UserID, &p.Username, &p.DisplayName, &p.AvatarURL, &p.LastReadAt); err != nil {
 			return nil, err
 		}
 		list = append(list, p)
@@ -334,8 +334,10 @@ func (d *DB) TotalUnreadCount(userID int) (int, error) {
 // CreateMessage inserts the message and, in the same transaction, claims
 // any already-uploaded attachments referenced by id (rejecting the whole
 // send if one doesn't belong to this conversation/sender or was already
-// claimed by another message — see the rows-affected check below).
-func (d *DB) CreateMessage(conversationID, senderID int, body string, attachmentIDs []int) (*models.MessageView, error) {
+// claimed by another message — see the rows-affected check below). kind is
+// "text" or "sticker"; replyToID is validated by the caller (API layer) to
+// belong to the same conversation before this is reached.
+func (d *DB) CreateMessage(conversationID, senderID int, body, kind string, replyToID *int, attachmentIDs []int) (*models.MessageView, error) {
 	tx, err := d.Begin()
 	if err != nil {
 		return nil, err
@@ -345,8 +347,8 @@ func (d *DB) CreateMessage(conversationID, senderID int, body string, attachment
 	var msgID int
 	var createdAt time.Time
 	if err := tx.QueryRow(
-		`INSERT INTO messages (conversation_id, sender_id, body) VALUES ($1, $2, $3) RETURNING id, created_at`,
-		conversationID, senderID, body,
+		`INSERT INTO messages (conversation_id, sender_id, body, kind, reply_to_id) VALUES ($1, $2, $3, $4, $5) RETURNING id, created_at`,
+		conversationID, senderID, body, kind, replyToID,
 	).Scan(&msgID, &createdAt); err != nil {
 		return nil, err
 	}
@@ -379,18 +381,68 @@ func (d *DB) CreateMessage(conversationID, senderID int, body string, attachment
 	return d.GetMessageView(msgID)
 }
 
-// GetMessageView fetches a single message joined with sender info and
-// resolved attachments — used to return the freshly-created message and by
-// the WS hub to build the broadcast payload.
-func (d *DB) GetMessageView(id int) (*models.MessageView, error) {
+// messageViewCols/messageViewJoins are shared by GetMessageView and
+// ListMessages so the two queries can't drift out of sync with each other.
+// other_read.min_read_at is the earliest last_read_at among every OTHER
+// participant — meaningful as a "read" cutoff for direct conversations
+// (exactly one other participant); group conversations always fall back to
+// a plain "sent" status (see scanMessageView), so what this resolves to for
+// a group is never actually used.
+const messageViewCols = `m.id, m.conversation_id, m.sender_id, m.body, m.kind, m.edited_at, m.reply_to_id, m.forwarded_from_name, m.deleted_at, m.created_at,
+	COALESCE(u.display_name, u.username, ''), COALESCE(u.avatar_url, ''),
+	COALESCE(c.type, ''), other_read.min_read_at,
+	rm.id, COALESCE(ru.display_name, ru.username, ''), COALESCE(rm.body, ''), COALESCE(rm.kind, '')`
+
+const messageViewJoins = `FROM messages m
+	LEFT JOIN users u ON u.id = m.sender_id
+	LEFT JOIN conversations c ON c.id = m.conversation_id
+	LEFT JOIN LATERAL (
+		SELECT MIN(cp.last_read_at) AS min_read_at
+		FROM conversation_participants cp
+		WHERE cp.conversation_id = m.conversation_id AND cp.user_id != m.sender_id
+	) other_read ON true
+	LEFT JOIN messages rm ON rm.id = m.reply_to_id
+	LEFT JOIN users ru ON ru.id = rm.sender_id`
+
+// scanner is satisfied by both *sql.Row and *sql.Rows — lets GetMessageView
+// and ListMessages share one Scan-and-assemble routine for messageViewCols.
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+func scanMessageView(row scanner) (*models.MessageView, error) {
 	mv := &models.MessageView{}
-	err := d.QueryRow(
-		`SELECT m.id, m.conversation_id, m.sender_id, m.body, m.deleted_at, m.created_at,
-		        COALESCE(u.display_name, u.username, ''), COALESCE(u.avatar_url, '')
-		 FROM messages m
-		 LEFT JOIN users u ON u.id = m.sender_id
-		 WHERE m.id = $1`, id,
-	).Scan(&mv.ID, &mv.ConversationID, &mv.SenderID, &mv.Body, &mv.DeletedAt, &mv.CreatedAt, &mv.SenderName, &mv.SenderAvatar)
+	var convType string
+	var otherRead sql.NullTime
+	var replyID sql.NullInt64
+	var replySender, replyBody, replyKind string
+	if err := row.Scan(
+		&mv.ID, &mv.ConversationID, &mv.SenderID, &mv.Body, &mv.Kind, &mv.EditedAt, &mv.ReplyToID, &mv.ForwardedFromName, &mv.DeletedAt, &mv.CreatedAt,
+		&mv.SenderName, &mv.SenderAvatar,
+		&convType, &otherRead,
+		&replyID, &replySender, &replyBody, &replyKind,
+	); err != nil {
+		return nil, err
+	}
+	if mv.SenderID != nil {
+		if convType == "direct" && otherRead.Valid && !mv.CreatedAt.After(otherRead.Time) {
+			mv.Status = "read"
+		} else {
+			mv.Status = "sent"
+		}
+	}
+	if replyID.Valid {
+		mv.ReplyTo = &models.MessageReplyPreview{ID: int(replyID.Int64), SenderName: replySender, Body: replyBody, Kind: replyKind}
+	}
+	return mv, nil
+}
+
+// GetMessageView fetches a single message joined with sender info and
+// resolved attachments — used to return the freshly-created/edited message
+// and by the WS hub to build the broadcast payload.
+func (d *DB) GetMessageView(id int) (*models.MessageView, error) {
+	row := d.QueryRow(`SELECT `+messageViewCols+` `+messageViewJoins+` WHERE m.id = $1`, id)
+	mv, err := scanMessageView(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -408,29 +460,26 @@ func (d *DB) GetMessageView(id int) (*models.MessageView, error) {
 // ListMessages returns up to limit messages older than beforeID (0 means
 // "most recent"), newest-first — keyset pagination, not offset/limit, so
 // scrolling up through history stays correct while new messages keep
-// arriving at the top.
-func (d *DB) ListMessages(conversationID, beforeID, limit int) ([]models.MessageView, error) {
+// arriving at the top. Messages requesterID has hidden-for-themselves
+// (delete-for-me) are excluded — nobody else's view is affected.
+func (d *DB) ListMessages(conversationID, requesterID, beforeID, limit int) ([]models.MessageView, error) {
 	var rows *sql.Rows
 	var err error
 	if beforeID > 0 {
 		rows, err = d.Query(
-			`SELECT m.id, m.conversation_id, m.sender_id, m.body, m.deleted_at, m.created_at,
-			        COALESCE(u.display_name, u.username, ''), COALESCE(u.avatar_url, '')
-			 FROM messages m
-			 LEFT JOIN users u ON u.id = m.sender_id
-			 WHERE m.conversation_id = $1 AND m.id < $2
+			`SELECT `+messageViewCols+` `+messageViewJoins+`
+			 LEFT JOIN message_hidden_for hf ON hf.message_id = m.id AND hf.user_id = $4
+			 WHERE m.conversation_id = $1 AND m.id < $2 AND hf.message_id IS NULL
 			 ORDER BY m.created_at DESC, m.id DESC LIMIT $3`,
-			conversationID, beforeID, limit,
+			conversationID, beforeID, limit, requesterID,
 		)
 	} else {
 		rows, err = d.Query(
-			`SELECT m.id, m.conversation_id, m.sender_id, m.body, m.deleted_at, m.created_at,
-			        COALESCE(u.display_name, u.username, ''), COALESCE(u.avatar_url, '')
-			 FROM messages m
-			 LEFT JOIN users u ON u.id = m.sender_id
-			 WHERE m.conversation_id = $1
+			`SELECT `+messageViewCols+` `+messageViewJoins+`
+			 LEFT JOIN message_hidden_for hf ON hf.message_id = m.id AND hf.user_id = $3
+			 WHERE m.conversation_id = $1 AND hf.message_id IS NULL
 			 ORDER BY m.created_at DESC, m.id DESC LIMIT $2`,
-			conversationID, limit,
+			conversationID, limit, requesterID,
 		)
 	}
 	if err != nil {
@@ -442,11 +491,11 @@ func (d *DB) ListMessages(conversationID, beforeID, limit int) ([]models.Message
 	byID := map[int]*models.MessageView{}
 	var list []models.MessageView
 	for rows.Next() {
-		var mv models.MessageView
-		if err := rows.Scan(&mv.ID, &mv.ConversationID, &mv.SenderID, &mv.Body, &mv.DeletedAt, &mv.CreatedAt, &mv.SenderName, &mv.SenderAvatar); err != nil {
+		mv, err := scanMessageView(rows)
+		if err != nil {
 			return nil, err
 		}
-		list = append(list, mv)
+		list = append(list, *mv)
 		ids = append(ids, mv.ID)
 	}
 	if err := rows.Err(); err != nil {
@@ -489,8 +538,8 @@ func (d *DB) ListMessages(conversationID, beforeID, limit int) ([]models.Message
 func (d *DB) GetMessage(id int) (*models.Message, error) {
 	m := &models.Message{}
 	err := d.QueryRow(
-		`SELECT id, conversation_id, sender_id, body, deleted_at, created_at FROM messages WHERE id = $1`, id,
-	).Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Body, &m.DeletedAt, &m.CreatedAt)
+		`SELECT id, conversation_id, sender_id, body, kind, edited_at, reply_to_id, forwarded_from_name, deleted_at, created_at FROM messages WHERE id = $1`, id,
+	).Scan(&m.ID, &m.ConversationID, &m.SenderID, &m.Body, &m.Kind, &m.EditedAt, &m.ReplyToID, &m.ForwardedFromName, &m.DeletedAt, &m.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -504,6 +553,102 @@ func (d *DB) GetMessage(id int) (*models.Message, error) {
 func (d *DB) SoftDeleteMessage(id int) error {
 	_, err := d.Exec(`UPDATE messages SET deleted_at = NOW(), body = '' WHERE id = $1`, id)
 	return err
+}
+
+// EditMessage updates a text message's body and stamps edited_at — the
+// caller (API layer) has already verified sender ownership, kind == "text",
+// and that the message isn't deleted.
+func (d *DB) EditMessage(id int, body string) (*models.MessageView, error) {
+	if _, err := d.Exec(`UPDATE messages SET body = $1, edited_at = NOW() WHERE id = $2`, body, id); err != nil {
+		return nil, err
+	}
+	return d.GetMessageView(id)
+}
+
+// HideMessageForUser is delete-for-me: userID stops seeing this message
+// (ListMessages filters it out for them) without affecting anyone else's
+// view or the underlying row.
+func (d *DB) HideMessageForUser(messageID, userID int) error {
+	_, err := d.Exec(
+		`INSERT INTO message_hidden_for (message_id, user_id) VALUES ($1, $2) ON CONFLICT (message_id, user_id) DO NOTHING`,
+		messageID, userID,
+	)
+	return err
+}
+
+// ForwardMessage copies a message's text/kind into each of
+// targetConversationIDs as a brand-new message, labeled with the original
+// sender's name captured right now (forwarded_from_name is denormalized —
+// the target's viewers may never have access to the source conversation,
+// and the source message can later be edited/deleted, but the label must
+// survive both). Attachments are copied by reference: the new
+// message_attachments rows point at the SAME minio_key as the original
+// rather than re-uploading, so callers must delete attachments by
+// reference-count (see CountAttachmentsByMinioKey) not unconditionally.
+func (d *DB) ForwardMessage(sourceMessageID, forwarderID int, targetConversationIDs []int) ([]models.MessageView, error) {
+	src, err := d.GetMessage(sourceMessageID)
+	if err != nil {
+		return nil, err
+	}
+	if src == nil || src.DeletedAt != nil {
+		return nil, fmt.Errorf("message not found")
+	}
+	var senderName string
+	if src.SenderID != nil {
+		if err := d.QueryRow(`SELECT COALESCE(display_name, username, '') FROM users WHERE id = $1`, *src.SenderID).Scan(&senderName); err != nil && err != sql.ErrNoRows {
+			return nil, err
+		}
+	}
+	srcAttachments, err := d.ListMessageAttachments(sourceMessageID)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]models.MessageView, 0, len(targetConversationIDs))
+	for _, convID := range targetConversationIDs {
+		mv, err := d.forwardMessageInto(convID, forwarderID, src.Body, src.Kind, senderName, srcAttachments)
+		if err != nil {
+			return nil, err
+		}
+		if mv != nil {
+			results = append(results, *mv)
+		}
+	}
+	return results, nil
+}
+
+func (d *DB) forwardMessageInto(convID, forwarderID int, body, kind, forwardedFromName string, srcAttachments []models.MessageAttachment) (*models.MessageView, error) {
+	tx, err := d.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var msgID int
+	var createdAt time.Time
+	if err := tx.QueryRow(
+		`INSERT INTO messages (conversation_id, sender_id, body, kind, forwarded_from_name)
+		 VALUES ($1, $2, $3, $4, $5) RETURNING id, created_at`,
+		convID, forwarderID, body, kind, forwardedFromName,
+	).Scan(&msgID, &createdAt); err != nil {
+		return nil, err
+	}
+	for _, a := range srcAttachments {
+		if _, err := tx.Exec(
+			`INSERT INTO message_attachments (message_id, conversation_id, uploaded_by, minio_key, file_name, size_bytes, content_type)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+			msgID, convID, forwarderID, a.MinioKey, a.FileName, a.SizeBytes, a.ContentType,
+		); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := tx.Exec(`UPDATE conversations SET last_message_at = $1 WHERE id = $2`, createdAt, convID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return d.GetMessageView(msgID)
 }
 
 func (d *DB) CreateChatAttachment(conversationID, uploadedBy int, minioKey, fileName string, sizeBytes int64, contentType string) (*models.MessageAttachment, error) {
@@ -529,9 +674,12 @@ func (d *DB) GetChatAttachment(id int) (*models.MessageAttachment, error) {
 	return a, err
 }
 
+// ListMessageAttachments includes minio_key (json:"-", never serialized) —
+// callers that need to delete an attachment's underlying object, or copy it
+// onto a forwarded message, need the key even though clients never see it.
 func (d *DB) ListMessageAttachments(messageID int) ([]models.MessageAttachment, error) {
 	rows, err := d.Query(
-		`SELECT id, message_id, conversation_id, uploaded_by, file_name, size_bytes, content_type, created_at
+		`SELECT id, message_id, conversation_id, uploaded_by, minio_key, file_name, size_bytes, content_type, created_at
 		 FROM message_attachments WHERE message_id = $1 ORDER BY id`, messageID,
 	)
 	if err != nil {
@@ -541,7 +689,7 @@ func (d *DB) ListMessageAttachments(messageID int) ([]models.MessageAttachment, 
 	var list []models.MessageAttachment
 	for rows.Next() {
 		var a models.MessageAttachment
-		if err := rows.Scan(&a.ID, &a.MessageID, &a.ConversationID, &a.UploadedBy, &a.FileName, &a.SizeBytes, &a.ContentType, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.MessageID, &a.ConversationID, &a.UploadedBy, &a.MinioKey, &a.FileName, &a.SizeBytes, &a.ContentType, &a.CreatedAt); err != nil {
 			return nil, err
 		}
 		list = append(list, a)
@@ -572,10 +720,22 @@ func (d *DB) ListOrphanedChatAttachments(cutoff time.Time) ([]models.MessageAtta
 	return list, rows.Err()
 }
 
-// DeleteChatAttachment removes just the row — callers delete the MinIO
-// object themselves first (mirrors the janitor's own delete-then-purge
-// ordering elsewhere in this package).
+// DeleteChatAttachment removes just the row. Since forwarding a message
+// copies its attachment rows onto the SAME minio_key rather than
+// re-uploading, callers must delete this row FIRST and then check
+// CountAttachmentsByMinioKey before touching the MinIO object — deleting the
+// object first (the janitor's ordering, safe there because orphans are
+// never shared) would risk breaking a sibling row that still points at it.
 func (d *DB) DeleteChatAttachment(id int) error {
 	_, err := d.Exec(`DELETE FROM message_attachments WHERE id = $1`, id)
 	return err
+}
+
+// CountAttachmentsByMinioKey is how a caller decides whether it's safe to
+// delete the underlying MinIO object after removing one message_attachments
+// row — 0 means this was the last row referencing that key.
+func (d *DB) CountAttachmentsByMinioKey(minioKey string) (int, error) {
+	var n int
+	err := d.QueryRow(`SELECT COUNT(*) FROM message_attachments WHERE minio_key = $1`, minioKey).Scan(&n)
+	return n, err
 }

@@ -135,8 +135,12 @@ const App = {
 
     // Bound once for the whole session (ChatSocket itself persists across
     // page navigation, unlike a page object) — refreshes the badge on every
-    // relevant event and fires a desktop notification when the message
-    // isn't from the viewer themselves and isn't currently on-screen.
+    // relevant event and alerts the user for messages that aren't their own
+    // and aren't already on-screen. Two-tier alert, matching how Telegram
+    // Desktop actually behaves: a rich in-app toast while the tab itself is
+    // focused (a native OS toast reads as out of place right then), a native
+    // OS toast otherwise — both gated by the user's own notification-privacy
+    // level (full / sender-only / hidden, set in the profile modal).
     _bindChatSocketListeners() {
         if (this._chatSocketListenersBound) return;
         this._chatSocketListenersBound = true;
@@ -144,10 +148,33 @@ const App = {
             if (App.user && data.message && data.message.sender_id === App.user.id) return;
             App.checkChatUnread();
             const viewingThisConv = App.currentPage === 'chat' && typeof ChatPage !== 'undefined' && ChatPage._activeId === data.conversation_id;
-            if (!viewingThisConv || document.hidden) {
-                const title = data.message ? (data.message.sender_name || I18N.t('chat.title')) : I18N.t('chat.title');
-                const body = data.message && data.message.body ? data.message.body : I18N.t('chat.attachment_notification');
-                ChatSocket.notify(title, body);
+            const focused = document.hasFocus() && !document.hidden;
+            if (viewingThisConv && focused) return; // already looking right at it — no alert needed
+
+            const level = (App.user && App.user.chat_notify_level) || 'full';
+            const senderName = data.message ? (data.message.sender_name || I18N.t('chat.title')) : I18N.t('chat.title');
+            let title, body;
+            if (level === 'hidden') {
+                title = I18N.t('chat.title');
+                body = I18N.t('chat.new_message_generic');
+            } else if (level === 'sender_only') {
+                title = senderName;
+                body = I18N.t('chat.new_message_generic');
+            } else {
+                title = senderName;
+                body = data.message && data.message.kind === 'sticker' ? I18N.t('chat.sticker_notification')
+                    : data.message && data.message.body ? data.message.body
+                    : I18N.t('chat.attachment_notification');
+            }
+
+            if (!App.user || App.user.chat_notify_sound) ChatSocket.playChime();
+            if (focused) {
+                ChatSocket.showInAppToast({
+                    avatarUserId: data.message && data.message.sender_id, avatarName: senderName,
+                    title, body, conversationId: data.conversation_id,
+                });
+            } else {
+                ChatSocket.notify({ title, body, conversationId: data.conversation_id });
             }
         });
         ChatSocket.on('message.deleted', () => App.checkChatUnread());
@@ -333,6 +360,13 @@ const App = {
         const avatarHTML = u.avatar_url
             ? `<img class="profile-avatar-img" src="/api/avatar/${u.id}?v=${Date.now()}" alt="">`
             : `<div class="profile-avatar-placeholder">${(u.full_name || 'U').charAt(0).toUpperCase()}</div>`;
+        const level = u.chat_notify_level || 'full';
+        const sound = u.chat_notify_sound !== false;
+        const notifyOption = (value, label) => `
+            <label class="radio-option">
+                <input type="radio" name="notify-level" value="${value}" ${level === value ? 'checked' : ''}>
+                <span>${label}</span>
+            </label>`;
         UI.showModal(I18N.t('app.profile_title'), `
             <div class="profile-avatar-section">
                 <div class="profile-avatar-wrap" onclick="document.getElementById('avatar-input').click()">
@@ -346,6 +380,18 @@ const App = {
             <hr style="border:none;border-top:1px solid var(--border);margin:12px 0">
             <div class="form-group"><label>${I18N.t('app.old_password_label')}</label>${UI.passwordField('prof-old-pw', I18N.t('app.old_password_placeholder'))}</div>
             <div class="form-group"><label>${I18N.t('app.new_password_label')}</label>${UI.passwordField('prof-new-pw', I18N.t('auth.password_min_placeholder'))}</div>
+            <hr style="border:none;border-top:1px solid var(--border);margin:12px 0">
+            <div class="form-group">
+                <label>${I18N.t('app.chat_notify_level_label')}</label>
+                <div class="radio-group">
+                    ${notifyOption('full', I18N.t('app.chat_notify_full'))}
+                    ${notifyOption('sender_only', I18N.t('app.chat_notify_sender_only'))}
+                    ${notifyOption('hidden', I18N.t('app.chat_notify_hidden'))}
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="checkbox-option"><input type="checkbox" id="prof-notify-sound" ${sound ? 'checked' : ''}> <span>${I18N.t('app.chat_notify_sound_label')}</span></label>
+            </div>
             <hr style="border:none;border-top:1px solid var(--border);margin:12px 0">
             <button type="button" class="btn btn-ghost btn-sm" style="width:100%" onclick="App.logoutOtherDevices()">${I18N.t('app.logout_others_button')}</button>
             <p class="text-muted" style="font-size:.72rem;margin-top:4px">${I18N.t('app.logout_others_hint')}</p>`,
@@ -382,8 +428,12 @@ const App = {
         const newPw = document.getElementById('prof-new-pw').value;
         if (!name) { UI.toast(I18N.t('app.name_required'), 'error'); return; }
         if (newPw && !oldPw) { UI.toast(I18N.t('app.old_password_required'), 'error'); return; }
+        const levelInput = document.querySelector('input[name="notify-level"]:checked');
+        const level = levelInput ? levelInput.value : 'full';
+        const sound = document.getElementById('prof-notify-sound')?.checked !== false;
         try {
-            const updated = await API.auth.updateProfile(name, oldPw, newPw);
+            await API.auth.updateProfile(name, oldPw, newPw);
+            const updated = await API.chat.updateNotifyPrefs(level, sound);
             this.user = updated;
             UI.closeModal();
             UI.toast(I18N.t('app.profile_updated'), 'success');

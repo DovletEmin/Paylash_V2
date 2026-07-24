@@ -255,6 +255,27 @@ func (d *DB) Migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_msg_attachments_message ON message_attachments(message_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_msg_attachments_unclaimed ON message_attachments(created_at) WHERE message_id IS NULL`,
+
+		// Chat v2: sticker messages, editing, reply-to, and forwarding.
+		// forwarded_from_name is captured at forward time rather than a FK to
+		// the original message — the recipient may never have had access to
+		// the source conversation, and the source message can later be
+		// deleted, but the "forwarded from X" label must survive both.
+		`ALTER TABLE messages ADD COLUMN IF NOT EXISTS kind VARCHAR(20) NOT NULL DEFAULT 'text'`,
+		`ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ`,
+		`ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_id INT REFERENCES messages(id) ON DELETE SET NULL`,
+		`ALTER TABLE messages ADD COLUMN IF NOT EXISTS forwarded_from_name VARCHAR(255)`,
+		// Delete-for-me: a per-viewer hide flag, distinct from messages.deleted_at
+		// (which is delete-for-everyone, sender-only). A row here means this one
+		// user no longer sees the message; everyone else is unaffected.
+		`CREATE TABLE IF NOT EXISTS message_hidden_for (
+			message_id INT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+			user_id    INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			hidden_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (message_id, user_id)
+		)`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS chat_notify_level VARCHAR(20) NOT NULL DEFAULT 'full'`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS chat_notify_sound BOOLEAN NOT NULL DEFAULT TRUE`,
 	}
 
 	for _, m := range migrations {

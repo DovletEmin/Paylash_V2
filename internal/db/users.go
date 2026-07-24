@@ -21,9 +21,9 @@ func (d *DB) CreateUser(u *models.RegisterRequest, hash, role string, quotaBytes
 	err := d.QueryRow(
 		`INSERT INTO users (username, password_hash, display_name, role, quota_bytes, must_change_password)
 		 VALUES ($1, $2, $3, $4, $5, $6)
-		 RETURNING id, username, display_name, role, quota_bytes, avatar_url, must_change_password, created_at`,
+		 RETURNING id, username, display_name, role, quota_bytes, avatar_url, must_change_password, chat_notify_level, chat_notify_sound, created_at`,
 		u.Username, hash, u.FullName, role, quotaBytes, mustChangePassword,
-	).Scan(&user.ID, &user.Username, &user.DisplayName, &user.Role, &user.QuotaBytes, &user.AvatarURL, &user.MustChangePassword, &user.CreatedAt)
+	).Scan(&user.ID, &user.Username, &user.DisplayName, &user.Role, &user.QuotaBytes, &user.AvatarURL, &user.MustChangePassword, &user.ChatNotifyLevel, &user.ChatNotifySound, &user.CreatedAt)
 	return user, err
 }
 
@@ -38,9 +38,9 @@ func (d *DB) CountAdmins() (int, error) {
 func (d *DB) GetUserByUsername(username string) (*models.User, error) {
 	u := &models.User{}
 	err := d.QueryRow(
-		`SELECT id, username, password_hash, display_name, role, quota_bytes, avatar_url, must_change_password, created_at
+		`SELECT id, username, password_hash, display_name, role, quota_bytes, avatar_url, must_change_password, chat_notify_level, chat_notify_sound, created_at
 		 FROM users WHERE username = $1`, username,
-	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.QuotaBytes, &u.AvatarURL, &u.MustChangePassword, &u.CreatedAt)
+	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.QuotaBytes, &u.AvatarURL, &u.MustChangePassword, &u.ChatNotifyLevel, &u.ChatNotifySound, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -50,13 +50,21 @@ func (d *DB) GetUserByUsername(username string) (*models.User, error) {
 func (d *DB) GetUserByID(id int) (*models.User, error) {
 	u := &models.User{}
 	err := d.QueryRow(
-		`SELECT id, username, password_hash, display_name, role, quota_bytes, avatar_url, must_change_password, created_at
+		`SELECT id, username, password_hash, display_name, role, quota_bytes, avatar_url, must_change_password, chat_notify_level, chat_notify_sound, created_at
 		 FROM users WHERE id = $1`, id,
-	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.QuotaBytes, &u.AvatarURL, &u.MustChangePassword, &u.CreatedAt)
+	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.QuotaBytes, &u.AvatarURL, &u.MustChangePassword, &u.ChatNotifyLevel, &u.ChatNotifySound, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	return u, err
+}
+
+// UpdateChatNotifyPrefs sets the per-user chat notification privacy level
+// ("full" | "sender_only" | "hidden") and whether the notification chime
+// plays — validated by the caller before this is reached.
+func (d *DB) UpdateChatNotifyPrefs(id int, level string, sound bool) error {
+	_, err := d.Exec(`UPDATE users SET chat_notify_level = $1, chat_notify_sound = $2 WHERE id = $3`, level, sound, id)
+	return err
 }
 
 func (d *DB) SearchUsers(query string, limit int) ([]models.UserSearchResult, error) {
@@ -84,7 +92,7 @@ func (d *DB) SearchUsers(query string, limit int) ([]models.UserSearchResult, er
 
 func (d *DB) ListUsers(limit, offset int) ([]models.User, error) {
 	rows, err := d.Query(
-		`SELECT id, username, display_name, role, quota_bytes, avatar_url, must_change_password, created_at
+		`SELECT id, username, display_name, role, quota_bytes, avatar_url, must_change_password, chat_notify_level, chat_notify_sound, created_at
 		 FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2`, limit, offset,
 	)
 	if err != nil {
@@ -94,7 +102,7 @@ func (d *DB) ListUsers(limit, offset int) ([]models.User, error) {
 	var users []models.User
 	for rows.Next() {
 		var u models.User
-		if err := rows.Scan(&u.ID, &u.Username, &u.DisplayName, &u.Role, &u.QuotaBytes, &u.AvatarURL, &u.MustChangePassword, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.DisplayName, &u.Role, &u.QuotaBytes, &u.AvatarURL, &u.MustChangePassword, &u.ChatNotifyLevel, &u.ChatNotifySound, &u.CreatedAt); err != nil {
 			return nil, err
 		}
 		users = append(users, u)

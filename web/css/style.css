@@ -171,6 +171,12 @@ html.light .theme-icon-light{display:inline}
 .form-control:focus,.form-input:focus{border-color:var(--primary)}
 .form-control::placeholder,.form-input::placeholder{color:var(--text-3)}
 select.form-control,select.form-input{appearance:none;cursor:pointer;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%2371717a' viewBox='0 0 16 16'%3E%3Cpath d='M1.646 4.646a.5.5 0 01.708 0L8 10.293l5.646-5.647a.5.5 0 01.708.708l-6 6a.5.5 0 01-.708 0l-6-6a.5.5 0 010-.708z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;padding-right:30px}
+.radio-group{display:flex;flex-direction:column;gap:6px}
+.radio-option,.checkbox-option{
+  display:flex;align-items:center;gap:8px;font-size:.82rem;color:var(--text-2);cursor:pointer;
+}
+.radio-option input,.checkbox-option input{accent-color:var(--primary);cursor:pointer}
+.radio-option:has(input:checked) span,.checkbox-option:has(input:checked) span{color:var(--text)}
 
 /* ─── Auth Pages ─── */
 .auth-container{
@@ -678,7 +684,7 @@ img.share-user-avatar-lg{box-shadow:0 0 0 3px var(--surface),0 0 0 5px var(--acc
   display:flex;align-items:center;justify-content:center;background:var(--surface-2);
   color:var(--text-2);font-weight:600;font-size:.9rem;
 }
-.chat-avatar-sm{width:28px;height:28px;font-size:.76rem}
+.chat-avatar-sm{width:26px;height:26px;font-size:.72rem}
 .chat-avatar-group{font-size:1.1rem}
 .chat-conv-item-body{flex:1;min-width:0}
 .chat-conv-item-name{font-size:.86rem;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -688,28 +694,77 @@ img.share-user-avatar-lg{box-shadow:0 0 0 3px var(--surface),0 0 0 5px var(--acc
   min-width:18px;height:18px;border-radius:9px;display:flex;align-items:center;justify-content:center;padding:0 5px;flex-shrink:0;
 }
 .chat-thread{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
-.chat-thread-header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border)}
-.chat-thread-title{font-size:.92rem;font-weight:600}
-.chat-messages{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px}
+.chat-thread-header{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--border)}
+.chat-thread-title{font-size:.92rem;font-weight:600;flex:1}
+.chat-back-btn{
+  display:none;background:none;border:none;color:var(--text-2);font-size:1.1rem;cursor:pointer;
+  padding:2px 6px;border-radius:var(--r-sm);transition:background var(--tr);
+}
+.chat-back-btn:hover{background:var(--surface-2);color:var(--text)}
+.chat-messages{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:2px}
 .chat-load-more{text-align:center;font-size:.78rem;color:var(--text-3);padding:6px;cursor:default}
-.chat-msg{display:flex;max-width:70%}
+.chat-day-divider{display:flex;align-items:center;justify-content:center;margin:14px 0 10px}
+.chat-day-divider span{
+  background:var(--surface-2);color:var(--text-3);font-size:.7rem;font-weight:600;
+  padding:3px 12px;border-radius:var(--r-full);
+}
+
+.chat-msg{display:flex;align-items:flex-end;gap:6px;max-width:72%;margin-top:2px}
+.chat-msg.chat-msg-group-start{margin-top:12px}
 .chat-msg.mine{align-self:flex-end;flex-direction:row-reverse}
+.chat-msg-avatar{margin-bottom:2px}
+.chat-msg-avatar-spacer{width:26px;flex-shrink:0}
 .chat-msg-bubble{
-  background:var(--surface-2);border-radius:var(--r);padding:8px 12px;position:relative;
+  background:var(--surface-2);border-radius:var(--r-lg);padding:7px 11px;position:relative;
+  min-width:56px;transition:transform var(--tr);
 }
 .chat-msg.mine .chat-msg-bubble{background:var(--primary);color:#fff}
+/* A soft "tail" corner on the first bubble of a group, like every real chat
+   app — the rest of a grouped run stays fully rounded so consecutive
+   messages read as one visual block instead of a stack of pills. */
+.chat-msg.chat-msg-group-start:not(.mine) .chat-msg-bubble{border-bottom-left-radius:4px}
+.chat-msg.chat-msg-group-start.mine .chat-msg-bubble{border-bottom-right-radius:4px}
 .chat-msg-deleted{font-style:italic;color:var(--text-3)}
 .chat-msg.mine .chat-msg-deleted{color:rgba(255,255,255,.75)}
 .chat-msg-sender{font-size:.72rem;font-weight:700;color:var(--primary);margin-bottom:2px}
 .chat-msg-body{font-size:.86rem;white-space:pre-wrap;word-wrap:break-word}
-.chat-msg-time{font-size:.68rem;color:var(--text-3);margin-top:4px;text-align:right}
+.chat-msg-time{font-size:.66rem;color:var(--text-3);margin-top:3px;text-align:right;display:flex;align-items:center;justify-content:flex-end;gap:4px}
 .chat-msg.mine .chat-msg-time{color:rgba(255,255,255,.65)}
-.chat-msg-delete{
-  align-self:center;color:var(--text-3);opacity:0;transition:opacity var(--tr);
-  background:none;border:none;cursor:pointer;padding:4px;flex-shrink:0;
+.chat-edited-label{font-style:italic}
+.chat-msg-status{font-size:.72rem;letter-spacing:-1px}
+.chat-msg-status.read{color:#8ecbff}
+.chat-msg-status.pending{letter-spacing:0;opacity:.8}
+
+.chat-reply-preview{
+  display:flex;flex-direction:column;gap:1px;border-left:2px solid var(--primary);
+  background:rgba(0,0,0,.12);border-radius:var(--r-sm);padding:4px 8px;margin-bottom:5px;cursor:pointer;
 }
-.chat-msg:hover .chat-msg-delete{opacity:1}
-.chat-msg-delete:hover{color:var(--danger)}
+.chat-msg.mine .chat-reply-preview{border-left-color:rgba(255,255,255,.8);background:rgba(0,0,0,.15)}
+.chat-reply-sender{font-size:.7rem;font-weight:700;color:var(--primary)}
+.chat-msg.mine .chat-reply-sender{color:rgba(255,255,255,.9)}
+.chat-reply-text{font-size:.76rem;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}
+.chat-msg.mine .chat-reply-text{color:rgba(255,255,255,.8)}
+.chat-forwarded-label{font-size:.7rem;font-weight:600;color:var(--text-3);font-style:italic;margin-bottom:3px}
+.chat-msg.mine .chat-forwarded-label{color:rgba(255,255,255,.7)}
+
+.chat-msg-menu-btn{
+  align-self:center;color:var(--text-3);opacity:0;transition:opacity var(--tr);
+  background:none;border:none;cursor:pointer;padding:4px 6px;flex-shrink:0;border-radius:var(--r-sm);
+}
+.chat-msg:hover .chat-msg-menu-btn,.chat-msg:focus-within .chat-msg-menu-btn{opacity:1}
+.chat-msg-menu-btn:hover{background:var(--surface-2);color:var(--text)}
+@media (hover:none){.chat-msg-menu-btn{opacity:.55}}
+
+/* A brief highlight when jumping to a reply's original message. */
+@keyframes chatMsgFlash{0%,100%{background:transparent}30%{background:var(--primary-bg)}}
+.chat-msg-flash .chat-msg-bubble{animation:chatMsgFlash 1.1s ease}
+
+.chat-sticker-row{align-items:flex-end}
+.chat-sticker-wrap{display:flex;flex-direction:column;align-items:flex-end}
+.chat-msg.chat-sticker-row:not(.mine) .chat-sticker-wrap{align-items:flex-start}
+.chat-sticker{font-size:3.4rem;line-height:1;padding:2px 4px;filter:drop-shadow(0 2px 6px rgba(0,0,0,.25))}
+.chat-sticker-time{margin-top:0}
+
 .chat-attachment{
   display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--border);
   border-radius:var(--r);padding:6px 10px;margin-top:6px;text-decoration:none;color:var(--text);font-size:.8rem;
@@ -717,9 +772,33 @@ img.share-user-avatar-lg{box-shadow:0 0 0 3px var(--surface),0 0 0 5px var(--acc
 .chat-msg.mine .chat-attachment{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.2);color:#fff}
 .chat-attachment-name{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .chat-attachment-size{color:var(--text-3);font-size:.72rem;flex-shrink:0}
-.chat-composer{border-top:1px solid var(--border);padding:10px 14px}
+
+.chat-composer{border-top:1px solid var(--border);padding:10px 14px;position:relative}
 .chat-composer-row{display:flex;align-items:flex-end;gap:8px}
 .chat-composer-row textarea{resize:none;min-height:38px;max-height:120px;font-family:var(--font)}
+.chat-composer-context{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--surface-2);
+  border-left:2px solid var(--primary);border-radius:var(--r-sm);padding:5px 9px;margin-bottom:6px;font-size:.78rem;
+}
+.chat-composer-editing{border-left-color:var(--accent)}
+.chat-composer-context-text{display:flex;flex-direction:column;gap:1px;min-width:0;overflow:hidden}
+.chat-composer-context-text strong{font-size:.74rem;color:var(--primary)}
+.chat-composer-editing .chat-composer-context-text strong{color:var(--accent)}
+.chat-composer-context-text span{color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+.chat-sticker-picker{
+  position:absolute;bottom:100%;left:14px;margin-bottom:8px;background:var(--surface);
+  border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow-md);
+  padding:10px;max-width:min(320px,calc(100vw - 28px));max-height:220px;overflow-y:auto;
+  display:flex;flex-direction:column;gap:6px;animation:fadeIn var(--tr);z-index:20;
+}
+.chat-sticker-cat{display:flex;flex-wrap:wrap;gap:2px}
+.chat-sticker-option{
+  font-size:1.5rem;line-height:1;padding:5px;border-radius:var(--r-sm);background:none;border:none;cursor:pointer;
+  transition:background var(--tr),transform var(--tr-spring);
+}
+.chat-sticker-option:hover{background:var(--surface-2);transform:scale(1.15)}
+
 .chat-pending-attachment,.chat-member-row{
   display:inline-flex;align-items:center;gap:6px;background:var(--surface-2);border-radius:var(--r);
   padding:4px 8px;font-size:.78rem;margin:4px 4px 0 0;
@@ -727,10 +806,47 @@ img.share-user-avatar-lg{box-shadow:0 0 0 3px var(--surface),0 0 0 5px var(--acc
 .chat-member-row{display:flex;width:100%;margin:0 0 6px}
 .chat-pending-remove{background:none;border:none;color:var(--text-3);cursor:pointer;padding:0 2px;font-size:.8rem}
 .chat-pending-remove:hover{color:var(--danger)}
+
+.chat-forward-list{display:flex;flex-direction:column;gap:2px;max-height:280px;overflow-y:auto}
+.chat-forward-item{
+  display:flex;align-items:center;gap:8px;padding:8px 6px;border-radius:var(--r-sm);cursor:pointer;font-size:.85rem;
+}
+.chat-forward-item:hover{background:var(--surface-2)}
+.chat-forward-item input{flex-shrink:0}
+
 @media (max-width:900px){
   .chat-page{flex-direction:column}
   .chat-sidebar{width:100%;height:40%;border-right:none;border-bottom:1px solid var(--border)}
 }
+/* Below this width the sidebar and thread never coexist — picking a
+   conversation takes over the whole page, with a back button to return,
+   the classic mobile chat pattern (Telegram, iMessage, etc). */
+@media (max-width:640px){
+  .chat-page{position:relative}
+  .chat-sidebar{width:100%;height:100%;border-bottom:none}
+  .chat-thread{position:absolute;inset:0;background:var(--bg);display:none}
+  .chat-page.chat-mobile-open .chat-sidebar{display:none}
+  .chat-page.chat-mobile-open .chat-thread{display:flex}
+  .chat-back-btn{display:block}
+  .chat-msg{max-width:86%}
+}
+
+/* ─── Chat toasts (in-app, focused-tab notifications) ─── */
+.chat-toast-stack{
+  position:fixed;bottom:16px;right:16px;z-index:495;display:flex;flex-direction:column;gap:8px;
+  max-width:min(340px,calc(100vw - 32px));pointer-events:none;
+}
+.chat-toast{
+  pointer-events:all;display:flex;align-items:flex-start;gap:10px;background:var(--surface);
+  border:1px solid var(--border);border-radius:var(--r-lg);padding:10px 12px;box-shadow:var(--shadow-md);
+  cursor:pointer;animation:slideIn .25s ease;transition:transform var(--tr);
+}
+.chat-toast:hover{transform:translateY(-2px)}
+.chat-toast-out{animation:slideOut .22s ease forwards}
+.chat-toast-avatar{width:34px;height:34px;border-radius:50%;flex-shrink:0}
+.chat-toast-body{min-width:0}
+.chat-toast-title{font-size:.82rem;font-weight:700;color:var(--text)}
+.chat-toast-text{font-size:.78rem;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:230px}
 
 /* ─── Skeleton ─── */
 .skeleton{

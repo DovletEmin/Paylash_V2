@@ -53,7 +53,10 @@ func runOnce(database *db.DB, minioClient *storage.MinioClient) {
 
 // purgeOrphanedChatAttachments removes attachments a user uploaded but never
 // actually sent in a message — otherwise those objects would occupy storage
-// forever with nothing ever referencing them.
+// forever with nothing ever referencing them. This only ever targets
+// unclaimed rows (message_id IS NULL), so it's unaffected by forwarding: a
+// forwarded attachment's minio_key can be shared by more than one claimed
+// row, but a claimed row is by definition never a candidate here.
 func purgeOrphanedChatAttachments(database *db.DB, minioClient *storage.MinioClient) error {
 	ctx := context.Background()
 	cutoff := time.Now().Add(-chatAttachmentOrphanCutoff)
