@@ -296,6 +296,10 @@ func (d *DB) Migrate() error {
 		// in a DM header. NULL until they've connected at least once. Online
 		// status itself is in-memory hub state, never persisted.
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ`,
+
+		// Trigram index backing chat message search (body ILIKE '%q%') — same
+		// mechanism already used for file/user search; pg_trgm is enabled above.
+		`CREATE INDEX IF NOT EXISTS idx_messages_body_trgm ON messages USING GIN (body gin_trgm_ops)`,
 	}
 
 	for _, m := range migrations {

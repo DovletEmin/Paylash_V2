@@ -27,6 +27,7 @@ const ChatPage = {
     // Each entry auto-expires ~5s after the last "typing" ping for it.
     _typing: {},
     _lastTypingSent: 0,
+    _searchTimer: null,
 
     STICKERS: {
         faces: ['😀', '😂', '🥰', '😎', '😢', '😡', '😮', '🥳', '😴', '🤔'],
@@ -51,9 +52,13 @@ const ChatPage = {
                         <button class="btn btn-icon btn-ghost btn-sm" onclick="ChatPage.showNewGroupModal()" title="${I18N.t('chat.new_group')}" aria-label="${I18N.t('chat.new_group')}">👥</button>
                     </div>
                 </div>
+                <div class="chat-search-box">
+                    <input type="search" id="chat-search-input" class="form-control" placeholder="${I18N.t('chat.search_messages_placeholder')}" oninput="ChatPage.onSearchInput(this.value)" autocomplete="off">
+                </div>
                 <div class="chat-conversation-list" id="chat-conversation-list">
                     <div class="empty-state"><div class="spinner"></div></div>
                 </div>
+                <div class="chat-search-results" id="chat-search-results" style="display:none"></div>
             </div>
             <div class="chat-thread" id="chat-thread">
                 <div class="empty-state"><p>${I18N.t('chat.select_conversation')}</p></div>
@@ -114,6 +119,75 @@ const ChatPage = {
         </div>`;
     },
 
+    /* ── Message search ── */
+
+    onSearchInput(q) {
+        q = (q || '').trim();
+        clearTimeout(this._searchTimer);
+        const listEl = document.getElementById('chat-conversation-list');
+        const resEl = document.getElementById('chat-search-results');
+        if (q.length < 2) {
+            if (resEl) { resEl.style.display = 'none'; resEl.innerHTML = ''; }
+            if (listEl) listEl.style.display = '';
+            return;
+        }
+        this._searchTimer = setTimeout(() => this.runSearch(q), 250);
+    },
+
+    async runSearch(q) {
+        const listEl = document.getElementById('chat-conversation-list');
+        const resEl = document.getElementById('chat-search-results');
+        if (!resEl) return;
+        if (listEl) listEl.style.display = 'none';
+        resEl.style.display = '';
+        resEl.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
+        let results;
+        try { results = await API.chat.searchMessages(q); } catch { results = []; }
+        // The input may have moved on while the request was in flight.
+        const cur = (document.getElementById('chat-search-input') || {}).value || '';
+        if (cur.trim() !== q) return;
+        if (!results.length) {
+            resEl.innerHTML = `<div class="empty-state"><p class="text-muted">${I18N.t('chat.search_no_results')}</p></div>`;
+            return;
+        }
+        resEl.innerHTML = results.map(r => this.searchResultHTML(r, q)).join('');
+    },
+
+    searchResultHTML(r, q) {
+        const label = r.conversation_label || (r.conversation_type === 'group' ? I18N.t('chat.unnamed_group') : I18N.t('chat.unknown_user'));
+        const sender = r.sender_id === App.user.id ? I18N.t('chat.you') : (r.sender_name || '');
+        return `<div class="chat-search-result" onclick="ChatPage.openSearchResult(${r.conversation_id},${r.message_id})" role="button" tabindex="0" onkeydown="if(event.key==='Enter')ChatPage.openSearchResult(${r.conversation_id},${r.message_id})">
+            <div class="chat-search-result-top">
+                <span class="chat-search-result-conv">${UI.esc(label)}</span>
+                <span class="chat-search-result-date">${UI.formatDate(r.created_at)}</span>
+            </div>
+            <div class="chat-search-result-snippet">${sender ? `<strong>${UI.esc(sender)}:</strong> ` : ''}${this.highlightSnippet(r.body, q)}</div>
+        </div>`;
+    },
+
+    // Windowed, highlighted snippet. Everything is escaped BEFORE the match is
+    // wrapped in <mark>, so the highlight can never introduce markup; the query
+    // is regex-escaped too.
+    highlightSnippet(body, q) {
+        const lower = body.toLowerCase(), lq = q.toLowerCase();
+        const idx = lower.indexOf(lq);
+        let start = 0, prefix = '', suffix = '';
+        if (idx > 60) { start = idx - 40; prefix = '…'; }
+        let window = body.slice(start);
+        if (window.length > 160) { window = window.slice(0, 160); suffix = '…'; }
+        let esc = UI.esc(window);
+        const rx = new RegExp('(' + UI.esc(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'ig');
+        esc = esc.replace(rx, '<mark>$1</mark>');
+        return prefix + esc + suffix;
+    },
+
+    async openSearchResult(convId, messageId) {
+        const input = document.getElementById('chat-search-input');
+        if (input) input.value = '';
+        this.onSearchInput('');
+        await this.selectConversation(convId, messageId);
+    },
+
     conversationName(cv) {
         if (cv.type === 'direct') {
             return cv.other_participant ? (cv.other_participant.full_name || cv.other_participant.username) : I18N.t('chat.unknown_user');
@@ -121,7 +195,7 @@ const ChatPage = {
         return cv.name || I18N.t('chat.unnamed_group');
     },
 
-    async selectConversation(id) {
+    async selectConversation(id, focusMessageId) {
         this._activeId = id;
         this._messages = [];
         this._oldestLoadedId = null;
@@ -168,6 +242,28 @@ const ChatPage = {
         const cv = this._conversations.find(c => c.id === id);
         if (cv) { cv.unread_count = 0; this.renderConversationList(); }
         if (typeof App !== 'undefined') App.checkChatUnread();
+        if (focusMessageId) this.focusMessage(focusMessageId);
+    },
+
+    // Scrolls to (and flashes) a specific message, loading the page that
+    // contains it first if it isn't in the latest window — used to land on a
+    // search hit. Falls back to a gentle toast if it truly can't be reached.
+    async focusMessage(messageId) {
+        if (this._messages.some(m => m.id === messageId)) { this.jumpToMessage(messageId); return; }
+        try {
+            const batch = (await API.chat.listMessages(this._activeId, messageId + 1)) || [];
+            batch.reverse();
+            if (batch.length && batch.some(m => m.id === messageId)) {
+                this._messages = batch;
+                this._oldestLoadedId = batch[0].id;
+                this._hasMoreHistory = batch.length >= 50;
+                this._unreadFromId = null;
+                this.renderMessages();
+                this.jumpToMessage(messageId);
+            } else {
+                UI.toast(I18N.t('chat.reply_not_loaded'), 'info');
+            }
+        } catch { UI.toast(I18N.t('chat.reply_not_loaded'), 'info'); }
     },
 
     // Builds the thread's stable shell (header + empty messages container +

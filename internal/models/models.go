@@ -387,6 +387,20 @@ type MessageReactionGroup struct {
 	UserIDs []int  `json:"user_ids"`
 }
 
+// MessageSearchResult is one hit from chat message search — enough for the
+// client to show the match in context and jump to it. ConversationLabel is the
+// group's name, or (for a direct chat) the other participant's display name.
+type MessageSearchResult struct {
+	MessageID         int       `json:"message_id"`
+	ConversationID    int       `json:"conversation_id"`
+	ConversationType  string    `json:"conversation_type"`
+	ConversationLabel string    `json:"conversation_label"`
+	SenderID          *int      `json:"sender_id"`
+	SenderName        string    `json:"sender_name"`
+	Body              string    `json:"body"`
+	CreatedAt         time.Time `json:"created_at"`
+}
+
 // MessageAttachment is a file attached to a chat message. MinioKey is never
 // sent to the client (tighter than File.MinioKey, which is) — attachments
 // are only ever fetched by id through an authenticated download endpoint

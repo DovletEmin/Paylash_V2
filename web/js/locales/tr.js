@@ -241,6 +241,8 @@ window.PAYLASH_LOCALE_TR = {
     'chat.read_by_label': 'Okudu',
     'chat.unread_by_label': 'Henüz okumadı',
     'chat.no_readers_yet': 'Henüz kimse okumadı',
+    'chat.search_messages_placeholder': 'Mesajlarda ara…',
+    'chat.search_no_results': 'Mesaj bulunamadı',
     'chat.unread_messages': 'Okunmamış mesajlar',
     'chat.scroll_to_latest': 'En sona git',
     'chat.someone': 'Biri',

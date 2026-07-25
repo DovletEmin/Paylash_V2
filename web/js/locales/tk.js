@@ -244,6 +244,8 @@ window.PAYLASH_LOCALE_TK = {
     'chat.read_by_label': 'Okanlar',
     'chat.unread_by_label': 'Okamadyklar',
     'chat.no_readers_yet': 'Entäk hiç kim okamady',
+    'chat.search_messages_placeholder': 'Habarlary gözle…',
+    'chat.search_no_results': 'Habar tapylmady',
     'chat.unread_messages': 'Okalmadyk habarlar',
     'chat.scroll_to_latest': 'Iň soňkusyna',
     'chat.someone': 'Biri',

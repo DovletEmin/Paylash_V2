@@ -112,6 +112,7 @@ func (s *Server) routes(webFS embed.FS) {
 
 	// Chat (direct + group conversations, attachments, real-time via WS)
 	s.mux.Handle("GET /api/chat/users/search", auth(http.HandlerFunc(h.SearchChatUsers)))
+	s.mux.Handle("GET /api/chat/search", auth(http.HandlerFunc(h.SearchChatMessages)))
 	s.mux.Handle("GET /api/chat/conversations", auth(http.HandlerFunc(h.ListConversations)))
 	s.mux.Handle("POST /api/chat/conversations", auth(http.HandlerFunc(h.CreateConversation)))
 	s.mux.Handle("GET /api/chat/conversations/{id}", auth(http.HandlerFunc(h.GetConversationDetail)))

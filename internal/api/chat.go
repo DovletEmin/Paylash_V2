@@ -69,6 +69,39 @@ func (h *Handler) SearchChatUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, results)
 }
 
+// SearchChatMessages searches the caller's conversations for text matching q.
+// An optional conversation_id narrows it to one conversation (the caller must
+// be a participant). Deleted/hidden messages are excluded by the query.
+func (h *Handler) SearchChatMessages(w http.ResponseWriter, r *http.Request) {
+	user := authutil.GetUser(r)
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if len([]rune(q)) < 2 {
+		writeJSON(w, http.StatusOK, []models.MessageSearchResult{})
+		return
+	}
+	convID := 0
+	if v := r.URL.Query().Get("conversation_id"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			// Scoped search must still respect membership.
+			ok, err := h.db.IsParticipant(n, user.ID)
+			if err != nil || !ok {
+				writeError(w, http.StatusForbidden, "rugsat ýok")
+				return
+			}
+			convID = n
+		}
+	}
+	results, err := h.db.SearchMessages(user.ID, q, convID, 50)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "gözleg ýalňyşlygy")
+		return
+	}
+	if results == nil {
+		results = []models.MessageSearchResult{}
+	}
+	writeJSON(w, http.StatusOK, results)
+}
+
 func (h *Handler) ListConversations(w http.ResponseWriter, r *http.Request) {
 	user := authutil.GetUser(r)
 	list, err := h.db.ListConversationsForUser(user.ID)

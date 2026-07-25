@@ -241,6 +241,8 @@ window.PAYLASH_LOCALE_EN = {
     'chat.read_by_label': 'Read',
     'chat.unread_by_label': 'Not read yet',
     'chat.no_readers_yet': 'No one has read this yet',
+    'chat.search_messages_placeholder': 'Search messages…',
+    'chat.search_no_results': 'No messages found',
     'chat.unread_messages': 'Unread messages',
     'chat.scroll_to_latest': 'Scroll to latest',
     'chat.someone': 'Someone',

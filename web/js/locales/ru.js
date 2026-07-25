@@ -241,6 +241,8 @@ window.PAYLASH_LOCALE_RU = {
     'chat.read_by_label': 'Прочитали',
     'chat.unread_by_label': 'Ещё не прочитали',
     'chat.no_readers_yet': 'Пока никто не прочитал',
+    'chat.search_messages_placeholder': 'Поиск по сообщениям…',
+    'chat.search_no_results': 'Ничего не найдено',
     'chat.unread_messages': 'Непрочитанные',
     'chat.scroll_to_latest': 'К последним',
     'chat.someone': 'Кто-то',

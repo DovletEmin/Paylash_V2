@@ -208,6 +208,11 @@ const API = {
 
     chat: {
         searchUsers(q) { return API._request('GET', `/api/chat/users/search?q=${encodeURIComponent(q)}`); },
+        searchMessages(q, conversationId) {
+            let url = `/api/chat/search?q=${encodeURIComponent(q)}`;
+            if (conversationId) url += `&conversation_id=${conversationId}`;
+            return API._request('GET', url);
+        },
         list() { return API._request('GET', '/api/chat/conversations'); },
         createDirect(userId) { return API._request('POST', '/api/chat/conversations', { type: 'direct', user_id: userId }); },
         createGroup(name, participantIds, projectId) {

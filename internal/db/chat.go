@@ -211,6 +211,56 @@ func (d *DB) ListConversationsForUser(userID int) ([]models.ConversationView, er
 	return list, rows.Err()
 }
 
+// SearchMessages finds text messages matching query within the conversations
+// userID participates in (or within a single conversation when conversationID
+// > 0). Deleted messages and ones the user hid for themselves are excluded, so
+// a search can never surface something the user can't otherwise see. Newest
+// match first.
+func (d *DB) SearchMessages(userID int, query string, conversationID, limit int) ([]models.MessageSearchResult, error) {
+	rows, err := d.Query(`
+		SELECT m.id, m.conversation_id, c.type, COALESCE(c.name, ''),
+		       m.sender_id, COALESCE(su.display_name, su.username, ''),
+		       m.body, m.created_at, COALESCE(other.name, '')
+		FROM messages m
+		JOIN conversations c ON c.id = m.conversation_id
+		JOIN conversation_participants cp ON cp.conversation_id = c.id AND cp.user_id = $1
+		LEFT JOIN users su ON su.id = m.sender_id
+		LEFT JOIN message_hidden_for hf ON hf.message_id = m.id AND hf.user_id = $1
+		LEFT JOIN LATERAL (
+			SELECT COALESCE(u.display_name, u.username, '') AS name
+			FROM conversation_participants cp2 JOIN users u ON u.id = cp2.user_id
+			WHERE cp2.conversation_id = c.id AND cp2.user_id <> $1 AND c.type = 'direct'
+			LIMIT 1
+		) other ON true
+		WHERE m.deleted_at IS NULL AND hf.message_id IS NULL AND m.kind = 'text'
+		  AND m.body ILIKE $2
+		  AND ($3 = 0 OR m.conversation_id = $3)
+		ORDER BY m.created_at DESC, m.id DESC
+		LIMIT $4`,
+		userID, "%"+query+"%", conversationID, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var results []models.MessageSearchResult
+	for rows.Next() {
+		var r models.MessageSearchResult
+		var otherName string
+		if err := rows.Scan(
+			&r.MessageID, &r.ConversationID, &r.ConversationType, &r.ConversationLabel,
+			&r.SenderID, &r.SenderName, &r.Body, &r.CreatedAt, &otherName,
+		); err != nil {
+			return nil, err
+		}
+		if r.ConversationType == "direct" {
+			r.ConversationLabel = otherName
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
 func (d *DB) IsParticipant(conversationID, userID int) (bool, error) {
 	var exists bool
 	err := d.QueryRow(
