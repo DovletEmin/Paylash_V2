@@ -1097,6 +1097,124 @@ func (h *Handler) DeleteFolder(w http.ResponseWriter, r *http.Request) {
 // DownloadFolder streams a folder (and everything nested under it) as a zip,
 // built on the fly directly into the response — no temp file, no buffering
 // the archive in memory first, same streaming principle as DownloadFile.
+// ExportScope streams a single zip of every (non-trashed) file and folder in
+// one space — a one-click "download all my data" (personal), "archive the
+// common space", or "archive this project". It reuses the same streaming zip
+// machinery as folder/bulk download, so even a very large space is written
+// straight to the response without ever buffering in memory. Access is the
+// same as browsing the space: personal is always the caller's own; common is
+// open to any signed-in user; a project needs view membership (or admin).
+func (h *Handler) ExportScope(w http.ResponseWriter, r *http.Request) {
+	user := authutil.GetUser(r)
+	scope := r.URL.Query().Get("scope")
+	if scope == "" {
+		scope = "personal"
+	}
+
+	var projectID *int
+	label := scope
+	switch scope {
+	case "personal", "common":
+		// nothing extra — listing is scoped by the queries themselves
+	case "project":
+		pid := 0
+		if v := r.URL.Query().Get("project_id"); v != "" {
+			pid, _ = strconv.Atoi(v)
+		}
+		if pid <= 0 {
+			writeError(w, http.StatusBadRequest, "taslama saýlanmaly")
+			return
+		}
+		if user.Role != "admin" {
+			perm, err := h.db.GetProjectMemberPermission(pid, user.ID)
+			if err != nil || perm == "" {
+				writeError(w, http.StatusForbidden, "rugsat ýok")
+				return
+			}
+		}
+		projectID = &pid
+		label = fmt.Sprintf("project-%d", pid)
+	default:
+		writeError(w, http.StatusBadRequest, "nädogry ýer")
+		return
+	}
+
+	// Big limit rather than pagination: an export is meant to be the whole
+	// space in one archive.
+	rootFiles, err := h.db.ListFiles(user.ID, projectID, scope, nil, "name", "asc", 100000, 0)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "faýllary alyp bolmady")
+		return
+	}
+	rootFolders, err := h.db.ListFolders(user.ID, projectID, scope, nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "bukjalary alyp bolmady")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="paylash-%s.zip"`, sanitizeZipName(label)))
+	zw := zip.NewWriter(w)
+	defer zw.Close()
+
+	// One namespace for everything at the archive root — dedup loose files and
+	// top-level folder names against each other, same as BulkDownload.
+	used := map[string]int{}
+	uniqueName := func(name string) string {
+		used[name]++
+		if used[name] == 1 {
+			return name
+		}
+		ext := filepath.Ext(name)
+		base := strings.TrimSuffix(name, ext)
+		return fmt.Sprintf("%s (%d)%s", base, used[name]-1, ext)
+	}
+
+	for _, f := range rootFiles {
+		if f.FolderID != nil {
+			continue // only loose root files here; foldered files come via the tree
+		}
+		entryName := uniqueName(f.Name)
+		fw, err := zw.CreateHeader(&zip.FileHeader{Name: entryName, Method: zip.Store, Modified: f.UpdatedAt})
+		if err != nil {
+			log.Printf("export: create entry %s: %v", entryName, err)
+			continue
+		}
+		obj, err := h.minio.Download(r.Context(), f.MinioBucket, f.MinioKey)
+		if err != nil {
+			log.Printf("export: open %s/%s: %v", f.MinioBucket, f.MinioKey, err)
+			continue
+		}
+		if _, err := io.Copy(fw, obj); err != nil {
+			log.Printf("export: copy %s: %v", entryName, err)
+		}
+		obj.Close()
+	}
+
+	for i := range rootFolders {
+		fld := rootFolders[i]
+		if err := h.writeFolderTree(r.Context(), zw, &fld, uniqueName(fld.Name)); err != nil {
+			log.Printf("export folder tree %q: %v", fld.Name, err)
+		}
+	}
+}
+
+// sanitizeZipName strips characters that would break a Content-Disposition
+// filename or a filesystem path out of a zip name.
+func sanitizeZipName(s string) string {
+	s = strings.Map(func(r rune) rune {
+		switch r {
+		case '"', '\\', '/', '\n', '\r', 0:
+			return '_'
+		}
+		return r
+	}, s)
+	if s == "" {
+		return "export"
+	}
+	return s
+}
+
 func (h *Handler) DownloadFolder(w http.ResponseWriter, r *http.Request) {
 	user := authutil.GetUser(r)
 	id, err := strconv.Atoi(r.PathValue("id"))

@@ -195,6 +195,8 @@ window.PAYLASH_LOCALE_TK = {
     'files.download_folder_title': 'Papkany ýükläp al',
     'files.folder_zip_preparing': '"{name}.zip" taýýarlanýar…',
     'files.bulk_zip_preparing': 'Arhiw taýýarlanýar…',
+    'files.export_scope': 'Hemmesini eksport et (zip)',
+    'files.export_preparing': 'Arhiw taýýarlanýar…',
 
     // ýükleme ulgamy (upload.js)
     'upload.part_failed': 'Bölek {n} ýüklenmedi (HTTP {status})',

@@ -192,6 +192,8 @@ window.PAYLASH_LOCALE_RU = {
     'files.download_folder_title': 'Скачать папку',
     'files.folder_zip_preparing': 'Подготовка «{name}.zip»…',
     'files.bulk_zip_preparing': 'Подготовка архива…',
+    'files.export_scope': 'Экспорт всего (zip)',
+    'files.export_preparing': 'Готовим архив…',
 
     // движок загрузки (upload.js)
     'upload.part_failed': 'Не удалось загрузить часть {n} (HTTP {status})',

@@ -192,6 +192,8 @@ window.PAYLASH_LOCALE_TR = {
     'files.download_folder_title': 'Klasörü indir',
     'files.folder_zip_preparing': '"{name}.zip" hazırlanıyor…',
     'files.bulk_zip_preparing': 'Arşiv hazırlanıyor…',
+    'files.export_scope': 'Her şeyi dışa aktar (zip)',
+    'files.export_preparing': 'Arşiv hazırlanıyor…',
 
     // yükleme motoru (upload.js)
     'upload.part_failed': '{n}. parça yüklenemedi (HTTP {status})',

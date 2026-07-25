@@ -192,6 +192,8 @@ window.PAYLASH_LOCALE_EN = {
     'files.download_folder_title': 'Download folder',
     'files.folder_zip_preparing': 'Preparing "{name}.zip"…',
     'files.bulk_zip_preparing': 'Preparing your zip…',
+    'files.export_scope': 'Export everything (zip)',
+    'files.export_preparing': 'Preparing your archive…',
 
     // upload engine (upload.js)
     'upload.part_failed': 'Part {n} failed to upload (HTTP {status})',

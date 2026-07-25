@@ -140,6 +140,11 @@ const API = {
             ];
             return `/api/files/bulk-download?${params.join('&')}`;
         },
+        exportURL(scope, projectId) {
+            let url = `/api/export?scope=${encodeURIComponent(scope || 'personal')}`;
+            if (scope === 'project' && projectId) url += `&project_id=${projectId}`;
+            return url;
+        },
         comments: {
             list(fileId) { return API._request('GET', `/api/files/${fileId}/comments`); },
             create(fileId, body, xPct, yPct) {

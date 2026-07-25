@@ -73,6 +73,7 @@ func (s *Server) routes(webFS embed.FS) {
 	s.mux.Handle("DELETE /api/files/{id}", auth(http.HandlerFunc(h.DeleteFile)))
 	s.mux.Handle("GET /api/search", auth(http.HandlerFunc(h.SearchFiles)))
 	s.mux.Handle("GET /api/files/bulk-download", auth(http.HandlerFunc(h.BulkDownload)))
+	s.mux.Handle("GET /api/export", auth(http.HandlerFunc(h.ExportScope)))
 	s.mux.Handle("GET /api/storage/usage", auth(http.HandlerFunc(h.StorageUsage)))
 
 	// File versions (MinIO bucket versioning)

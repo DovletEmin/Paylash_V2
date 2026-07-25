@@ -42,6 +42,7 @@ const FilesPage = {
                     </div>
                     <button class="btn btn-icon btn-ghost ${this.viewMode === 'grid' ? 'active' : ''}" onclick="FilesPage.setView('grid')" title="${I18N.t('files.view_grid')}" aria-label="${I18N.t('files.view_grid')}">${UI.icons.grid}</button>
                     <button class="btn btn-icon btn-ghost ${this.viewMode === 'list' ? 'active' : ''}" onclick="FilesPage.setView('list')" title="${I18N.t('files.view_list')}" aria-label="${I18N.t('files.view_list')}">${UI.icons.list}</button>
+                    <button class="btn btn-icon btn-ghost" onclick="FilesPage.exportScope()" title="${I18N.t('files.export_scope')}" aria-label="${I18N.t('files.export_scope')}">${UI.icons.download}</button>
                 </div>
             </div>
             <div id="bulk-actions-bar" class="bulk-actions-bar hidden"></div>
@@ -258,6 +259,16 @@ const FilesPage = {
         const a = document.createElement('a');
         a.href = API.files.bulkDownloadURL(fileIds, folderIds);
         a.download = 'paylash-files.zip';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    },
+
+    // Exports the entire current space (personal / common / project) as one
+    // zip — the browser streams it straight to disk via Content-Disposition.
+    exportScope() {
+        UI.toast(I18N.t('files.export_preparing'), 'info');
+        const a = document.createElement('a');
+        a.href = API.files.exportURL(this.currentScope, this.currentProjectId);
+        a.download = `paylash-${this.currentScope}.zip`;
         document.body.appendChild(a); a.click(); document.body.removeChild(a);
     },
 
