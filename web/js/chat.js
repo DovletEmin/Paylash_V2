@@ -226,7 +226,7 @@ const ChatPage = {
             return `<div class="chat-msg chat-msg-sticker-row ${mine ? 'mine' : ''}${groupCls}" id="chat-msg-${m.id}" oncontextmenu="ChatPage.showMessageMenu(event,${m.id})">
                 ${avatarSlot}
                 <div class="chat-sticker-wrap">
-                    <div class="chat-sticker">${m.body}</div>
+                    <div class="chat-sticker">${UI.esc(m.body)}</div>
                     <div class="chat-msg-time chat-sticker-time">${UI.formatDate(m.created_at)} ${this.statusTickHTML(m, mine)}</div>
                 </div>
                 <button class="chat-msg-menu-btn" onclick="ChatPage.showMessageMenu(event,${m.id})" title="${I18N.t('common.actions')}" aria-label="${I18N.t('common.actions')}">⋮</button>
@@ -236,7 +236,7 @@ const ChatPage = {
         const senderLabel = (!mine && !isDirect && isGroupStart) ? `<div class="chat-msg-sender">${UI.esc(m.sender_name)}</div>` : '';
         const replyBlock = m.reply_to ? `<div class="chat-reply-preview" onclick="ChatPage.jumpToMessage(${m.reply_to.id})">
             <span class="chat-reply-sender">${UI.esc(m.reply_to.sender_name)}</span>
-            <span class="chat-reply-text">${m.reply_to.kind === 'sticker' ? m.reply_to.body : UI.esc(m.reply_to.body || I18N.t('chat.attachment_notification'))}</span>
+            <span class="chat-reply-text">${UI.esc(m.reply_to.kind === 'sticker' ? m.reply_to.body : (m.reply_to.body || I18N.t('chat.attachment_notification')))}</span>
         </div>` : '';
         const forwardedBlock = m.forwarded_from_name ? `<div class="chat-forwarded-label">↪ ${I18N.t('chat.forwarded_from')} ${UI.esc(m.forwarded_from_name)}</div>` : '';
         const editedLabel = m.edited_at ? `<span class="chat-edited-label">${I18N.t('chat.edited_label')}</span>` : '';
@@ -388,7 +388,7 @@ const ChatPage = {
             return;
         }
         el.innerHTML = `<div class="chat-composer-context">
-            <div class="chat-composer-context-text"><strong>${UI.esc(ctx.senderName)}</strong><span>${ctx.kind === 'sticker' ? ctx.body : UI.esc(ctx.body || I18N.t('chat.attachment_notification'))}</span></div>
+            <div class="chat-composer-context-text"><strong>${UI.esc(ctx.senderName)}</strong><span>${UI.esc(ctx.kind === 'sticker' ? ctx.body : (ctx.body || I18N.t('chat.attachment_notification')))}</span></div>
             <button class="chat-pending-remove" onclick="ChatPage.cancelComposerContext()" aria-label="${I18N.t('common.cancel')}">✕</button>
         </div>`;
     },

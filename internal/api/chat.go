@@ -338,9 +338,11 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	body := strings.TrimSpace(req.Body)
 	if kind == "sticker" {
-		// A sticker message IS the emoji (no separate text), and sends alone
-		// — matches how every sticker-supporting chat app treats them.
-		if body == "" || len(body) > 32 {
+		// A sticker message IS the emoji (no separate text), sends alone, and
+		// its body must be one of the curated set — not just "short" — so a
+		// hand-crafted client can't smuggle markup into a field rendered
+		// without HTML-escaping. See isValidSticker / stickers.go.
+		if !isValidSticker(body) {
 			writeError(w, http.StatusBadRequest, "nädogry stiker")
 			return
 		}
