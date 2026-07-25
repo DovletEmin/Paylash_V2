@@ -1,22 +1,11 @@
 package api
 
 import (
-	"net/http"
-	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	loginMaxAttempts = 5
-	loginWindow      = 15 * time.Minute
-
-	// registerMaxAttempts throttles account creation per source IP — mainly
-	// a brake on automated bulk-account creation, not something a real
-	// employee should ever brush up against.
-	registerMaxAttempts = 10
-	registerWindow      = time.Hour
-
 	// commentMaxAttempts is generous on purpose: real review-comment threads
 	// during an active design discussion can be rapid-fire. It's a brake on
 	// scripted spam, not on normal collaboration.
@@ -41,11 +30,11 @@ const (
 	chatAttachmentWindow      = 10 * time.Minute
 )
 
-// keyedLimiter throttles repeated actions per key (username, IP, user id...)
-// within a sliding window — backs login/registration/comment/avatar-upload
-// throttling. The app runs as a single instance (see PLAN.md — no
-// horizontal scaling), so in-memory state is enough; it simply resets on
-// restart, which is an acceptable trade-off here.
+// keyedLimiter throttles repeated actions per key (user id, ...) within a
+// sliding window — backs comment/avatar/message/attachment throttling (login
+// and registration are deliberately not rate-limited). The app runs as a
+// single instance (see PLAN.md — no horizontal scaling), so in-memory state is
+// enough; it simply resets on restart, which is an acceptable trade-off here.
 type keyedLimiter struct {
 	mu          sync.Mutex
 	maxAttempts int
@@ -56,8 +45,6 @@ type keyedLimiter struct {
 func newKeyedLimiter(maxAttempts int, window time.Duration) *keyedLimiter {
 	return &keyedLimiter{maxAttempts: maxAttempts, window: window, events: make(map[string][]time.Time)}
 }
-
-func newLoginLimiter() *keyedLimiter { return newKeyedLimiter(loginMaxAttempts, loginWindow) }
 
 func (l *keyedLimiter) blocked(key string) bool {
 	l.mu.Lock()
@@ -93,20 +80,4 @@ func (l *keyedLimiter) prune(key string) []time.Time {
 	}
 	l.events[key] = kept
 	return kept
-}
-
-// clientIP extracts the caller's address, preferring X-Forwarded-For (set by
-// the Caddy reverse proxy) over the raw connection address.
-func clientIP(r *http.Request) string {
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		if i := strings.IndexByte(fwd, ','); i >= 0 {
-			fwd = fwd[:i]
-		}
-		return strings.TrimSpace(fwd)
-	}
-	host := r.RemoteAddr
-	if i := strings.LastIndex(host, ":"); i >= 0 {
-		host = host[:i]
-	}
-	return host
 }

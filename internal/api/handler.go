@@ -17,8 +17,6 @@ type Handler struct {
 	db                    *db.DB
 	minio                 *storage.MinioClient
 	cfg                   *config.Config
-	loginLimiter          *keyedLimiter
-	registerLimiter       *keyedLimiter
 	commentLimiter        *keyedLimiter
 	avatarLimiter         *keyedLimiter
 	messageLimiter        *keyedLimiter
@@ -37,8 +35,6 @@ func NewHandler(database *db.DB, minioClient *storage.MinioClient, cfg *config.C
 		db:                    database,
 		minio:                 minioClient,
 		cfg:                   cfg,
-		loginLimiter:          newLoginLimiter(),
-		registerLimiter:       newKeyedLimiter(registerMaxAttempts, registerWindow),
 		commentLimiter:        newKeyedLimiter(commentMaxAttempts, commentWindow),
 		avatarLimiter:         newKeyedLimiter(avatarMaxAttempts, avatarWindow),
 		messageLimiter:        newKeyedLimiter(messageMaxAttempts, messageWindow),

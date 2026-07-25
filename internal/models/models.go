@@ -20,12 +20,7 @@ type User struct {
 	// privacy options.
 	ChatNotifyLevel string    `json:"chat_notify_level"`
 	ChatNotifySound bool      `json:"chat_notify_sound"`
-	// TOTPEnabled reflects whether this account requires a 2FA code at login.
-	// The secret and recovery codes themselves are never part of this struct —
-	// they're read through dedicated queries only in the auth flows that need
-	// them, so a routine user load never carries them around.
-	TOTPEnabled bool      `json:"totp_enabled"`
-	CreatedAt   time.Time `json:"created_at"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 // Project is an admin-created folder with an explicit member list (ACL).
@@ -148,9 +143,6 @@ const DefaultQuotaBytes int64 = 1 << 30
 type LoginRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
-	// TOTPCode is supplied on the second step of login for a 2FA-enabled
-	// account (or a recovery code in its place); empty on the first attempt.
-	TOTPCode string `json:"totp_code"`
 }
 
 type CreateFolderRequest struct {

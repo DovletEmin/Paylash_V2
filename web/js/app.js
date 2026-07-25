@@ -409,17 +409,6 @@ const App = {
                 <label class="checkbox-option"><input type="checkbox" id="prof-notify-sound" ${sound ? 'checked' : ''}> <span>${I18N.t('app.chat_notify_sound_label')}</span></label>
             </div>
             <hr style="border:none;border-top:1px solid var(--border);margin:12px 0">
-            <div class="form-group">
-                <label>${I18N.t('app.twofa_label')}</label>
-                <div class="twofa-status ${u.totp_enabled ? 'enabled' : ''}">
-                    <span>${u.totp_enabled ? '🔒 ' + I18N.t('app.twofa_on') : I18N.t('app.twofa_off')}</span>
-                    ${u.totp_enabled
-                        ? `<button type="button" class="btn btn-ghost btn-sm" onclick="App.disable2FA()">${I18N.t('app.twofa_disable')}</button>`
-                        : `<button type="button" class="btn btn-ghost btn-sm" onclick="App.setup2FA()">${I18N.t('app.twofa_enable')}</button>`}
-                </div>
-                <p class="text-muted" style="font-size:.72rem;margin-top:4px">${I18N.t('app.twofa_hint')}</p>
-            </div>
-            <hr style="border:none;border-top:1px solid var(--border);margin:12px 0">
             <button type="button" class="btn btn-ghost btn-sm" style="width:100%" onclick="App.logoutOtherDevices()">${I18N.t('app.logout_others_button')}</button>
             <p class="text-muted" style="font-size:.72rem;margin-top:4px">${I18N.t('app.logout_others_hint')}</p>`,
             `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="App.saveProfile()">${I18N.t('common.save')}</button>`);
@@ -433,54 +422,6 @@ const App = {
                 this.showProfileModal();
             } catch (e) { UI.toast(e.message, 'error'); }
         });
-    },
-
-    /* ── Two-factor auth (TOTP) ── */
-
-    async setup2FA() {
-        let data;
-        try { data = await API.auth.totpSetup(); } catch (e) { UI.toast(e.message, 'error'); return; }
-        const grouped = data.secret.replace(/(.{4})/g, '$1 ').trim();
-        UI.showModal(I18N.t('app.twofa_enable'), `
-            <p style="font-size:.85rem;margin-bottom:10px">${I18N.t('app.twofa_setup_intro')}</p>
-            <div class="twofa-secret">${UI.esc(grouped)}</div>
-            <div class="form-group" style="margin-top:12px">
-                <label>${I18N.t('app.twofa_code_label')}</label>
-                <input type="text" id="twofa-code" class="form-control" placeholder="000000" inputmode="numeric" autocomplete="one-time-code">
-            </div>`,
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="App.confirm2FA()">${I18N.t('app.twofa_activate')}</button>`);
-        setTimeout(() => document.getElementById('twofa-code')?.focus(), 50);
-    },
-
-    async confirm2FA() {
-        const code = (document.getElementById('twofa-code')?.value || '').trim();
-        if (!code) { UI.toast(I18N.t('app.twofa_code_required'), 'error'); return; }
-        let res;
-        try { res = await API.auth.totpEnable(code); } catch (e) { UI.toast(e.message, 'error'); return; }
-        if (this.user) this.user.totp_enabled = true;
-        const codes = res.recovery_codes || [];
-        UI.showModal(I18N.t('app.twofa_recovery_title'), `
-            <p style="font-size:.85rem;margin-bottom:10px">${I18N.t('app.twofa_recovery_intro')}</p>
-            <div class="twofa-recovery">${codes.map(c => `<code>${UI.esc(c)}</code>`).join('')}</div>`,
-            `<button class="btn btn-primary" onclick="UI.closeModal()">${I18N.t('app.twofa_recovery_saved')}</button>`);
-    },
-
-    disable2FA() {
-        UI.showModal(I18N.t('app.twofa_disable'), `
-            <p style="font-size:.85rem;margin-bottom:10px">${I18N.t('app.twofa_disable_intro')}</p>
-            <div class="form-group"><label>${I18N.t('app.old_password_label')}</label>${UI.passwordField('twofa-disable-pw', I18N.t('app.old_password_placeholder'))}</div>`,
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-danger" onclick="App.confirmDisable2FA()">${I18N.t('app.twofa_disable')}</button>`);
-    },
-
-    async confirmDisable2FA() {
-        const pw = document.getElementById('twofa-disable-pw')?.value || '';
-        if (!pw) { UI.toast(I18N.t('app.old_password_required'), 'error'); return; }
-        try {
-            await API.auth.totpDisable(pw);
-            if (this.user) this.user.totp_enabled = false;
-            UI.closeModal();
-            UI.toast(I18N.t('app.twofa_disabled_done'), 'success');
-        } catch (e) { UI.toast(e.message, 'error'); }
     },
 
     async uploadAvatar(input) {
