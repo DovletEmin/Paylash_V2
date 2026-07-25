@@ -46,6 +46,11 @@ type chatConn struct {
 	userID int
 	ws     *websocket.Conn
 	send   chan []byte
+	// Touched only by this connection's readPump goroutine (no lock needed) —
+	// a server-side throttle so a chatty/hostile client can't fan "typing"
+	// events out to a conversation faster than once every couple of seconds.
+	lastTypingConv int
+	lastTypingAt   time.Time
 }
 
 // chatHub tracks every user's live connections in memory — consistent with
@@ -61,11 +66,14 @@ func newChatHub() *chatHub {
 }
 
 // register adds a connection, enforcing maxConnsPerUser by dropping the
-// oldest one for that user if already at the cap.
-func (hub *chatHub) register(userID int, ws *websocket.Conn) *chatConn {
+// oldest one for that user if already at the cap. The bool return reports
+// whether this is the user's FIRST live connection (they just came online),
+// so the caller can fire a presence broadcast exactly on the transition.
+func (hub *chatHub) register(userID int, ws *websocket.Conn) (*chatConn, bool) {
 	c := &chatConn{userID: userID, ws: ws, send: make(chan []byte, sendBufferSize)}
 	hub.mu.Lock()
 	conns := hub.conns[userID]
+	becameOnline := len(conns) == 0
 	var oldest *chatConn
 	if len(conns) >= maxConnsPerUser {
 		oldest = conns[0]
@@ -81,10 +89,12 @@ func (hub *chatHub) register(userID int, ws *websocket.Conn) *chatConn {
 		// closes it) and panic.
 		oldest.ws.Close()
 	}
-	return c
+	return c, becameOnline
 }
 
-func (hub *chatHub) unregister(c *chatConn) {
+// unregister removes a connection and reports whether it was the user's LAST
+// one (they just went offline), the mirror of register's return.
+func (hub *chatHub) unregister(c *chatConn) bool {
 	hub.mu.Lock()
 	conns := hub.conns[c.userID]
 	for i, existing := range conns {
@@ -93,11 +103,20 @@ func (hub *chatHub) unregister(c *chatConn) {
 			break
 		}
 	}
-	if len(hub.conns[c.userID]) == 0 {
+	becameOffline := len(hub.conns[c.userID]) == 0
+	if becameOffline {
 		delete(hub.conns, c.userID)
 	}
 	hub.mu.Unlock()
 	close(c.send)
+	return becameOffline
+}
+
+// isOnline reports whether the user currently has at least one live socket.
+func (hub *chatHub) isOnline(userID int) bool {
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	return len(hub.conns[userID]) > 0
 }
 
 // broadcast fans an event out to every one of userIDs' active connections
@@ -151,13 +170,18 @@ func (c *chatConn) writePump() {
 	}
 }
 
-// readPump's only real job in v1 (no typing indicators yet) is detecting
-// disconnects: ReadMessage returning an error is how gorilla surfaces a
-// closed/dead connection, and the pong handler resets the read deadline so
-// a live-but-quiet connection isn't mistaken for a dead one.
-func (c *chatConn) readPump(hub *chatHub) {
+// readPump detects disconnects (ReadMessage erroring is how gorilla surfaces
+// a closed/dead connection) and dispatches the messages a client sends UP the
+// socket — today only "typing". The pong handler resets the read deadline so
+// a live-but-quiet connection isn't mistaken for dead; every inbound frame
+// resets it too. On the user's last connection dropping it fires the offline
+// presence transition.
+func (c *chatConn) readPump(h *Handler) {
+	hub := h.chatHub
 	defer func() {
-		hub.unregister(c)
+		if becameOffline := hub.unregister(c); becameOffline {
+			h.onUserOffline(c.userID)
+		}
 		c.ws.Close()
 	}()
 	c.ws.SetReadDeadline(time.Now().Add(pongWait))
@@ -166,10 +190,66 @@ func (c *chatConn) readPump(hub *chatHub) {
 		return nil
 	})
 	for {
-		if _, _, err := c.ws.ReadMessage(); err != nil {
+		_, data, err := c.ws.ReadMessage()
+		if err != nil {
 			return
 		}
+		c.ws.SetReadDeadline(time.Now().Add(pongWait))
+		h.handleClientMessage(c, data)
 	}
+}
+
+// handleClientMessage processes a frame the browser sent up the socket. Only
+// "typing" is understood; anything else is ignored (forward-compatible).
+func (h *Handler) handleClientMessage(c *chatConn, data []byte) {
+	if len(data) > 512 { // a control frame like this is tiny; cap it defensively
+		return
+	}
+	var msg struct {
+		Type           string `json:"type"`
+		ConversationID int    `json:"conversation_id"`
+	}
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return
+	}
+	if msg.Type == "typing" {
+		h.handleTyping(c, msg.ConversationID)
+	}
+}
+
+// handleTyping relays a "user is typing" signal to the OTHER participants of a
+// conversation, after verifying the sender belongs to it. Throttled per
+// connection so it can't be used to flood, and never echoed back to the typer.
+func (h *Handler) handleTyping(c *chatConn, convID int) {
+	if convID <= 0 {
+		return
+	}
+	now := time.Now()
+	if convID == c.lastTypingConv && now.Sub(c.lastTypingAt) < 2*time.Second {
+		return
+	}
+	ok, err := h.db.IsParticipant(convID, c.userID)
+	if err != nil || !ok {
+		return
+	}
+	c.lastTypingConv = convID
+	c.lastTypingAt = now
+	participants, err := h.db.ListParticipants(convID)
+	if err != nil {
+		return
+	}
+	var name string
+	others := make([]int, 0, len(participants))
+	for _, p := range participants {
+		if p.UserID == c.userID {
+			name = p.DisplayName
+		} else {
+			others = append(others, p.UserID)
+		}
+	}
+	h.chatHub.broadcast(others, map[string]any{
+		"type": "typing", "conversation_id": convID, "user_id": c.userID, "user_name": name,
+	})
 }
 
 // ChatWebSocket upgrades the connection — auth needs no extra plumbing here:
@@ -184,7 +264,10 @@ func (h *Handler) ChatWebSocket(w http.ResponseWriter, r *http.Request) {
 		log.Printf("chat ws upgrade: %v", err)
 		return
 	}
-	c := h.chatHub.register(user.ID, ws)
+	c, becameOnline := h.chatHub.register(user.ID, ws)
+	if becameOnline {
+		h.onUserOnline(user.ID)
+	}
 	go c.writePump()
-	c.readPump(h.chatHub)
+	c.readPump(h)
 }

@@ -42,6 +42,15 @@ const ChatSocket = {
         this._reconnectTimer = setTimeout(() => this.connect(), delay);
     },
 
+    // Sends a small control frame UP the socket (currently only the "typing"
+    // signal). Silently no-ops when the socket isn't open — a dropped typing
+    // ping is nothing to recover from.
+    send(obj) {
+        if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+            try { this._ws.send(JSON.stringify(obj)); } catch { /* socket races closed — ignore */ }
+        }
+    },
+
     on(type, fn) {
         (this._listeners[type] = this._listeners[type] || []).push(fn);
     },

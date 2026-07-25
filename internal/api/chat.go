@@ -79,6 +79,12 @@ func (h *Handler) ListConversations(w http.ResponseWriter, r *http.Request) {
 	if list == nil {
 		list = []models.ConversationView{}
 	}
+	// Flip the DM partner's live online dot on in the inbox list.
+	for i := range list {
+		if list[i].OtherParticipant != nil {
+			list[i].OtherParticipant.Online = h.chatHub.isOnline(list[i].OtherParticipant.UserID)
+		}
+	}
 	writeJSON(w, http.StatusOK, list)
 }
 
@@ -149,6 +155,10 @@ func (h *Handler) GetConversationDetail(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "ýalňyşlyk")
 		return
+	}
+	// Online status is live hub state, not in the DB — stamp it here.
+	for i := range participants {
+		participants[i].Online = h.chatHub.isOnline(participants[i].UserID)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"conversation": conv, "participants": participants})
 }
@@ -871,4 +881,27 @@ func notifyConversationUpdated(h *Handler, convID int) {
 		return
 	}
 	h.chatHub.broadcast(participantIDs(participants), map[string]any{"type": "conversation.updated", "conversation_id": convID})
+}
+
+// onUserOnline fires when a user opens their first live socket — tell everyone
+// they share a direct conversation with so a DM header can flip to "online".
+func (h *Handler) onUserOnline(userID int) {
+	contacts, err := h.db.ListDirectContactIDs(userID)
+	if err != nil || len(contacts) == 0 {
+		return
+	}
+	h.chatHub.broadcast(contacts, map[string]any{"type": "presence", "user_id": userID, "online": true})
+}
+
+// onUserOffline fires when a user's last socket drops — persist their
+// last-seen time and tell their DM partners they're now offline.
+func (h *Handler) onUserOffline(userID int) {
+	if err := h.db.UpdateLastSeen(userID); err != nil {
+		log.Printf("update last_seen for %d: %v", userID, err)
+	}
+	contacts, err := h.db.ListDirectContactIDs(userID)
+	if err != nil || len(contacts) == 0 {
+		return
+	}
+	h.chatHub.broadcast(contacts, map[string]any{"type": "presence", "user_id": userID, "online": false, "last_seen_at": time.Now()})
 }

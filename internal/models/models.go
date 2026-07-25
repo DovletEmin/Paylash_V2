@@ -315,11 +315,16 @@ type ConversationView struct {
 }
 
 type ParticipantView struct {
-	UserID      int       `json:"user_id"`
-	Username    string    `json:"username"`
-	DisplayName string    `json:"full_name"`
-	AvatarURL   string    `json:"avatar_url"`
-	LastReadAt  time.Time `json:"last_read_at"`
+	UserID      int        `json:"user_id"`
+	Username    string     `json:"username"`
+	DisplayName string     `json:"full_name"`
+	AvatarURL   string     `json:"avatar_url"`
+	LastReadAt  time.Time  `json:"last_read_at"`
+	// Online is filled from the in-memory WS hub (never the DB) by the handler
+	// that returns participants; LastSeenAt is the persisted timestamp of their
+	// last disconnect, used to render "last seen X" when they're offline.
+	Online     bool       `json:"online"`
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
 }
 
 // Message is a chat message, optionally soft-deleted (DeletedAt set, Body

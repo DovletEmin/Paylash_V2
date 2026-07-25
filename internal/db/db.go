@@ -290,6 +290,12 @@ func (d *DB) Migrate() error {
 			PRIMARY KEY (message_id, user_id, emoji)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_message_reactions_message ON message_reactions(message_id)`,
+
+		// Presence: last_seen_at is stamped when a user's last live WebSocket
+		// connection drops (see chatHub), so "online / last seen X" can be shown
+		// in a DM header. NULL until they've connected at least once. Online
+		// status itself is in-memory hub state, never persisted.
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ`,
 	}
 
 	for _, m := range migrations {

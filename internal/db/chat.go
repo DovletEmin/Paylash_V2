@@ -289,7 +289,7 @@ func (d *DB) RemoveParticipant(conversationID, userID int) error {
 
 func (d *DB) ListParticipants(conversationID int) ([]models.ParticipantView, error) {
 	rows, err := d.Query(
-		`SELECT u.id, u.username, COALESCE(u.display_name, u.username, ''), u.avatar_url, cp.last_read_at
+		`SELECT u.id, u.username, COALESCE(u.display_name, u.username, ''), u.avatar_url, cp.last_read_at, u.last_seen_at
 		 FROM conversation_participants cp
 		 JOIN users u ON u.id = cp.user_id
 		 WHERE cp.conversation_id = $1
@@ -302,12 +302,51 @@ func (d *DB) ListParticipants(conversationID int) ([]models.ParticipantView, err
 	var list []models.ParticipantView
 	for rows.Next() {
 		var p models.ParticipantView
-		if err := rows.Scan(&p.UserID, &p.Username, &p.DisplayName, &p.AvatarURL, &p.LastReadAt); err != nil {
+		var lastSeen sql.NullTime
+		if err := rows.Scan(&p.UserID, &p.Username, &p.DisplayName, &p.AvatarURL, &p.LastReadAt, &lastSeen); err != nil {
 			return nil, err
+		}
+		if lastSeen.Valid {
+			t := lastSeen.Time
+			p.LastSeenAt = &t
 		}
 		list = append(list, p)
 	}
 	return list, rows.Err()
+}
+
+// UpdateLastSeen stamps a user's last-seen time — called when their last live
+// WS connection drops, so a DM header can show "last seen X".
+func (d *DB) UpdateLastSeen(userID int) error {
+	_, err := d.Exec(`UPDATE users SET last_seen_at = NOW() WHERE id = $1`, userID)
+	return err
+}
+
+// ListDirectContactIDs returns every user id that shares at least one direct
+// conversation with userID — the audience for that user's presence
+// (online/offline) broadcasts, so we notify exactly the people who'd see it in
+// a DM header and no one else.
+func (d *DB) ListDirectContactIDs(userID int) ([]int, error) {
+	rows, err := d.Query(
+		`SELECT DISTINCT CASE WHEN direct_user_low = $1 THEN direct_user_high ELSE direct_user_low END
+		 FROM conversations
+		 WHERE type = 'direct' AND (direct_user_low = $1 OR direct_user_high = $1)
+		   AND direct_user_low IS NOT NULL AND direct_user_high IS NOT NULL`,
+		userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 func (d *DB) MarkConversationRead(conversationID, userID int) error {

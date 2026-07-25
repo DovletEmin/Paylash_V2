@@ -817,6 +817,14 @@ img.share-user-avatar-lg{box-shadow:0 0 0 3px var(--surface),0 0 0 5px var(--acc
 .chat-thread-subtitle.online{color:var(--accent)}
 .chat-thread-subtitle.typing{color:var(--primary);font-style:italic}
 
+/* Online presence dot, overlaid on the bottom-right of an avatar. */
+.chat-avatar-wrap{position:relative;display:inline-flex;flex-shrink:0}
+.chat-presence-dot{
+  position:absolute;right:0;bottom:0;width:11px;height:11px;border-radius:50%;
+  background:var(--accent);border:2px solid var(--surface);box-sizing:border-box;
+}
+.chat-conv-item.active .chat-presence-dot{border-color:var(--primary-bg)}
+
 /* Links inside a message body. */
 .chat-msg-body a{color:var(--primary);text-decoration:underline;word-break:break-all}
 .chat-msg.mine .chat-msg-body a{color:#fff}

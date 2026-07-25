@@ -23,6 +23,10 @@ const ChatPage = {
     // Count of messages that arrived while the user was scrolled up, shown on
     // the floating "jump to newest" pill so they know something came in below.
     _newBelow: 0,
+    // Live typing state: _typing[conversationId] = { [userId]: {name, timer} }.
+    // Each entry auto-expires ~5s after the last "typing" ping for it.
+    _typing: {},
+    _lastTypingSent: 0,
 
     STICKERS: {
         faces: ['😀', '😂', '🥰', '😎', '😢', '😡', '😮', '🥳', '😴', '🤔'],
@@ -93,9 +97,11 @@ const ChatPage = {
     conversationItemHTML(cv) {
         const isDirect = cv.type === 'direct';
         const name = this.conversationName(cv);
-        const avatar = isDirect && cv.other_participant
+        const innerAvatar = isDirect && cv.other_participant
             ? UI.avatarHTML(cv.other_participant.user_id, cv.other_participant.full_name, 'chat-avatar')
             : `<span class="chat-avatar chat-avatar-group">👥</span>`;
+        const online = isDirect && cv.other_participant && cv.other_participant.online;
+        const avatar = `<span class="chat-avatar-wrap">${innerAvatar}${online ? '<span class="chat-presence-dot"></span>' : ''}</span>`;
         const preview = cv.last_message_body ? UI.esc(cv.last_message_body) : `<em>${I18N.t('chat.no_messages_yet')}</em>`;
         const badge = cv.unread_count > 0 ? `<span class="chat-unread-badge">${cv.unread_count > 99 ? '99+' : cv.unread_count}</span>` : '';
         return `<div class="chat-conv-item ${cv.id === this._activeId ? 'active' : ''}" onclick="ChatPage.selectConversation(${cv.id})" role="button" tabindex="0" onkeydown="if(event.key==='Enter')ChatPage.selectConversation(${cv.id})">
@@ -177,9 +183,10 @@ const ChatPage = {
         const isDirect = cv.type === 'direct';
         const other = this._participants.find(p => p.user_id !== App.user.id);
         const name = isDirect ? (other ? (other.full_name || other.username) : I18N.t('chat.unknown_user')) : (cv.name || I18N.t('chat.unnamed_group'));
-        const headerAvatar = isDirect && other
+        const headerInner = isDirect && other
             ? UI.avatarHTML(other.user_id, other.full_name || other.username, 'chat-avatar-sm chat-thread-avatar')
             : `<span class="chat-avatar-sm chat-avatar-group chat-thread-avatar">👥</span>`;
+        const headerAvatar = `<span class="chat-avatar-wrap">${headerInner}${isDirect && other && other.online ? '<span class="chat-presence-dot"></span>' : ''}</span>`;
 
         thread.innerHTML = `
             <div class="chat-thread-header">
@@ -203,13 +210,14 @@ const ChatPage = {
                     <button class="btn btn-icon btn-ghost btn-sm" onclick="document.getElementById('chat-file-input').click()" title="${I18N.t('chat.attach_file')}" aria-label="${I18N.t('chat.attach_file')}">📎</button>
                     <button class="btn btn-icon btn-ghost btn-sm chat-sticker-toggle-btn" onclick="ChatPage.toggleStickerPicker()" title="${I18N.t('chat.stickers')}" aria-label="${I18N.t('chat.stickers')}">😊</button>
                     <input type="file" id="chat-file-input" multiple style="display:none" onchange="ChatPage.onFilesPicked(this.files)">
-                    <textarea id="chat-message-input" class="form-control" rows="1" placeholder="${I18N.t('chat.message_placeholder')}" onkeydown="ChatPage.onComposerKeydown(event)" oninput="ChatPage.autoGrowComposer()"></textarea>
+                    <textarea id="chat-message-input" class="form-control" rows="1" placeholder="${I18N.t('chat.message_placeholder')}" onkeydown="ChatPage.onComposerKeydown(event)" oninput="ChatPage.onComposerInput()"></textarea>
                     <button class="btn btn-primary btn-sm" onclick="ChatPage.sendMessage()">${I18N.t('chat.send')}</button>
                 </div>
             </div>`;
         this.renderMessages();
         this.renderPendingAttachments();
         this.renderReplyBar();
+        this.renderSubtitle();
         // Open on the first unread message when there is one, otherwise at the
         // very bottom — same instinct as every messenger.
         if (this._unreadFromId) {
@@ -461,6 +469,122 @@ const ChatPage = {
         if (!ta) return;
         ta.style.height = 'auto';
         ta.style.height = Math.min(ta.scrollHeight, 140) + 'px';
+    },
+
+    onComposerInput() {
+        this.autoGrowComposer();
+        this.signalTyping();
+    },
+
+    // Fires a "typing" ping up the socket, throttled to at most once every 3s
+    // (the server also throttles, and receivers auto-expire the indicator).
+    signalTyping() {
+        if (!this._activeId) return;
+        const now = Date.now();
+        if (now - this._lastTypingSent < 3000) return;
+        this._lastTypingSent = now;
+        ChatSocket.send({ type: 'typing', conversation_id: this._activeId });
+    },
+
+    /* ── Typing indicator (incoming) ── */
+
+    handleTyping(data) {
+        const convID = data.conversation_id;
+        if (!convID || data.user_id === App.user.id) return;
+        const map = (this._typing[convID] = this._typing[convID] || {});
+        if (map[data.user_id] && map[data.user_id].timer) clearTimeout(map[data.user_id].timer);
+        map[data.user_id] = {
+            name: data.user_name || I18N.t('chat.someone'),
+            timer: setTimeout(() => this.clearTyping(convID, data.user_id), 5000),
+        };
+        if (convID === this._activeId) this.renderSubtitle();
+    },
+
+    clearTyping(convID, userID) {
+        const map = this._typing[convID];
+        if (!map || !map[userID]) return;
+        if (map[userID].timer) clearTimeout(map[userID].timer);
+        delete map[userID];
+        if (convID === this._activeId) this.renderSubtitle();
+    },
+
+    typingNames(convID) {
+        const map = this._typing[convID];
+        if (!map) return [];
+        return Object.values(map).map(v => v.name);
+    },
+
+    /* ── Presence (incoming) ── */
+
+    handlePresence(data) {
+        // Patch the live participant list of the open conversation…
+        const p = this._participants.find(x => x.user_id === data.user_id);
+        if (p) {
+            p.online = data.online;
+            if (data.last_seen_at) p.last_seen_at = data.last_seen_at;
+        }
+        // …and the DM online dots in the inbox list.
+        let listChanged = false;
+        this._conversations.forEach(cv => {
+            if (cv.other_participant && cv.other_participant.user_id === data.user_id) {
+                cv.other_participant.online = data.online;
+                if (data.last_seen_at) cv.other_participant.last_seen_at = data.last_seen_at;
+                listChanged = true;
+            }
+        });
+        if (listChanged) this.renderConversationList();
+        if (p && this._activeConversation && this._activeConversation.type === 'direct') this.renderSubtitle();
+    },
+
+    /* ── Thread-header subtitle: typing / presence / member count ── */
+
+    renderSubtitle() {
+        const el = document.getElementById('chat-thread-subtitle');
+        if (!el || !this._activeConversation) return;
+        const cv = this._activeConversation;
+        el.className = 'chat-thread-subtitle';
+
+        const typers = this.typingNames(this._activeId);
+        if (typers.length) {
+            el.classList.add('typing');
+            el.textContent = typers.length === 1
+                ? I18N.t('chat.typing_one', { name: typers[0] })
+                : I18N.t('chat.typing_many');
+            return;
+        }
+
+        if (cv.type === 'direct') {
+            const other = this._participants.find(x => x.user_id !== App.user.id);
+            if (!other) { el.textContent = ''; return; }
+            if (other.online) {
+                el.classList.add('online');
+                el.textContent = I18N.t('chat.online');
+            } else {
+                el.textContent = other.last_seen_at
+                    ? I18N.t('chat.last_seen', { time: this.lastSeenText(other.last_seen_at) })
+                    : I18N.t('chat.offline');
+            }
+            return;
+        }
+
+        // Group: member count, plus how many are online right now.
+        const total = this._participants.length;
+        const online = this._participants.filter(x => x.online).length;
+        el.textContent = online > 1
+            ? I18N.tn('chat.members_count', total, { count: total }) + ' · ' + I18N.t('chat.n_online', { count: online })
+            : I18N.tn('chat.members_count', total, { count: total });
+    },
+
+    // Human "last seen" text: just now / N minutes / today HH:MM / a date.
+    lastSeenText(iso) {
+        const then = new Date(iso), now = new Date();
+        const diffMin = Math.floor((now - then) / 60000);
+        if (diffMin < 1) return I18N.t('chat.seen_just_now');
+        if (diffMin < 60) return I18N.tn('chat.seen_minutes', diffMin, { count: diffMin });
+        if (then.toDateString() === now.toDateString()) {
+            return I18N.t('chat.seen_today', { time: then.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) });
+        }
+        return then.toLocaleDateString();
     },
 
     /* ── Incremental message-node updates (no full re-render) ── */
@@ -1029,6 +1153,8 @@ const ChatPage = {
         this._socketBound = true;
         ChatSocket.on('message.new', (data) => {
             if (App.currentPage !== 'chat') return;
+            // Someone finishing a message means they're no longer typing.
+            if (data.message && data.message.sender_id) this.clearTyping(data.conversation_id, data.message.sender_id);
             if (data.conversation_id === this._activeId) {
                 const msg = data.message;
                 const mine = msg.sender_id === App.user.id;
@@ -1080,5 +1206,10 @@ const ChatPage = {
             this.loadConversations();
             if (data.conversation_id === this._activeId) this.selectConversation(this._activeId);
         });
+        // Typing and presence can arrive while on the chat page for any
+        // conversation the user is in — the handlers themselves scope updates
+        // to the active thread / inbox as needed.
+        ChatSocket.on('typing', (data) => { if (App.currentPage === 'chat') this.handleTyping(data); });
+        ChatSocket.on('presence', (data) => { if (App.currentPage === 'chat') this.handlePresence(data); });
     },
 };
