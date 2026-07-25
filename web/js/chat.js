@@ -380,8 +380,34 @@ const ChatPage = {
     statusTickHTML(m, mine) {
         if (!mine) return '';
         if (m._pending) return `<span class="chat-msg-status pending" title="${I18N.t('chat.status_pending')}">🕓</span>`;
-        if (m.status === 'read') return `<span class="chat-msg-status read" title="${I18N.t('chat.status_read')}">✓✓</span>`;
-        return `<span class="chat-msg-status sent" title="${I18N.t('chat.status_sent')}">✓</span>`;
+        const isDirect = this._activeConversation && this._activeConversation.type === 'direct';
+        if (isDirect) {
+            if (m.status === 'read') return `<span class="chat-msg-status read" title="${I18N.t('chat.status_read')}">✓✓</span>`;
+            return `<span class="chat-msg-status sent" title="${I18N.t('chat.status_sent')}">✓</span>`;
+        }
+        // Group: "read by N of the other members", tappable to see exactly who.
+        const total = Math.max(0, this._participants.length - 1);
+        const readCount = (m.read_user_ids || []).length;
+        if (readCount === 0) return `<span class="chat-msg-status sent" title="${I18N.t('chat.status_sent')}">✓</span>`;
+        const allRead = total > 0 && readCount >= total;
+        return `<button class="chat-msg-status chat-group-receipt ${allRead ? 'read' : 'sent'}" onclick="event.stopPropagation();ChatPage.showReaders(${m.id})" title="${I18N.t('chat.read_receipts')}">✓✓ ${readCount}</button>`;
+    },
+
+    // Who has (and hasn't) read one of my group messages — derived entirely
+    // from read_user_ids + the already-loaded participant list, no round-trip.
+    showReaders(messageId) {
+        const m = this._messages.find(x => x.id === messageId);
+        if (!m) return;
+        const readerIds = new Set(m.read_user_ids || []);
+        const others = this._participants.filter(p => p.user_id !== App.user.id);
+        const readList = others.filter(p => readerIds.has(p.user_id));
+        const unreadList = others.filter(p => !readerIds.has(p.user_id));
+        const row = (p) => `<div class="chat-reader-row">${UI.avatarHTML(p.user_id, p.full_name || p.username, 'chat-avatar-sm')}<span>${UI.esc(p.full_name || p.username)}</span></div>`;
+        let html = '';
+        if (readList.length) html += `<div class="chat-readers-section"><div class="chat-readers-label">✓✓ ${I18N.t('chat.read_by_label')} · ${readList.length}</div>${readList.map(row).join('')}</div>`;
+        if (unreadList.length) html += `<div class="chat-readers-section"><div class="chat-readers-label">${I18N.t('chat.unread_by_label')} · ${unreadList.length}</div>${unreadList.map(row).join('')}</div>`;
+        if (!html) html = `<p class="text-muted">${I18N.t('chat.no_readers_yet')}</p>`;
+        UI.showModal(I18N.t('chat.read_receipts'), html, `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.close')}</button>`);
     },
 
     attachmentHTML(a) {
@@ -731,7 +757,10 @@ const ChatPage = {
             try {
                 const updated = await API.chat.editMessage(this._activeId, ctx.id, body);
                 const idx = this._messages.findIndex(m => m.id === ctx.id);
-                if (idx !== -1) this._messages[idx] = updated;
+                if (idx !== -1) {
+                    if (this._messages[idx].read_user_ids && !updated.read_user_ids) updated.read_user_ids = this._messages[idx].read_user_ids;
+                    this._messages[idx] = updated;
+                }
                 this._composerContext = null;
                 if (ta) { ta.value = ''; }
                 this.renderReplyBar();
@@ -1182,7 +1211,13 @@ const ChatPage = {
             if (App.currentPage !== 'chat') return;
             if (data.conversation_id === this._activeId) {
                 const idx = this._messages.findIndex(x => x.id === data.message.id);
-                if (idx !== -1) { this._messages[idx] = data.message; this.replaceMessage(data.message); }
+                if (idx !== -1) {
+                    // The edit broadcast deliberately omits read_user_ids (it goes
+                    // to everyone) — keep the ones we already have for our own msg.
+                    if (this._messages[idx].read_user_ids && !data.message.read_user_ids) data.message.read_user_ids = this._messages[idx].read_user_ids;
+                    this._messages[idx] = data.message;
+                    this.replaceMessage(data.message);
+                }
             }
         });
         ChatSocket.on('message.reaction', (data) => {
@@ -1194,10 +1229,17 @@ const ChatPage = {
             if (App.currentPage !== 'chat') return;
             if (data.conversation_id !== this._activeId) return;
             const readAt = new Date(data.last_read_at).getTime();
+            const isDirect = this._activeConversation && this._activeConversation.type === 'direct';
             this._messages.forEach(m => {
-                if (m.sender_id === App.user.id && m.status !== 'read' && new Date(m.created_at).getTime() <= readAt) {
-                    m.status = 'read';
-                    this.replaceMessage(m);
+                if (m.sender_id !== App.user.id) return;
+                if (new Date(m.created_at).getTime() > readAt) return;
+                if (isDirect) {
+                    if (m.status !== 'read') { m.status = 'read'; this.replaceMessage(m); }
+                } else if (data.user_id !== App.user.id) {
+                    // Group: record this reader against my message (the id set is
+                    // authoritative, so re-adds never double-count).
+                    m.read_user_ids = m.read_user_ids || [];
+                    if (!m.read_user_ids.includes(data.user_id)) { m.read_user_ids.push(data.user_id); this.replaceMessage(m); }
                 }
             });
         });

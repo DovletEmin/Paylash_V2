@@ -586,6 +586,34 @@ func (d *DB) ListMessages(conversationID, requesterID, beforeID, limit int) ([]m
 				mv.Reactions = groups
 			}
 		}
+
+		// Group read receipts: which other participants have read each of the
+		// REQUESTER'S OWN messages. Scoped to sender_id = requester so a member
+		// never sees who read someone else's message.
+		readRows, err := d.Query(
+			`SELECT m.id, cp.user_id
+			 FROM messages m
+			 JOIN conversation_participants cp ON cp.conversation_id = m.conversation_id
+			   AND cp.user_id <> m.sender_id AND cp.last_read_at >= m.created_at
+			 WHERE m.id = ANY($1) AND m.sender_id = $2`,
+			pq.Array(ids), requesterID,
+		)
+		if err != nil {
+			return nil, err
+		}
+		defer readRows.Close()
+		for readRows.Next() {
+			var msgID, uid int
+			if err := readRows.Scan(&msgID, &uid); err != nil {
+				return nil, err
+			}
+			if mv, ok := byID[msgID]; ok {
+				mv.ReadUserIDs = append(mv.ReadUserIDs, uid)
+			}
+		}
+		if err := readRows.Err(); err != nil {
+			return nil, err
+		}
 	}
 	return list, nil
 }

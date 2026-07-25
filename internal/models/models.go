@@ -371,6 +371,13 @@ type MessageView struct {
 	// viewer-independent, so the same struct serves both list-load and the
 	// message.reaction WS broadcast.
 	Reactions []MessageReactionGroup `json:"reactions,omitempty"`
+	// ReadUserIDs lists the OTHER participants who have read this message
+	// (last_read_at >= created_at). Populated ONLY for the requester's own
+	// messages (a group member never learns who read someone else's message)
+	// and only on the per-viewer list fetch — deliberately never on a WS
+	// broadcast, which every participant would receive. Backs group "read by
+	// N of M" receipts; for DMs the plain Status field is used instead.
+	ReadUserIDs []int `json:"read_user_ids,omitempty"`
 }
 
 // MessageReactionGroup is one emoji and everyone who reacted with it on a
