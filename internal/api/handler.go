@@ -8,7 +8,9 @@ import (
 	"paylash/internal/config"
 	"paylash/internal/db"
 	"paylash/internal/storage"
+	"paylash/internal/webpush"
 	"strconv"
+	"time"
 )
 
 type Handler struct {
@@ -22,10 +24,16 @@ type Handler struct {
 	messageLimiter        *keyedLimiter
 	chatAttachmentLimiter *keyedLimiter
 	chatHub               *chatHub
+	// Web Push: nil disables push entirely (key generation failed, or the
+	// build is running somewhere it can never reach a push service). pushClient
+	// has a short timeout so an unreachable push service never ties up a
+	// goroutine for long.
+	vapid      *webpush.VAPIDKeys
+	pushClient *http.Client
 }
 
 func NewHandler(database *db.DB, minioClient *storage.MinioClient, cfg *config.Config) *Handler {
-	return &Handler{
+	h := &Handler{
 		db:                    database,
 		minio:                 minioClient,
 		cfg:                   cfg,
@@ -36,14 +44,24 @@ func NewHandler(database *db.DB, minioClient *storage.MinioClient, cfg *config.C
 		messageLimiter:        newKeyedLimiter(messageMaxAttempts, messageWindow),
 		chatAttachmentLimiter: newKeyedLimiter(chatAttachmentMaxAttempts, chatAttachmentWindow),
 		chatHub:               newChatHub(),
+		pushClient:            &http.Client{Timeout: 10 * time.Second},
 	}
+	h.initPush()
+	return h
 }
 
 // PublicConfig exposes the handful of settings the login page needs before
 // a session exists (e.g. whether to show the self-registration link) —
 // nothing here is sensitive.
 func (h *Handler) PublicConfig(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"allow_registration": h.cfg.AllowRegistration})
+	vapidKey := ""
+	if h.vapid != nil {
+		vapidKey = h.vapid.PublicB64
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"allow_registration": h.cfg.AllowRegistration,
+		"vapid_public_key":   vapidKey,
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

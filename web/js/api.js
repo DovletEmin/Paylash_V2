@@ -62,6 +62,11 @@ const API = {
         logoutOthers() { return API._request('POST', '/api/auth/logout-others'); },
     },
 
+    push: {
+        subscribe(sub) { return API._request('POST', '/api/push/subscribe', sub); },
+        unsubscribe(sub) { return API._request('POST', '/api/push/unsubscribe', sub); },
+    },
+
     // Projects the current employee can see (personal sidebar)
     projects: {
         list() { return API._request('GET', '/api/projects'); },

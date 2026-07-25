@@ -61,6 +61,8 @@ func (s *Server) routes(webFS embed.FS) {
 	s.mux.Handle("POST /api/auth/2fa/enable", auth(http.HandlerFunc(h.TOTPEnable)))
 	s.mux.Handle("POST /api/auth/2fa/disable", auth(http.HandlerFunc(h.TOTPDisable)))
 	s.mux.Handle("GET /api/avatar/{id}", auth(http.HandlerFunc(h.ServeAvatar)))
+	s.mux.Handle("POST /api/push/subscribe", auth(http.HandlerFunc(h.PushSubscribe)))
+	s.mux.Handle("POST /api/push/unsubscribe", auth(http.HandlerFunc(h.PushUnsubscribe)))
 
 	// Files
 	s.mux.Handle("GET /api/files", auth(http.HandlerFunc(h.ListFiles)))

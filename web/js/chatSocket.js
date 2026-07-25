@@ -87,7 +87,14 @@ const ChatSocket = {
         if (Notification.permission === 'granted') {
             fire();
         } else if (Notification.permission !== 'denied') {
-            Notification.requestPermission().then(p => { if (p === 'granted') fire(); });
+            Notification.requestPermission().then(p => {
+                if (p === 'granted') {
+                    fire();
+                    // Now that permission exists, register this browser for
+                    // push so it's also covered while fully closed.
+                    if (typeof Push !== 'undefined') Push.subscribe();
+                }
+            });
         }
     },
 

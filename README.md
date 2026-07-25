@@ -19,7 +19,20 @@ For the full design rationale (data model, access model, API reference), see [PL
 - Move files/folders between locations (metadata-only — instant regardless of size)
 - Admin panel: projects, employees, quotas, bulk CSV/XLSX import, audit log, active-upload
   visibility
+- Real-time chat: reactions, typing indicators, presence (online / last seen), group read
+  receipts, message search, stickers, edit/reply/forward
+- Two-factor authentication (TOTP) with recovery codes — recommended for admins
+- One-click export of any space (personal / common / project) as a zip
 - Login rate-limiting, forced password change on first login for admin-created accounts
+
+### Web push notifications (optional)
+
+Chat can deliver notifications while the app is fully closed via the Web Push standard.
+Unlike everything else here, this needs the **server** to make an outbound HTTPS request to
+the browser vendor's push service (Google/Mozilla/etc.), so it only works where the server
+has internet access. On an air-gapped LAN it degrades silently — in-app and native
+(tab-open) notifications are unaffected. VAPID keys are generated and stored automatically on
+first start; nothing to configure.
 - Self-registration can be turned off (`PAYLASH_ALLOW_REGISTRATION=false`) once employees are
   onboarded via the admin panel
 

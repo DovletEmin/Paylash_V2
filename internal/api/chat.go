@@ -436,6 +436,9 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 			"type": "message.new", "conversation_id": convID, "message": msg,
 		})
 	}
+	// Web push reaches participants whose app is fully closed (no live socket)
+	// — fire-and-forget so it never delays the response or fails the send.
+	go h.pushChatMessage(convID, user.ID, msg)
 }
 
 // EditMessage updates a text message's body — sender-only, text-kind-only,
@@ -568,6 +571,7 @@ func (h *Handler) ForwardMessage(w http.ResponseWriter, r *http.Request) {
 				"type": "message.new", "conversation_id": cid, "message": forwarded[i],
 			})
 		}
+		go h.pushChatMessage(cid, user.ID, &forwarded[i])
 	}
 }
 

@@ -301,6 +301,20 @@ func (d *DB) Migrate() error {
 		// mechanism already used for file/user search; pg_trgm is enabled above.
 		`CREATE INDEX IF NOT EXISTS idx_messages_body_trgm ON messages USING GIN (body gin_trgm_ops)`,
 
+		// Web Push subscriptions (RFC 8291). One row per browser subscription;
+		// endpoint is unique so a re-subscribe upserts. p256dh/auth are the
+		// subscription's public key and auth secret (base64url). Delivered to
+		// only when the recipient has no live WS connection (app closed).
+		`CREATE TABLE IF NOT EXISTS push_subscriptions (
+			id         SERIAL PRIMARY KEY,
+			user_id    INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			endpoint   TEXT NOT NULL UNIQUE,
+			p256dh     TEXT NOT NULL,
+			auth       TEXT NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id)`,
+
 		// TOTP two-factor auth. totp_secret holds the base32 shared secret
 		// (empty until enrolled); totp_enabled gates whether login demands a
 		// code; totp_recovery_codes is a JSON array of sha256-hashed one-time

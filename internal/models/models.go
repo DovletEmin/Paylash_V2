@@ -294,6 +294,16 @@ type UserSearchResult struct {
 	DisplayName string `json:"full_name"`
 }
 
+// PushSubscription is a stored browser Web Push subscription.
+type PushSubscription struct {
+	ID        int       `json:"id"`
+	UserID    int       `json:"user_id"`
+	Endpoint  string    `json:"endpoint"`
+	P256dh    string    `json:"p256dh"`
+	Auth      string    `json:"auth"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // Conversation is a direct (1-on-1) or group chat. ProjectID is a
 // prefill-only convenience (pre-populates the participant picker at
 // creation time) — it has no ongoing effect on membership or access.

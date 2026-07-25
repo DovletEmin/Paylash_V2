@@ -7,11 +7,25 @@ const App = {
 
     async start() {
         this.initTheme();
-        await this.checkAuth();
+        // Public config (incl. the VAPID push key) loads BEFORE checkAuth so
+        // that Push.init(), fired from checkAuth, already has the key it needs.
         try { this.config = await API.public.config(); } catch {}
+        await this.checkAuth();
         window.addEventListener('popstate', () => this.route());
         this.route();
+        this._handlePushHash();
         this.checkForcedPasswordChange();
+    },
+
+    // A notification click on a cold-started app arrives as #chat/<id> in the
+    // URL — open that conversation, then clean the hash back out.
+    _handlePushHash() {
+        const m = location.hash.match(/^#chat\/(\d+)/);
+        if (m && this.user) {
+            if (typeof ChatPage !== 'undefined') ChatPage._activeId = parseInt(m[1], 10);
+            history.replaceState(null, '', '/');
+            this.navigate('chat');
+        }
     },
 
     checkForcedPasswordChange() {
@@ -52,6 +66,7 @@ const App = {
             this.startChatUnreadPolling();
             this._bindChatSocketListeners();
             ChatSocket.connect();
+            if (typeof Push !== 'undefined') Push.init();
         } else {
             this.stopNotifPolling();
             this.stopChatUnreadPolling();
@@ -322,6 +337,7 @@ const App = {
     },
 
     async logout() {
+        if (typeof Push !== 'undefined') { try { await Push.unsubscribe(); } catch {} }
         try { await API.auth.logout(); } catch {}
         this.user = null;
         this.stopNotifPolling();
