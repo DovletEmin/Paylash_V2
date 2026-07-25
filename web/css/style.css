@@ -178,6 +178,21 @@ select.form-control,select.form-input{appearance:none;cursor:pointer;background-
 .radio-option input,.checkbox-option input{accent-color:var(--primary);cursor:pointer}
 .radio-option:has(input:checked) span,.checkbox-option:has(input:checked) span{color:var(--text)}
 
+/* Two-factor auth UI */
+.twofa-status{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:.84rem;color:var(--text-2)}
+.twofa-status.enabled{color:var(--accent)}
+.twofa-secret{
+  font-family:'Courier New',monospace;font-size:1.05rem;letter-spacing:.08em;text-align:center;
+  background:var(--surface-2);border:1px solid var(--border);border-radius:var(--r);
+  padding:12px;word-break:break-all;user-select:all;
+}
+.twofa-recovery{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px}
+.twofa-recovery code{
+  font-family:'Courier New',monospace;font-size:.9rem;text-align:center;letter-spacing:.05em;
+  background:var(--surface-2);border:1px solid var(--border);border-radius:var(--r-sm);padding:6px;user-select:all;
+}
+.auth-hint{font-size:.72rem;color:var(--text-3);margin-top:4px}
+
 /* ─── Auth Pages ─── */
 .auth-container{
   min-height:100vh;display:flex;align-items:center;justify-content:center;

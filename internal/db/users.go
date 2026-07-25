@@ -21,9 +21,9 @@ func (d *DB) CreateUser(u *models.RegisterRequest, hash, role string, quotaBytes
 	err := d.QueryRow(
 		`INSERT INTO users (username, password_hash, display_name, role, quota_bytes, must_change_password)
 		 VALUES ($1, $2, $3, $4, $5, $6)
-		 RETURNING id, username, display_name, role, quota_bytes, avatar_url, must_change_password, chat_notify_level, chat_notify_sound, created_at`,
+		 RETURNING id, username, display_name, role, quota_bytes, avatar_url, must_change_password, chat_notify_level, chat_notify_sound, totp_enabled, created_at`,
 		u.Username, hash, u.FullName, role, quotaBytes, mustChangePassword,
-	).Scan(&user.ID, &user.Username, &user.DisplayName, &user.Role, &user.QuotaBytes, &user.AvatarURL, &user.MustChangePassword, &user.ChatNotifyLevel, &user.ChatNotifySound, &user.CreatedAt)
+	).Scan(&user.ID, &user.Username, &user.DisplayName, &user.Role, &user.QuotaBytes, &user.AvatarURL, &user.MustChangePassword, &user.ChatNotifyLevel, &user.ChatNotifySound, &user.TOTPEnabled, &user.CreatedAt)
 	return user, err
 }
 
@@ -38,9 +38,9 @@ func (d *DB) CountAdmins() (int, error) {
 func (d *DB) GetUserByUsername(username string) (*models.User, error) {
 	u := &models.User{}
 	err := d.QueryRow(
-		`SELECT id, username, password_hash, display_name, role, quota_bytes, avatar_url, must_change_password, chat_notify_level, chat_notify_sound, created_at
+		`SELECT id, username, password_hash, display_name, role, quota_bytes, avatar_url, must_change_password, chat_notify_level, chat_notify_sound, totp_enabled, created_at
 		 FROM users WHERE username = $1`, username,
-	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.QuotaBytes, &u.AvatarURL, &u.MustChangePassword, &u.ChatNotifyLevel, &u.ChatNotifySound, &u.CreatedAt)
+	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.QuotaBytes, &u.AvatarURL, &u.MustChangePassword, &u.ChatNotifyLevel, &u.ChatNotifySound, &u.TOTPEnabled, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -50,9 +50,9 @@ func (d *DB) GetUserByUsername(username string) (*models.User, error) {
 func (d *DB) GetUserByID(id int) (*models.User, error) {
 	u := &models.User{}
 	err := d.QueryRow(
-		`SELECT id, username, password_hash, display_name, role, quota_bytes, avatar_url, must_change_password, chat_notify_level, chat_notify_sound, created_at
+		`SELECT id, username, password_hash, display_name, role, quota_bytes, avatar_url, must_change_password, chat_notify_level, chat_notify_sound, totp_enabled, created_at
 		 FROM users WHERE id = $1`, id,
-	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.QuotaBytes, &u.AvatarURL, &u.MustChangePassword, &u.ChatNotifyLevel, &u.ChatNotifySound, &u.CreatedAt)
+	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.QuotaBytes, &u.AvatarURL, &u.MustChangePassword, &u.ChatNotifyLevel, &u.ChatNotifySound, &u.TOTPEnabled, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -92,7 +92,7 @@ func (d *DB) SearchUsers(query string, limit int) ([]models.UserSearchResult, er
 
 func (d *DB) ListUsers(limit, offset int) ([]models.User, error) {
 	rows, err := d.Query(
-		`SELECT id, username, display_name, role, quota_bytes, avatar_url, must_change_password, chat_notify_level, chat_notify_sound, created_at
+		`SELECT id, username, display_name, role, quota_bytes, avatar_url, must_change_password, chat_notify_level, chat_notify_sound, totp_enabled, created_at
 		 FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2`, limit, offset,
 	)
 	if err != nil {
@@ -102,7 +102,7 @@ func (d *DB) ListUsers(limit, offset int) ([]models.User, error) {
 	var users []models.User
 	for rows.Next() {
 		var u models.User
-		if err := rows.Scan(&u.ID, &u.Username, &u.DisplayName, &u.Role, &u.QuotaBytes, &u.AvatarURL, &u.MustChangePassword, &u.ChatNotifyLevel, &u.ChatNotifySound, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.DisplayName, &u.Role, &u.QuotaBytes, &u.AvatarURL, &u.MustChangePassword, &u.ChatNotifyLevel, &u.ChatNotifySound, &u.TOTPEnabled, &u.CreatedAt); err != nil {
 			return nil, err
 		}
 		users = append(users, u)
@@ -241,4 +241,41 @@ func (d *DB) UserExists(username string) (bool, error) {
 	var exists bool
 	err := d.QueryRow(`SELECT EXISTS(SELECT 1 FROM users WHERE username = $1)`, username).Scan(&exists)
 	return exists, err
+}
+
+// GetTOTPState returns the raw 2FA columns for one user — the secret and the
+// JSON of hashed recovery codes never travel on the User struct, so the
+// handful of auth flows that need them read them here explicitly.
+func (d *DB) GetTOTPState(userID int) (secret string, enabled bool, recoveryJSON string, err error) {
+	err = d.QueryRow(
+		`SELECT totp_secret, totp_enabled, totp_recovery_codes FROM users WHERE id = $1`, userID,
+	).Scan(&secret, &enabled, &recoveryJSON)
+	return
+}
+
+// SetTOTPSecret stashes a freshly generated secret WITHOUT enabling 2FA — the
+// pending state between "show me the QR" and "confirm with a code".
+func (d *DB) SetTOTPSecret(userID int, secret string) error {
+	_, err := d.Exec(`UPDATE users SET totp_secret = $1, totp_enabled = FALSE, totp_recovery_codes = '' WHERE id = $2`, secret, userID)
+	return err
+}
+
+// EnableTOTP flips 2FA on once a code has been verified and stores the hashed
+// recovery codes generated alongside it.
+func (d *DB) EnableTOTP(userID int, recoveryJSON string) error {
+	_, err := d.Exec(`UPDATE users SET totp_enabled = TRUE, totp_recovery_codes = $1 WHERE id = $2`, recoveryJSON, userID)
+	return err
+}
+
+// DisableTOTP turns 2FA off and wipes the secret and recovery codes.
+func (d *DB) DisableTOTP(userID int) error {
+	_, err := d.Exec(`UPDATE users SET totp_secret = '', totp_enabled = FALSE, totp_recovery_codes = '' WHERE id = $1`, userID)
+	return err
+}
+
+// UpdateRecoveryCodes rewrites the stored recovery-code set — used to consume
+// one (drop the used hash) after a successful recovery login.
+func (d *DB) UpdateRecoveryCodes(userID int, recoveryJSON string) error {
+	_, err := d.Exec(`UPDATE users SET totp_recovery_codes = $1 WHERE id = $2`, recoveryJSON, userID)
+	return err
 }

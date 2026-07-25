@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/subtle"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -13,6 +15,9 @@ import (
 	"strings"
 	"time"
 )
+
+// totpIssuer labels this app in an authenticator's account list.
+const totpIssuer = "Paýlaş"
 
 func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	if !h.cfg.AllowRegistration {
@@ -107,6 +112,32 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Second factor. The password was correct, but for a 2FA account no
+	// session is issued until a valid TOTP (or recovery) code is also given.
+	// A missing code is signalled with a distinct machine-readable code so the
+	// client knows to prompt for it rather than treat it as a bad password.
+	if user.TOTPEnabled {
+		code := strings.TrimSpace(req.TOTPCode)
+		if code == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "2FA koduny giriziň", "code": "totp_required"})
+			return
+		}
+		secret, _, recoveryJSON, err := h.db.GetTOTPState(user.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "ýalňyşlyk ýüze çykdy")
+			return
+		}
+		if !authutil.VerifyTOTP(secret, code, time.Now()) && !h.consumeRecoveryCode(user.ID, code, recoveryJSON) {
+			h.loginLimiter.record(userKey)
+			h.loginLimiter.record(ipKey)
+			if err := h.db.LogAction(nil, username, "login.totp_failed", "", nil, "", map[string]any{"ip": clientIP(r)}); err != nil {
+				log.Printf("audit log: %v", err)
+			}
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "2FA kody nädogry", "code": "totp_invalid"})
+			return
+		}
+	}
+
 	h.loginLimiter.reset(userKey)
 	h.loginLimiter.reset(ipKey)
 
@@ -127,6 +158,137 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	})
 
 	writeJSON(w, http.StatusOK, user)
+}
+
+// consumeRecoveryCode checks code against the account's stored (hashed)
+// recovery codes; on a match it removes that code (single-use) and returns
+// true. Comparison is constant-time. recoveryJSON is a JSON array of hashes.
+func (h *Handler) consumeRecoveryCode(userID int, code, recoveryJSON string) bool {
+	if recoveryJSON == "" {
+		return false
+	}
+	var hashes []string
+	if err := json.Unmarshal([]byte(recoveryJSON), &hashes); err != nil {
+		return false
+	}
+	target := authutil.HashRecoveryCode(code)
+	for i, hsh := range hashes {
+		if subtle.ConstantTimeCompare([]byte(hsh), []byte(target)) == 1 {
+			hashes = append(hashes[:i], hashes[i+1:]...)
+			b, _ := json.Marshal(hashes)
+			if err := h.db.UpdateRecoveryCodes(userID, string(b)); err != nil {
+				log.Printf("consume recovery code: %v", err)
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// TOTPSetup generates a fresh secret (pending, not yet enabled) and returns it
+// plus the otpauth:// URI to enroll in an authenticator app. Not enabled until
+// TOTPEnable confirms a code, so an abandoned setup never locks anyone out.
+func (h *Handler) TOTPSetup(w http.ResponseWriter, r *http.Request) {
+	user := authutil.GetUser(r)
+	if user == nil {
+		writeError(w, http.StatusUnauthorized, "ulgama giriň")
+		return
+	}
+	secret, err := authutil.GenerateTOTPSecret()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk ýüze çykdy")
+		return
+	}
+	if err := h.db.SetTOTPSecret(user.ID, secret); err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk ýüze çykdy")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"secret":      secret,
+		"otpauth_uri": authutil.TOTPURI(totpIssuer, user.Username, secret),
+	})
+}
+
+// TOTPEnable verifies the first code against the pending secret, turns 2FA on,
+// and returns one-time recovery codes (shown to the user exactly once).
+func (h *Handler) TOTPEnable(w http.ResponseWriter, r *http.Request) {
+	user := authutil.GetUser(r)
+	if user == nil {
+		writeError(w, http.StatusUnauthorized, "ulgama giriň")
+		return
+	}
+	var req struct {
+		Code string `json:"code"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry maglumat")
+		return
+	}
+	secret, enabled, _, err := h.db.GetTOTPState(user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk ýüze çykdy")
+		return
+	}
+	if enabled {
+		writeError(w, http.StatusBadRequest, "2FA eýýäm işjeň")
+		return
+	}
+	if secret == "" {
+		writeError(w, http.StatusBadRequest, "ilki 2FA-ny gurnaň")
+		return
+	}
+	if !authutil.VerifyTOTP(secret, req.Code, time.Now()) {
+		writeError(w, http.StatusBadRequest, "kod nädogry")
+		return
+	}
+	codes, err := authutil.GenerateRecoveryCodes(8)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk ýüze çykdy")
+		return
+	}
+	hashes := make([]string, len(codes))
+	for i, c := range codes {
+		hashes[i] = authutil.HashRecoveryCode(c)
+	}
+	b, _ := json.Marshal(hashes)
+	if err := h.db.EnableTOTP(user.ID, string(b)); err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk ýüze çykdy")
+		return
+	}
+	h.logAction(r, "auth.2fa_enabled", "user", user.ID, user.Username, nil)
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "recovery_codes": codes})
+}
+
+// TOTPDisable turns 2FA off — gated on the account password (re-auth) so a
+// walked-away, still-logged-in session can't silently strip the second factor.
+func (h *Handler) TOTPDisable(w http.ResponseWriter, r *http.Request) {
+	user := authutil.GetUser(r)
+	if user == nil {
+		writeError(w, http.StatusUnauthorized, "ulgama giriň")
+		return
+	}
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry maglumat")
+		return
+	}
+	full, err := h.db.GetUserByID(user.ID)
+	if err != nil || full == nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk ýüze çykdy")
+		return
+	}
+	if !authutil.CheckPassword(req.Password, full.PasswordHash) {
+		writeError(w, http.StatusForbidden, "parol nädogry")
+		return
+	}
+	if err := h.db.DisableTOTP(user.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk ýüze çykdy")
+		return
+	}
+	h.logAction(r, "auth.2fa_disabled", "user", user.ID, user.Username, nil)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // LogoutOthers invalidates every session for the caller's account except the

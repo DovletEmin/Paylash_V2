@@ -17,6 +17,11 @@ const AuthPage = {
                         <label>${I18N.t('auth.password_label')}</label>
                         ${UI.passwordField('login-password', I18N.t('auth.password_placeholder'))}
                     </div>
+                    <div class="form-group" id="login-totp-group" style="display:none">
+                        <label>${I18N.t('auth.totp_label')}</label>
+                        <input type="text" id="login-totp" class="form-control" placeholder="${I18N.t('auth.totp_placeholder')}" autocomplete="one-time-code" inputmode="numeric">
+                        <p class="auth-hint">${I18N.t('auth.totp_hint')}</p>
+                    </div>
                     <button type="submit" class="btn btn-primary btn-block" id="login-btn">${I18N.t('auth.login_button')}</button>
                 </form>
                 ${App.config.allow_registration ? `<p class="auth-link">${I18N.t('auth.no_account')} <a onclick="App.navigate('register')">${I18N.t('auth.register_link')}</a></p>` : ''}
@@ -34,13 +39,24 @@ const AuthPage = {
             try {
                 const u = document.getElementById('login-username').value.trim();
                 const p = document.getElementById('login-password').value;
+                const totp = (document.getElementById('login-totp') || {}).value;
                 if (!u || !p) { UI.toast(I18N.t('auth.fill_all_fields'), 'error'); return; }
-                await API.auth.login(u, p);
+                await API.auth.login(u, p, (totp || '').trim());
                 await App.checkAuth();
                 App.navigate('files');
                 App.checkForcedPasswordChange();
             } catch (err) {
-                UI.toast(err.message || I18N.t('auth.login_error'), 'error');
+                if (err.code === 'totp_required' || err.code === 'totp_invalid') {
+                    // Reveal (and focus) the 2FA field; the password was accepted.
+                    const grp = document.getElementById('login-totp-group');
+                    if (grp) grp.style.display = '';
+                    const inp = document.getElementById('login-totp');
+                    if (inp) inp.focus();
+                    UI.toast(err.code === 'totp_invalid' ? I18N.t('auth.totp_invalid') : I18N.t('auth.totp_prompt'),
+                        err.code === 'totp_invalid' ? 'error' : 'info');
+                } else {
+                    UI.toast(err.message || I18N.t('auth.login_error'), 'error');
+                }
             } finally { btn.disabled = false; btn.textContent = I18N.t('auth.login_button'); }
         });
     },

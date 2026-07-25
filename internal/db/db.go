@@ -300,6 +300,15 @@ func (d *DB) Migrate() error {
 		// Trigram index backing chat message search (body ILIKE '%q%') — same
 		// mechanism already used for file/user search; pg_trgm is enabled above.
 		`CREATE INDEX IF NOT EXISTS idx_messages_body_trgm ON messages USING GIN (body gin_trgm_ops)`,
+
+		// TOTP two-factor auth. totp_secret holds the base32 shared secret
+		// (empty until enrolled); totp_enabled gates whether login demands a
+		// code; totp_recovery_codes is a JSON array of sha256-hashed one-time
+		// backup codes (never the plaintext). Available to any account, most
+		// valuable for admins on a shared LAN.
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled BOOLEAN NOT NULL DEFAULT FALSE`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_recovery_codes TEXT NOT NULL DEFAULT ''`,
 	}
 
 	for _, m := range migrations {

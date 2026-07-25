@@ -25,10 +25,28 @@ const API = {
         register(username, password, fullName) {
             return API._request('POST', '/api/auth/register', { username, password, full_name: fullName });
         },
-        login(username, password) {
-            return API._request('POST', '/api/auth/login', { username, password });
+        // Own fetch (not _request) so a 401 for a 2FA challenge doesn't trip
+        // the global "session expired → go to login" handler, and so the
+        // machine-readable `code` (totp_required / totp_invalid) survives on
+        // the thrown error for the login form to branch on.
+        login(username, password, totpCode) {
+            return fetch('/api/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({ username, password, totp_code: totpCode || '' }),
+            }).then(async (res) => {
+                const data = await res.json().catch(() => ({}));
+                if (res.ok) return data;
+                const err = new Error(data.error || I18N.t('auth.login_error'));
+                err.code = data.code;
+                throw err;
+            });
         },
         logout() { return API._request('POST', '/api/auth/logout'); },
+        totpSetup() { return API._request('POST', '/api/auth/2fa/setup'); },
+        totpEnable(code) { return API._request('POST', '/api/auth/2fa/enable', { code }); },
+        totpDisable(password) { return API._request('POST', '/api/auth/2fa/disable', { password }); },
         me() { return API._request('GET', '/api/auth/me'); },
         updateProfile(displayName, oldPassword, newPassword) {
             return API._request('PATCH', '/api/auth/profile', {
