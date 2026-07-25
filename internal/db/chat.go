@@ -454,6 +454,11 @@ func (d *DB) GetMessageView(id int) (*models.MessageView, error) {
 		return nil, err
 	}
 	mv.Attachments = attachments
+	reactions, err := d.ListReactionGroups(id)
+	if err != nil {
+		return nil, err
+	}
+	mv.Reactions = reactions
 	return mv, nil
 }
 
@@ -530,6 +535,17 @@ func (d *DB) ListMessages(conversationID, requesterID, beforeID, limit int) ([]m
 		}
 		if err := attRows.Err(); err != nil {
 			return nil, err
+		}
+
+		// Same batched pattern for reactions: one query for the whole page.
+		reactByMsg, err := d.listReactionGroupsForMessages(ids)
+		if err != nil {
+			return nil, err
+		}
+		for msgID, groups := range reactByMsg {
+			if mv, ok := byID[msgID]; ok {
+				mv.Reactions = groups
+			}
 		}
 	}
 	return list, nil
@@ -738,4 +754,93 @@ func (d *DB) CountAttachmentsByMinioKey(minioKey string) (int, error) {
 	var n int
 	err := d.QueryRow(`SELECT COUNT(*) FROM message_attachments WHERE minio_key = $1`, minioKey).Scan(&n)
 	return n, err
+}
+
+// ToggleReaction adds userID's emoji reaction to a message, or removes it if
+// it was already there — the delete-or-insert makes a repeated tap toggle.
+// Returns true if the reaction was added, false if it was removed. The caller
+// (API layer) has already validated emoji against the allowlist.
+func (d *DB) ToggleReaction(messageID, userID int, emoji string) (bool, error) {
+	res, err := d.Exec(`DELETE FROM message_reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3`, messageID, userID, emoji)
+	if err != nil {
+		return false, err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return false, err
+	} else if n > 0 {
+		return false, nil
+	}
+	if _, err := d.Exec(
+		`INSERT INTO message_reactions (message_id, user_id, emoji) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+		messageID, userID, emoji,
+	); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// groupReactionRows turns (emoji, user_id) rows already ordered by created_at
+// into per-emoji groups, preserving the order each emoji first appeared.
+func groupReactionRows(rows *sql.Rows) ([]models.MessageReactionGroup, error) {
+	var groups []models.MessageReactionGroup
+	idx := map[string]int{}
+	for rows.Next() {
+		var emoji string
+		var userID int
+		if err := rows.Scan(&emoji, &userID); err != nil {
+			return nil, err
+		}
+		if i, ok := idx[emoji]; ok {
+			groups[i].UserIDs = append(groups[i].UserIDs, userID)
+		} else {
+			idx[emoji] = len(groups)
+			groups = append(groups, models.MessageReactionGroup{Emoji: emoji, UserIDs: []int{userID}})
+		}
+	}
+	return groups, rows.Err()
+}
+
+// ListReactionGroups returns one message's reactions grouped by emoji, in the
+// order each emoji was first used — used to build the message.reaction WS
+// payload and to hydrate a single freshly-created/edited message.
+func (d *DB) ListReactionGroups(messageID int) ([]models.MessageReactionGroup, error) {
+	rows, err := d.Query(`SELECT emoji, user_id FROM message_reactions WHERE message_id = $1 ORDER BY created_at, user_id`, messageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return groupReactionRows(rows)
+}
+
+// listReactionGroupsForMessages batches ListReactionGroups across a page of
+// messages — one query for the whole page instead of N.
+func (d *DB) listReactionGroupsForMessages(ids []int) (map[int][]models.MessageReactionGroup, error) {
+	rows, err := d.Query(
+		`SELECT message_id, emoji, user_id FROM message_reactions WHERE message_id = ANY($1) ORDER BY message_id, created_at, user_id`,
+		pq.Array(ids),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	byMsg := map[int][]models.MessageReactionGroup{}
+	idx := map[int]map[string]int{}
+	for rows.Next() {
+		var msgID, userID int
+		var emoji string
+		if err := rows.Scan(&msgID, &emoji, &userID); err != nil {
+			return nil, err
+		}
+		if idx[msgID] == nil {
+			idx[msgID] = map[string]int{}
+		}
+		if i, ok := idx[msgID][emoji]; ok {
+			byMsg[msgID][i].UserIDs = append(byMsg[msgID][i].UserIDs, userID)
+		} else {
+			idx[msgID][emoji] = len(byMsg[msgID])
+			byMsg[msgID] = append(byMsg[msgID], models.MessageReactionGroup{Emoji: emoji, UserIDs: []int{userID}})
+		}
+	}
+	return byMsg, rows.Err()
 }

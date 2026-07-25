@@ -775,7 +775,7 @@ img.share-user-avatar-lg{box-shadow:0 0 0 3px var(--surface),0 0 0 5px var(--acc
 
 .chat-composer{border-top:1px solid var(--border);padding:10px 14px;position:relative}
 .chat-composer-row{display:flex;align-items:flex-end;gap:8px}
-.chat-composer-row textarea{resize:none;min-height:38px;max-height:120px;font-family:var(--font)}
+.chat-composer-row textarea{resize:none;min-height:38px;max-height:140px;font-family:var(--font)}
 .chat-composer-context{
   display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--surface-2);
   border-left:2px solid var(--primary);border-radius:var(--r-sm);padding:5px 9px;margin-bottom:6px;font-size:.78rem;
@@ -806,6 +806,72 @@ img.share-user-avatar-lg{box-shadow:0 0 0 3px var(--surface),0 0 0 5px var(--acc
 .chat-member-row{display:flex;width:100%;margin:0 0 6px}
 .chat-pending-remove{background:none;border:none;color:var(--text-3);cursor:pointer;padding:0 2px;font-size:.8rem}
 .chat-pending-remove:hover{color:var(--danger)}
+
+/* ── Chat v3: header identity, reactions, jump-to-latest, unread divider ── */
+.chat-thread{position:relative}
+.chat-thread-avatar{flex-shrink:0}
+.chat-thread-heading{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;overflow:hidden}
+.chat-thread-title{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chat-thread-subtitle{font-size:.72rem;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2}
+.chat-thread-subtitle:empty{display:none}
+.chat-thread-subtitle.online{color:var(--accent)}
+.chat-thread-subtitle.typing{color:var(--primary);font-style:italic}
+
+/* Links inside a message body. */
+.chat-msg-body a{color:var(--primary);text-decoration:underline;word-break:break-all}
+.chat-msg.mine .chat-msg-body a{color:#fff}
+
+/* Auto-growing composer (JS caps the height; keep CSS in step). */
+.chat-composer-row textarea{overflow-y:auto}
+
+/* Reaction chips under a message. */
+.chat-reactions{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
+.chat-reaction{
+  display:inline-flex;align-items:center;gap:3px;background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--r-full);padding:1px 7px;font-size:.74rem;cursor:pointer;line-height:1.6;
+  transition:transform var(--tr-spring),background var(--tr),border-color var(--tr);
+}
+.chat-reaction:hover{transform:scale(1.08)}
+.chat-reaction.mine{background:var(--primary-bg);border-color:var(--primary)}
+.chat-reaction-count{color:var(--text-2);font-weight:600}
+.chat-reaction.mine .chat-reaction-count{color:var(--primary)}
+.chat-msg.mine .chat-reaction{background:rgba(255,255,255,.15);border-color:rgba(255,255,255,.25)}
+.chat-msg.mine .chat-reaction-count{color:#fff}
+.chat-msg.mine .chat-reaction.mine{background:rgba(255,255,255,.28);border-color:#fff}
+
+/* Reaction picker popover (opened from the message menu). */
+.chat-reaction-picker{
+  position:fixed;z-index:60;display:flex;gap:2px;background:var(--surface);
+  border:1px solid var(--border);border-radius:var(--r-full);box-shadow:var(--shadow-md);
+  padding:5px 7px;animation:fadeIn var(--tr);
+}
+.chat-reaction-pick{
+  font-size:1.35rem;line-height:1;background:none;border:none;cursor:pointer;padding:4px;border-radius:var(--r-sm);
+  transition:transform var(--tr-spring),background var(--tr);
+}
+.chat-reaction-pick:hover{background:var(--surface-2);transform:scale(1.25)}
+
+/* "Jump to newest" pill, shown while scrolled up. */
+.chat-scroll-down{
+  position:absolute;right:18px;bottom:78px;z-index:15;display:flex;align-items:center;gap:4px;
+  background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:var(--r-full);
+  width:auto;min-width:38px;height:38px;padding:0 12px;cursor:pointer;box-shadow:var(--shadow-md);
+  transition:transform var(--tr-spring),opacity var(--tr);
+}
+.chat-scroll-down:hover{transform:translateY(-2px)}
+.chat-scroll-down-arrow{font-size:1.05rem;line-height:1}
+.chat-scroll-down-count{
+  background:var(--primary);color:#fff;font-size:.68rem;font-weight:700;border-radius:var(--r-full);
+  min-width:16px;height:16px;display:flex;align-items:center;justify-content:center;padding:0 4px;
+}
+.chat-scroll-down-count.hidden{display:none}
+
+/* Unread-messages divider. */
+.chat-unread-divider{display:flex;align-items:center;justify-content:center;margin:12px 0 8px}
+.chat-unread-divider span{
+  background:var(--primary);color:#fff;font-size:.68rem;font-weight:700;letter-spacing:.03em;
+  padding:3px 14px;border-radius:var(--r-full);text-transform:uppercase;
+}
 
 .chat-forward-list{display:flex;flex-direction:column;gap:2px;max-height:280px;overflow-y:auto}
 .chat-forward-item{

@@ -627,6 +627,72 @@ func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// ToggleReaction adds or removes the caller's emoji reaction on a message.
+// The emoji must be one of the allowlist (see reactionSet) — like stickers,
+// reactions are rendered by the client, so free text is never accepted.
+func (h *Handler) ToggleReaction(w http.ResponseWriter, r *http.Request) {
+	convID, err := conversationIDFromPath(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry ID")
+		return
+	}
+	msgID, err := strconv.Atoi(r.PathValue("messageId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry habar ID")
+		return
+	}
+	user, ok := requireParticipant(h, w, r, convID)
+	if !ok {
+		return
+	}
+
+	userKey := strconv.Itoa(user.ID)
+	if h.messageLimiter.blocked(userKey) {
+		writeError(w, http.StatusTooManyRequests, "köp synanyşyk boldy, birazdan gaýtadan synanyşyň")
+		return
+	}
+	h.messageLimiter.record(userKey)
+
+	var req struct {
+		Emoji string `json:"emoji"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry maglumat")
+		return
+	}
+	if !isValidReaction(req.Emoji) {
+		writeError(w, http.StatusBadRequest, "nädogry reaksiýa")
+		return
+	}
+
+	msg, err := h.db.GetMessage(msgID)
+	if err != nil || msg == nil || msg.ConversationID != convID || msg.DeletedAt != nil {
+		writeError(w, http.StatusNotFound, "habar tapylmady")
+		return
+	}
+
+	if _, err := h.db.ToggleReaction(msgID, user.ID, req.Emoji); err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk")
+		return
+	}
+	groups, err := h.db.ListReactionGroups(msgID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk")
+		return
+	}
+	if groups == nil {
+		groups = []models.MessageReactionGroup{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"message_id": msgID, "reactions": groups})
+
+	participants, err := h.db.ListParticipants(convID)
+	if err == nil {
+		h.chatHub.broadcast(participantIDs(participants), map[string]any{
+			"type": "message.reaction", "conversation_id": convID, "message_id": msgID, "reactions": groups,
+		})
+	}
+}
+
 func (h *Handler) UploadChatAttachment(w http.ResponseWriter, r *http.Request) {
 	convID, err := conversationIDFromPath(r)
 	if err != nil {

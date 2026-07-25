@@ -211,6 +211,26 @@ const UI = {
         return JSON.stringify(v).replace(/[&<>"']/g, c => ESC_CHARS[c]);
     },
 
+    // HTML-escapes a value AND turns bare http(s) URLs in it into clickable
+    // links — used for user-authored text like chat message bodies. Escaping
+    // runs FIRST, so by the time linkifying happens the string contains no raw
+    // markup at all: the URL match can't include a real "<" (it became "&lt;")
+    // and the emitted href/text reuse the already-escaped URL (a "&" in a URL
+    // is "&amp;", which is valid inside an href and renders back as "&"),
+    // making injection impossible. rel="noopener noreferrer nofollow" +
+    // target="_blank" so an opened link can't reach back into this window.
+    escLinkify(s) {
+        const escaped = this.esc(s);
+        return escaped.replace(/(https?:\/\/[^\s<]+)/g, (url) => {
+            // Don't swallow trailing sentence punctuation into the link.
+            let trail = '';
+            const mtrail = url.match(/([)\].,!?;:'"]+|&quot;|&#39;|&gt;|&lt;|&amp;)$/);
+            if (mtrail) { trail = mtrail[0]; url = url.slice(0, url.length - trail.length); }
+            if (!url) return trail;
+            return `<a href="${url}" target="_blank" rel="noopener noreferrer nofollow">${url}</a>${trail}`;
+        });
+    },
+
     // Real profile photo when the person has one, falling back to an
     // initials circle otherwise — used everywhere another person shows up
     // (share dialogs, the shared-with-me/by-me groups, project members).

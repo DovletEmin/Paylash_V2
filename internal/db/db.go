@@ -276,6 +276,20 @@ func (d *DB) Migrate() error {
 		)`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS chat_notify_level VARCHAR(20) NOT NULL DEFAULT 'full'`,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS chat_notify_sound BOOLEAN NOT NULL DEFAULT TRUE`,
+
+		// Emoji reactions on messages. PK (message_id, user_id, emoji) lets one
+		// user place several distinct reactions on the same message while making
+		// re-adding the same one idempotent (toggle = delete-or-insert). The
+		// emoji is always from a server-side allowlist (see reactionSet), never
+		// free text, so it's safe to render.
+		`CREATE TABLE IF NOT EXISTS message_reactions (
+			message_id INT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+			user_id    INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			emoji      VARCHAR(16) NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (message_id, user_id, emoji)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_message_reactions_message ON message_reactions(message_id)`,
 	}
 
 	for _, m := range migrations {

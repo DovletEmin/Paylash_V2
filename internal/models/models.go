@@ -360,6 +360,19 @@ type MessageView struct {
 	// the requester's own messages in direct conversations (group read
 	// receipts are out of scope; group messages are always "sent").
 	Status string `json:"status,omitempty"`
+	// Reactions groups this message's emoji reactions by emoji, each with the
+	// ids of the users who placed it. The client derives count (len) and
+	// whether the viewer reacted (membership) itself — this keeps the payload
+	// viewer-independent, so the same struct serves both list-load and the
+	// message.reaction WS broadcast.
+	Reactions []MessageReactionGroup `json:"reactions,omitempty"`
+}
+
+// MessageReactionGroup is one emoji and everyone who reacted with it on a
+// given message.
+type MessageReactionGroup struct {
+	Emoji   string `json:"emoji"`
+	UserIDs []int  `json:"user_ids"`
 }
 
 // MessageAttachment is a file attached to a chat message. MinioKey is never

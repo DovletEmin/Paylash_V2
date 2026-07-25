@@ -123,6 +123,7 @@ func (s *Server) routes(webFS embed.FS) {
 	s.mux.Handle("PATCH /api/chat/conversations/{id}/messages/{messageId}", auth(http.HandlerFunc(h.EditMessage)))
 	s.mux.Handle("DELETE /api/chat/conversations/{id}/messages/{messageId}", auth(http.HandlerFunc(h.DeleteMessage)))
 	s.mux.Handle("POST /api/chat/messages/{messageId}/forward", auth(http.HandlerFunc(h.ForwardMessage)))
+	s.mux.Handle("POST /api/chat/conversations/{id}/messages/{messageId}/reactions", auth(http.HandlerFunc(h.ToggleReaction)))
 	s.mux.Handle("POST /api/chat/conversations/{id}/attachments", auth(http.HandlerFunc(h.UploadChatAttachment)))
 	s.mux.Handle("GET /api/chat/attachments/{id}/download", auth(http.HandlerFunc(h.DownloadChatAttachment)))
 	s.mux.Handle("POST /api/chat/conversations/{id}/read", auth(http.HandlerFunc(h.MarkConversationRead)))

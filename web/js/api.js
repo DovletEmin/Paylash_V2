@@ -239,6 +239,9 @@ const API = {
         forward(messageId, conversationIds) {
             return API._request('POST', `/api/chat/messages/${messageId}/forward`, { conversation_ids: conversationIds });
         },
+        toggleReaction(id, messageId, emoji) {
+            return API._request('POST', `/api/chat/conversations/${id}/messages/${messageId}/reactions`, { emoji });
+        },
         uploadAttachment(conversationId, file) {
             const form = new FormData();
             form.append('file', file);

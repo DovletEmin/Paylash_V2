@@ -16,6 +16,13 @@ const ChatPage = {
     _pendingSeq: 0,
     _forwardMessageId: null,
     _forwardSelected: null,
+    // Id of the first unread message when the conversation was opened, so a
+    // "new messages" divider can be drawn above it (cleared on next open once
+    // markRead advances the server-side last_read_at).
+    _unreadFromId: null,
+    // Count of messages that arrived while the user was scrolled up, shown on
+    // the floating "jump to newest" pill so they know something came in below.
+    _newBelow: 0,
 
     STICKERS: {
         faces: ['😀', '😂', '🥰', '😎', '😢', '😡', '😮', '🥳', '😴', '🤔'],
@@ -24,6 +31,10 @@ const ChatPage = {
         celebration: ['🎉', '🎊', '🎁', '🏆', '🥂', '🎈', '🌟', '⭐', '👏', '🍾'],
         studio: ['🏗️', '🏛️', '📐', '📏', '🧱', '🏠', '🖼️', '📁', '✏️', '🗺️'],
     },
+
+    // Quick reactions — kept in sync with reactionSet in internal/api/reactions.go
+    // (the server rejects anything not on its own copy of this list).
+    REACTIONS: ['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥', '🎉'],
 
     render() {
         return `
@@ -132,6 +143,20 @@ const ChatPage = {
             this._hasMoreHistory = this._messages.length >= 50;
         } catch { this._messages = []; }
 
+        // Unread boundary: the first message from someone else that arrived
+        // after this viewer last read the conversation — computed from the
+        // participant list's last_read_at BEFORE markRead below advances it.
+        this._unreadFromId = null;
+        this._newBelow = 0;
+        const me = this._participants.find(p => p.user_id === App.user.id);
+        const lastReadMs = me ? new Date(me.last_read_at).getTime() : 0;
+        for (const m of this._messages) {
+            if (m.sender_id !== App.user.id && new Date(m.created_at).getTime() > lastReadMs) {
+                this._unreadFromId = m.id;
+                break;
+            }
+        }
+
         this.renderThread();
         try { await API.chat.markRead(id); } catch {}
         const cv = this._conversations.find(c => c.id === id);
@@ -139,6 +164,12 @@ const ChatPage = {
         if (typeof App !== 'undefined') App.checkChatUnread();
     },
 
+    // Builds the thread's stable shell (header + empty messages container +
+    // composer) exactly once per conversation open. Live events afterwards
+    // mutate individual message nodes (append/replace/remove) rather than
+    // rebuilding this whole subtree — that preserves scroll position, keeps
+    // focus, and, crucially, never wipes text the user is mid-way through
+    // typing when an incoming message arrives.
     renderThread() {
         const thread = document.getElementById('chat-thread');
         if (!thread || !this._activeConversation) return;
@@ -146,20 +177,25 @@ const ChatPage = {
         const isDirect = cv.type === 'direct';
         const other = this._participants.find(p => p.user_id !== App.user.id);
         const name = isDirect ? (other ? (other.full_name || other.username) : I18N.t('chat.unknown_user')) : (cv.name || I18N.t('chat.unnamed_group'));
+        const headerAvatar = isDirect && other
+            ? UI.avatarHTML(other.user_id, other.full_name || other.username, 'chat-avatar-sm chat-thread-avatar')
+            : `<span class="chat-avatar-sm chat-avatar-group chat-thread-avatar">👥</span>`;
 
         thread.innerHTML = `
             <div class="chat-thread-header">
                 <button class="chat-back-btn" onclick="ChatPage.backToList()" aria-label="${I18N.t('chat.back_to_list')}">←</button>
-                <div class="chat-thread-title">${UI.esc(name)}</div>
+                ${headerAvatar}
+                <div class="chat-thread-heading">
+                    <div class="chat-thread-title">${UI.esc(name)}</div>
+                    <div class="chat-thread-subtitle" id="chat-thread-subtitle"></div>
+                </div>
                 ${!isDirect ? `<button class="btn btn-ghost btn-sm" onclick="ChatPage.showGroupInfoModal()">${I18N.t('chat.group_info')}</button>` : ''}
             </div>
-            <div class="chat-messages" id="chat-messages" onscroll="ChatPage.onMessagesScroll()">
-                ${this._hasMoreHistory ? `<div class="chat-load-more" id="chat-load-more">${I18N.t('chat.load_older')}</div>` : ''}
-                ${this.groupMessagesForRender(this._messages).map(item => item.type === 'day'
-                    ? `<div class="chat-day-divider"><span>${UI.esc(item.label)}</span></div>`
-                    : this.messageHTML(item.message, item.isGroupStart)
-                ).join('')}
-            </div>
+            <div class="chat-messages" id="chat-messages" onscroll="ChatPage.onMessagesScroll()"></div>
+            <button class="chat-scroll-down hidden" id="chat-scroll-down" onclick="ChatPage.jumpToBottom()" aria-label="${I18N.t('chat.scroll_to_latest')}">
+                <span class="chat-scroll-down-arrow">↓</span>
+                <span class="chat-scroll-down-count" id="chat-scroll-down-count"></span>
+            </button>
             <div class="chat-composer">
                 <div id="chat-reply-bar"></div>
                 <div id="chat-pending-attachments"></div>
@@ -167,13 +203,50 @@ const ChatPage = {
                     <button class="btn btn-icon btn-ghost btn-sm" onclick="document.getElementById('chat-file-input').click()" title="${I18N.t('chat.attach_file')}" aria-label="${I18N.t('chat.attach_file')}">📎</button>
                     <button class="btn btn-icon btn-ghost btn-sm chat-sticker-toggle-btn" onclick="ChatPage.toggleStickerPicker()" title="${I18N.t('chat.stickers')}" aria-label="${I18N.t('chat.stickers')}">😊</button>
                     <input type="file" id="chat-file-input" multiple style="display:none" onchange="ChatPage.onFilesPicked(this.files)">
-                    <textarea id="chat-message-input" class="form-control" rows="1" placeholder="${I18N.t('chat.message_placeholder')}" onkeydown="ChatPage.onComposerKeydown(event)"></textarea>
+                    <textarea id="chat-message-input" class="form-control" rows="1" placeholder="${I18N.t('chat.message_placeholder')}" onkeydown="ChatPage.onComposerKeydown(event)" oninput="ChatPage.autoGrowComposer()"></textarea>
                     <button class="btn btn-primary btn-sm" onclick="ChatPage.sendMessage()">${I18N.t('chat.send')}</button>
                 </div>
             </div>`;
+        this.renderMessages();
         this.renderPendingAttachments();
         this.renderReplyBar();
-        this.scrollToBottom();
+        // Open on the first unread message when there is one, otherwise at the
+        // very bottom — same instinct as every messenger.
+        if (this._unreadFromId) {
+            const divider = document.getElementById('chat-unread-divider');
+            if (divider) divider.scrollIntoView({ block: 'center' });
+            else this.scrollToBottom();
+        } else {
+            this.scrollToBottom();
+        }
+        this.updateScrollDownPill();
+    },
+
+    // Rebuilds only the messages container (never the composer), from the
+    // in-memory _messages list — used for the initial render, history
+    // prepends, and any structural change where recomputing day-dividers and
+    // grouping from scratch is simpler than patching around a removed node.
+    renderMessages() {
+        const el = document.getElementById('chat-messages');
+        if (!el) return;
+        const parts = [];
+        if (this._hasMoreHistory) {
+            parts.push(`<div class="chat-load-more" id="chat-load-more" onclick="ChatPage.loadOlder()">${I18N.t('chat.load_older')}</div>`);
+        }
+        for (const item of this.groupMessagesForRender(this._messages)) {
+            if (item.type === 'day') parts.push(this.dayDividerHTML(item.label));
+            else if (item.type === 'unread') parts.push(this.unreadDividerHTML());
+            else parts.push(this.messageHTML(item.message, item.isGroupStart));
+        }
+        el.innerHTML = parts.join('') || `<div class="empty-state"><p class="text-muted">${I18N.t('chat.no_messages_yet')}</p></div>`;
+    },
+
+    dayDividerHTML(label) {
+        return `<div class="chat-day-divider"><span>${UI.esc(label)}</span></div>`;
+    },
+
+    unreadDividerHTML() {
+        return `<div class="chat-unread-divider" id="chat-unread-divider"><span>${I18N.t('chat.unread_messages')}</span></div>`;
     },
 
     // Splits a flat, oldest-first message list into day-divider chips and
@@ -193,12 +266,26 @@ const ChatPage = {
                 lastDayKey = dayKey;
                 lastSenderKey = null;
             }
+            if (m.id === this._unreadFromId) {
+                items.push({ type: 'unread' });
+                lastSenderKey = null; // force the first unread to start a fresh group under the divider
+            }
             const isGroupStart = m.sender_id !== lastSenderKey || (d.getTime() - lastTime) > 5 * 60 * 1000 || !!m.reply_to || !!m.forwarded_from_name;
             items.push({ type: 'msg', message: m, isGroupStart });
             lastSenderKey = m.sender_id;
             lastTime = d.getTime();
         }
         return items;
+    },
+
+    // Recomputes whether `m` starts a new visual group relative to the message
+    // immediately before it — the incremental-append counterpart to the
+    // grouping logic in groupMessagesForRender.
+    computeGroupStart(m, prev) {
+        if (!prev) return true;
+        const d = new Date(m.created_at), pd = new Date(prev.created_at);
+        if (d.toDateString() !== pd.toDateString()) return true;
+        return m.sender_id !== prev.sender_id || (d.getTime() - pd.getTime()) > 5 * 60 * 1000 || !!m.reply_to || !!m.forwarded_from_name;
     },
 
     dayLabel(d) {
@@ -228,6 +315,7 @@ const ChatPage = {
                 <div class="chat-sticker-wrap">
                     <div class="chat-sticker">${UI.esc(m.body)}</div>
                     <div class="chat-msg-time chat-sticker-time">${UI.formatDate(m.created_at)} ${this.statusTickHTML(m, mine)}</div>
+                    ${this.reactionsBarHTML(m)}
                 </div>
                 <button class="chat-msg-menu-btn" onclick="ChatPage.showMessageMenu(event,${m.id})" title="${I18N.t('common.actions')}" aria-label="${I18N.t('common.actions')}">⋮</button>
             </div>`;
@@ -246,12 +334,36 @@ const ChatPage = {
                 ${forwardedBlock}
                 ${senderLabel}
                 ${replyBlock}
-                ${m.body ? `<div class="chat-msg-body">${UI.esc(m.body)}</div>` : ''}
+                ${this.messageBodyHTML(m)}
                 ${attachments}
                 <div class="chat-msg-time">${editedLabel} ${UI.formatDate(m.created_at)} ${this.statusTickHTML(m, mine)}</div>
+                ${this.reactionsBarHTML(m)}
             </div>
             <button class="chat-msg-menu-btn" onclick="ChatPage.showMessageMenu(event,${m.id})" title="${I18N.t('common.actions')}" aria-label="${I18N.t('common.actions')}">⋮</button>
         </div>`;
+    },
+
+    // Message body with URLs turned into safe links. UI.escLinkify escapes
+    // first (so no markup survives) and only then wraps http(s) URLs — the
+    // one place a message's own text becomes interactive, done XSS-safely.
+    messageBodyHTML(m) {
+        if (!m.body) return '';
+        return `<div class="chat-msg-body">${UI.escLinkify(m.body)}</div>`;
+    },
+
+    // The reaction chips shown under a message. Each chip is one emoji plus
+    // how many people used it, highlighted when the viewer is one of them;
+    // clicking toggles the viewer's own reaction.
+    reactionsBarHTML(m) {
+        if (!m.reactions || !m.reactions.length) return '';
+        const chips = m.reactions.map(g => {
+            const ids = g.user_ids || [];
+            const mine = ids.includes(App.user.id);
+            return `<button class="chat-reaction ${mine ? 'mine' : ''}" onclick="ChatPage.toggleReaction(${m.id},${UI.escJson(g.emoji)})">
+                <span class="chat-reaction-emoji">${UI.esc(g.emoji)}</span><span class="chat-reaction-count">${ids.length}</span>
+            </button>`;
+        }).join('');
+        return `<div class="chat-reactions">${chips}</div>`;
     },
 
     // Sent/read ticks — only meaningful for the viewer's own messages.
@@ -279,6 +391,34 @@ const ChatPage = {
         if (el) el.scrollTop = el.scrollHeight;
     },
 
+    _isNearBottom(px) {
+        const el = document.getElementById('chat-messages');
+        if (!el) return true;
+        return el.scrollHeight - el.scrollTop - el.clientHeight < (px || 120);
+    },
+
+    jumpToBottom() {
+        this._newBelow = 0;
+        this.scrollToBottom();
+        this.updateScrollDownPill();
+    },
+
+    // Floating "jump to newest" pill: visible whenever the user is scrolled
+    // up, badged with how many messages have landed below since they left the
+    // bottom (so a message arriving mid-scrollback is noticed, not missed).
+    updateScrollDownPill() {
+        const btn = document.getElementById('chat-scroll-down');
+        if (!btn) return;
+        const show = !this._isNearBottom(120);
+        btn.classList.toggle('hidden', !show);
+        if (!show) this._newBelow = 0;
+        const countEl = document.getElementById('chat-scroll-down-count');
+        if (countEl) {
+            countEl.textContent = this._newBelow > 0 ? (this._newBelow > 99 ? '99+' : String(this._newBelow)) : '';
+            countEl.classList.toggle('hidden', this._newBelow <= 0);
+        }
+    },
+
     jumpToMessage(id) {
         const el = document.getElementById('chat-msg-' + id);
         if (!el) { UI.toast(I18N.t('chat.reply_not_loaded'), 'info'); return; }
@@ -287,11 +427,18 @@ const ChatPage = {
         setTimeout(() => el.classList.remove('chat-msg-flash'), 1200);
     },
 
-    async onMessagesScroll() {
+    onMessagesScroll() {
+        this.updateScrollDownPill();
         const el = document.getElementById('chat-messages');
-        if (!el || el.scrollTop > 40 || !this._hasMoreHistory || this._loadingMore) return;
+        if (el && el.scrollTop <= 40) this.loadOlder();
+    },
+
+    async loadOlder() {
+        const el = document.getElementById('chat-messages');
+        if (!el || !this._hasMoreHistory || this._loadingMore) return;
         this._loadingMore = true;
         const prevHeight = el.scrollHeight;
+        const prevTop = el.scrollTop;
         try {
             const older = (await API.chat.listMessages(this._activeId, this._oldestLoadedId)) || [];
             older.reverse();
@@ -300,11 +447,66 @@ const ChatPage = {
                 this._messages = [...older, ...this._messages];
             }
             this._hasMoreHistory = older.length >= 50;
-            this.renderThread();
+            // renderMessages (not renderThread) so the composer — and anything
+            // typed into it — is left completely untouched.
+            this.renderMessages();
             const newEl = document.getElementById('chat-messages');
-            if (newEl) newEl.scrollTop = newEl.scrollHeight - prevHeight;
+            if (newEl) newEl.scrollTop = newEl.scrollHeight - prevHeight + prevTop;
         } catch { /* transient — user can just scroll again */ }
         this._loadingMore = false;
+    },
+
+    autoGrowComposer() {
+        const ta = document.getElementById('chat-message-input');
+        if (!ta) return;
+        ta.style.height = 'auto';
+        ta.style.height = Math.min(ta.scrollHeight, 140) + 'px';
+    },
+
+    /* ── Incremental message-node updates (no full re-render) ── */
+
+    // Appends one just-arrived message, keeping _messages and the DOM in sync.
+    // Idempotent by id: a message already shown (e.g. the WS echo of one this
+    // tab just sent) is ignored rather than duplicated.
+    appendMessage(m) {
+        if (this._messages.some(x => x.id === m.id)) return;
+        const el = document.getElementById('chat-messages');
+        if (!el) { this._messages.push(m); return; }
+        const empty = el.querySelector('.empty-state');
+        if (empty) el.innerHTML = '';
+        const prev = this._messages.length ? this._messages[this._messages.length - 1] : null;
+        const mine = m.sender_id === App.user.id;
+        const wasNearBottom = this._isNearBottom(120);
+        let html = '';
+        if (!prev || new Date(m.created_at).toDateString() !== new Date(prev.created_at).toDateString()) {
+            html += this.dayDividerHTML(this.dayLabel(new Date(m.created_at)));
+        }
+        html += this.messageHTML(m, this.computeGroupStart(m, prev));
+        this._messages.push(m);
+        el.insertAdjacentHTML('beforeend', html);
+        if (mine || wasNearBottom) {
+            this.scrollToBottom();
+        } else {
+            this._newBelow++;
+        }
+        this.updateScrollDownPill();
+    },
+
+    // Replaces one message's node in place (edit, reaction, status, deleted
+    // tombstone). The caller has already updated the _messages entry; the
+    // node keeps whatever group-start it had since its neighbors are unchanged.
+    replaceMessage(m) {
+        const node = document.getElementById('chat-msg-' + m.id);
+        if (!node) return;
+        node.outerHTML = this.messageHTML(m, node.classList.contains('chat-msg-group-start'));
+    },
+
+    // Removes one message (delete-for-me) then re-renders the messages list so
+    // day-dividers/grouping stay correct — composer is left untouched.
+    removeMessage(id) {
+        const idx = this._messages.findIndex(x => x.id === id);
+        if (idx !== -1) this._messages.splice(idx, 1);
+        this.renderMessages();
     },
 
     onComposerKeydown(ev) {
@@ -407,8 +609,10 @@ const ChatPage = {
                 const idx = this._messages.findIndex(m => m.id === ctx.id);
                 if (idx !== -1) this._messages[idx] = updated;
                 this._composerContext = null;
-                if (ta) ta.value = '';
-                this.renderThread();
+                if (ta) { ta.value = ''; }
+                this.renderReplyBar();
+                this.autoGrowComposer();
+                this.replaceMessage(updated);
             } catch (e) { UI.toast(e.message, 'error'); }
             return;
         }
@@ -419,7 +623,8 @@ const ChatPage = {
 
         // Optimistic "sending" placeholder — swapped for the real message (or
         // removed on failure) once the POST resolves, matching the
-        // spinner→sent→read tick progression the redesign asks for.
+        // spinner→sent→read tick progression the redesign asks for. Appended
+        // as a single node so nothing else in the thread flickers.
         const tempId = 'pending-' + (++this._pendingSeq);
         const optimistic = {
             id: tempId, conversation_id: this._activeId, sender_id: App.user.id, sender_name: App.user.full_name,
@@ -427,30 +632,32 @@ const ChatPage = {
             reply_to: replyToId ? { id: ctx.id, sender_name: ctx.senderName, body: ctx.body, kind: ctx.kind } : null,
             _pending: true,
         };
-        this._messages.push(optimistic);
         this._pendingAttachments = [];
         this._composerContext = null;
         if (ta) ta.value = '';
-        this.renderThread();
+        this.renderPendingAttachments();
+        this.renderReplyBar();
+        this.autoGrowComposer();
+        this.appendMessage(optimistic);
 
         try {
             const msg = await API.chat.send(this._activeId, body, attachmentIds, 'text', replyToId);
+            // Swap the optimistic node for the confirmed one. The WS echo of
+            // this same send is deliberately suppressed while a _pending temp
+            // is present (see the message.new handler), so appendMessage below
+            // is the single authoritative add.
             const idx = this._messages.findIndex(m => m.id === tempId);
             if (idx !== -1) this._messages.splice(idx, 1);
-            // The server broadcasts over the WS hub before this POST's own
-            // response reaches the browser, so the live "message.new" echo
-            // can genuinely arrive first (see the matching dedup check in
-            // that handler below) — check here too, or whichever of the two
-            // arrives second double-adds it.
-            if (!this._messages.some(m => m.id === msg.id)) {
-                this._messages.push(msg);
-            }
-            this.renderThread();
+            document.getElementById('chat-msg-' + tempId)?.remove();
+            this.appendMessage(msg);
             this.loadConversations();
         } catch (e) {
             const idx = this._messages.findIndex(m => m.id === tempId);
             if (idx !== -1) this._messages.splice(idx, 1);
-            this.renderThread();
+            document.getElementById('chat-msg-' + tempId)?.remove();
+            // Give the user their text back so a transient failure isn't a
+            // lost message.
+            if (ta && body) { ta.value = body; this.autoGrowComposer(); ta.focus(); }
             UI.toast(e.message, 'error');
         }
     },
@@ -461,9 +668,9 @@ const ChatPage = {
         const replyToId = ctx && ctx.type === 'reply' ? ctx.id : null;
         try {
             const msg = await API.chat.send(this._activeId, emoji, [], 'sticker', replyToId);
-            if (!this._messages.some(m => m.id === msg.id)) this._messages.push(msg);
             this._composerContext = null;
-            this.renderThread();
+            this.renderReplyBar();
+            this.appendMessage(msg); // idempotent — safe against the WS echo
             this.loadConversations();
         } catch (e) { UI.toast(e.message, 'error'); }
     },
@@ -498,12 +705,11 @@ const ChatPage = {
             try {
                 await API.chat.deleteMessage(this._activeId, id, forWhom);
                 if (forWhom === 'me') {
-                    this._messages = this._messages.filter(x => x.id !== id);
+                    this.removeMessage(id);
                 } else {
                     const m = this._messages.find(x => x.id === id);
-                    if (m) { m.deleted_at = new Date().toISOString(); m.body = ''; m.attachments = []; }
+                    if (m) { m.deleted_at = new Date().toISOString(); m.body = ''; m.attachments = []; m.reactions = []; this.replaceMessage(m); }
                 }
-                this.renderThread();
             } catch (e) { UI.toast(e.message, 'error'); }
         });
     },
@@ -516,7 +722,9 @@ const ChatPage = {
         const m = this._messages.find(x => x.id === id);
         if (!m || m.deleted_at || m._pending) return;
         const mine = m.sender_id === App.user.id;
+        const [x, y] = UI.eventPos(ev);
         const items = [
+            { action: 'react', label: I18N.t('chat.react'), icon: '😊', handler: () => this.showReactionPickerAt(x, y, id) },
             { action: 'reply', label: I18N.t('chat.reply'), icon: '↩️', handler: () => this.replyToMessage(id) },
         ];
         if (m.kind === 'text' && m.body) {
@@ -531,8 +739,44 @@ const ChatPage = {
         if (mine) {
             items.push({ action: 'delete-everyone', label: I18N.t('chat.delete_for_everyone'), icon: '🗑', danger: true, handler: () => this.deleteMessage(id, 'everyone') });
         }
-        const [x, y] = UI.eventPos(ev);
         UI.showContextMenu(x, y, items);
+    },
+
+    /* ── Reactions ── */
+
+    async toggleReaction(messageId, emoji) {
+        this.closeReactionPicker();
+        try {
+            const res = await API.chat.toggleReaction(this._activeId, messageId, emoji);
+            const m = this._messages.find(x => x.id === messageId);
+            if (m) { m.reactions = res.reactions || []; this.replaceMessage(m); }
+        } catch (e) { UI.toast(e.message, 'error'); }
+    },
+
+    // A small horizontal emoji row anchored near where the user opened the
+    // message menu — pick one to toggle it as a reaction.
+    showReactionPickerAt(x, y, messageId) {
+        this.closeReactionPicker();
+        const wrap = document.createElement('div');
+        wrap.id = 'chat-reaction-picker';
+        wrap.className = 'chat-reaction-picker';
+        wrap.innerHTML = this.REACTIONS.map(e =>
+            `<button type="button" class="chat-reaction-pick" onclick="ChatPage.toggleReaction(${messageId},${UI.escJson(e)})">${e}</button>`
+        ).join('');
+        document.body.appendChild(wrap);
+        const w = wrap.offsetWidth || 280, h = wrap.offsetHeight || 44;
+        wrap.style.left = Math.max(8, Math.min(x, window.innerWidth - w - 8)) + 'px';
+        wrap.style.top = Math.max(8, y - h - 8) + 'px';
+        setTimeout(() => document.addEventListener('click', ChatPage._onDocClickCloseReaction, { once: true, capture: true }), 0);
+    },
+
+    closeReactionPicker() {
+        document.getElementById('chat-reaction-picker')?.remove();
+    },
+
+    _onDocClickCloseReaction(ev) {
+        const p = document.getElementById('chat-reaction-picker');
+        if (p && !p.contains(ev.target)) p.remove();
     },
 
     copyMessageText(text) {
@@ -786,16 +1030,17 @@ const ChatPage = {
         ChatSocket.on('message.new', (data) => {
             if (App.currentPage !== 'chat') return;
             if (data.conversation_id === this._activeId) {
-                // The sender's own tab already appended this optimistically
-                // in sendMessage() before the WS echo arrives — broadcast
-                // deliberately includes the sender too (so their OTHER open
-                // tabs/devices also get it), so dedup by id rather than by
-                // sender_id here, or a second tab of the same user would
-                // silently never receive the message at all.
-                if (!this._messages.some(m => m.id === data.message.id)) {
-                    this._messages.push(data.message);
-                    this.renderThread();
-                }
+                const msg = data.message;
+                const mine = msg.sender_id === App.user.id;
+                const already = this._messages.some(m => m.id === msg.id);
+                // For a message this very tab is sending, an optimistic
+                // _pending temp is already on screen and sendMessage() will
+                // reconcile it against the POST response — so suppress the WS
+                // echo here to avoid briefly showing the temp AND the real one.
+                // Other tabs/devices of the same user (no pending temp) still
+                // append it live.
+                const pendingMine = mine && this._messages.some(m => m._pending);
+                if (!already && !pendingMine) this.appendMessage(msg);
                 API.chat.markRead(this._activeId).catch(() => {});
             }
             this.loadConversations();
@@ -804,29 +1049,31 @@ const ChatPage = {
             if (App.currentPage !== 'chat') return;
             if (data.conversation_id === this._activeId) {
                 const m = this._messages.find(x => x.id === data.message_id);
-                if (m) { m.deleted_at = new Date().toISOString(); m.body = ''; m.attachments = []; }
-                this.renderThread();
+                if (m) { m.deleted_at = new Date().toISOString(); m.body = ''; m.attachments = []; m.reactions = []; this.replaceMessage(m); }
             }
         });
         ChatSocket.on('message.edited', (data) => {
             if (App.currentPage !== 'chat') return;
             if (data.conversation_id === this._activeId) {
                 const idx = this._messages.findIndex(x => x.id === data.message.id);
-                if (idx !== -1) { this._messages[idx] = data.message; this.renderThread(); }
+                if (idx !== -1) { this._messages[idx] = data.message; this.replaceMessage(data.message); }
             }
+        });
+        ChatSocket.on('message.reaction', (data) => {
+            if (App.currentPage !== 'chat' || data.conversation_id !== this._activeId) return;
+            const m = this._messages.find(x => x.id === data.message_id);
+            if (m) { m.reactions = data.reactions || []; this.replaceMessage(m); }
         });
         ChatSocket.on('conversation.read', (data) => {
             if (App.currentPage !== 'chat') return;
             if (data.conversation_id !== this._activeId) return;
             const readAt = new Date(data.last_read_at).getTime();
-            let changed = false;
             this._messages.forEach(m => {
                 if (m.sender_id === App.user.id && m.status !== 'read' && new Date(m.created_at).getTime() <= readAt) {
                     m.status = 'read';
-                    changed = true;
+                    this.replaceMessage(m);
                 }
             });
-            if (changed) this.renderThread();
         });
         ChatSocket.on('conversation.updated', (data) => {
             if (App.currentPage !== 'chat') return;
