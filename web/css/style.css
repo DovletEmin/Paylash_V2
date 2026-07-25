@@ -130,12 +130,14 @@ html.light .theme-icon-light{display:inline}
 .sidebar-toggle:hover{background:var(--surface-2)}
 .sidebar-toggle svg{width:18px;height:18px}
 .page-content{flex:1;padding:24px}
-/* The chat page fills exactly the viewport below the 52px topbar and never
-   grows past it, so only the message list / conversation list scroll
-   internally — the window itself never scrolls on the chat page. Without a
-   definite height here, .chat-page's height:100% can't resolve and the whole
-   page ends up scrolling instead. */
-.page-content:has(.chat-page){padding:0;height:calc(100vh - 52px);overflow:hidden}
+/* On the chat page the window itself must never scroll — only the message list
+   and conversation list do. page-content is a flex:1 item (flex-basis:0), so an
+   explicit height on IT is ignored by the flex layout; the fix is to pin the
+   flex CONTAINER (main-content) to the viewport. Then page-content's flex-
+   resolved height becomes definite, .chat-page's height:100% finally resolves,
+   and its inner overflow:auto areas scroll instead of growing the page. */
+.main-content:has(.chat-page){height:100vh}
+.page-content:has(.chat-page){padding:0;min-height:0;overflow:hidden}
 
 /* ─── Language Switcher ─── */
 .lang-switcher{display:flex;border:1px solid var(--border);border-radius:var(--r);overflow:hidden}
