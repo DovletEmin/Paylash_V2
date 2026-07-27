@@ -59,6 +59,7 @@ const ChatPage = {
                     <div class="empty-state"><div class="spinner"></div></div>
                 </div>
                 <div class="chat-search-results" id="chat-search-results" style="display:none"></div>
+                <div class="chat-archive-toggle" id="chat-archive-toggle" onclick="ChatPage.toggleArchivedView()">${I18N.t('chat.view_archived')}</div>
             </div>
             <div class="chat-thread" id="chat-thread">
                 <div class="empty-state"><p>${I18N.t('chat.select_conversation')}</p></div>
@@ -66,10 +67,29 @@ const ChatPage = {
         </div>`;
     },
 
+    _viewingArchived: false,
+    _blockedIds: new Set(),
+    _pinnedMessage: null,
+
     async init() {
         this._bindSocketListeners();
+        this._loadBlockedIds();
         await this.loadConversations();
         if (this._activeId) await this.selectConversation(this._activeId);
+    },
+
+    async _loadBlockedIds() {
+        try {
+            const list = await API.chat.listBlocked();
+            this._blockedIds = new Set((list || []).map(u => u.id));
+        } catch { /* not critical — block-state UI just won't reflect it yet */ }
+    },
+
+    toggleArchivedView() {
+        this._viewingArchived = !this._viewingArchived;
+        const toggle = document.getElementById('chat-archive-toggle');
+        if (toggle) toggle.textContent = this._viewingArchived ? I18N.t('chat.back_to_chats') : I18N.t('chat.view_archived');
+        this.loadConversations();
     },
 
     _updateMobileClass() {
@@ -84,7 +104,7 @@ const ChatPage = {
     },
 
     async loadConversations() {
-        try { this._conversations = await API.chat.list() || []; }
+        try { this._conversations = await API.chat.list(this._viewingArchived) || []; }
         catch { this._conversations = []; }
         this.renderConversationList();
     },
@@ -93,10 +113,132 @@ const ChatPage = {
         const el = document.getElementById('chat-conversation-list');
         if (!el) return;
         if (!this._conversations.length) {
-            el.innerHTML = `<div class="empty-state"><p class="text-muted">${I18N.t('chat.no_conversations')}</p></div>`;
+            const msg = this._viewingArchived ? I18N.t('chat.no_archived') : I18N.t('chat.no_conversations');
+            el.innerHTML = `<div class="empty-state"><p class="text-muted">${msg}</p></div>`;
             return;
         }
         el.innerHTML = this._conversations.map(cv => this.conversationItemHTML(cv)).join('');
+    },
+
+    /* ── Conversation-level: mute / pin / archive / block ── */
+
+    // Right-click (or long-press-equivalent context menu) on a conversation
+    // list item — mute/pin/archive without having to open it first, same
+    // surface Telegram's chat-list long-press menu offers.
+    showConvListMenu(ev, id) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const cv = this._conversations.find(c => c.id === id);
+        if (!cv) return;
+        const [x, y] = UI.eventPos(ev);
+        const items = [
+            { action: 'pin', label: cv.pinned ? I18N.t('chat.unpin_chat') : I18N.t('chat.pin_chat'), icon: '📌', handler: () => this.setConvPrefs(id, { pinned: !cv.pinned }) },
+            { action: 'mute', label: cv.muted ? I18N.t('chat.unmute_chat') : I18N.t('chat.mute_chat'), icon: '🔕', handler: () => this.setConvPrefs(id, { muted: !cv.muted }) },
+            { action: 'archive', label: cv.archived ? I18N.t('chat.unarchive_chat') : I18N.t('chat.archive_chat'), icon: '📥', handler: () => this.setConvPrefs(id, { archived: !cv.archived }) },
+        ];
+        UI.showContextMenu(x, y, items);
+    },
+
+    // The "⋮" menu inside an open conversation's header — same mute/pin/
+    // archive actions (reading state off the cached inbox entry, defaulting
+    // to "not set" if it isn't loaded yet — a safe, worst-case-relabeled
+    // default rather than a broken action), plus group-info or block/unblock
+    // depending on conversation type.
+    showConversationMenu(ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const cv = this._conversations.find(c => c.id === this._activeId) || {};
+        const [x, y] = UI.eventPos(ev);
+        const items = [
+            { action: 'pin', label: cv.pinned ? I18N.t('chat.unpin_chat') : I18N.t('chat.pin_chat'), icon: '📌', handler: () => this.setConvPrefs(this._activeId, { pinned: !cv.pinned }) },
+            { action: 'mute', label: cv.muted ? I18N.t('chat.unmute_chat') : I18N.t('chat.mute_chat'), icon: '🔕', handler: () => this.setConvPrefs(this._activeId, { muted: !cv.muted }) },
+            { action: 'archive', label: cv.archived ? I18N.t('chat.unarchive_chat') : I18N.t('chat.archive_chat'), icon: '📥', handler: () => this.setConvPrefs(this._activeId, { archived: !cv.archived }) },
+        ];
+        if (this._activeConversation && this._activeConversation.type === 'direct') {
+            const other = this._participants.find(p => p.user_id !== App.user.id);
+            if (other) {
+                const blocked = this._blockedIds.has(other.user_id);
+                items.push({ divider: true });
+                items.push({
+                    action: 'block', label: blocked ? I18N.t('chat.unblock_user') : I18N.t('chat.block_user'), icon: '🚫', danger: !blocked,
+                    handler: () => blocked ? this.unblockUser(other.user_id) : this.blockUser(other.user_id, other.full_name || other.username),
+                });
+            }
+        }
+        UI.showContextMenu(x, y, items);
+    },
+
+    // Applies a mute/pin/archive change, optimistically patching the local
+    // conversation cache so the UI updates instantly rather than waiting on
+    // a full reload — reconciled for real on the next loadConversations().
+    async setConvPrefs(id, prefs) {
+        const cv = this._conversations.find(c => c.id === id);
+        const wasArchived = cv ? cv.archived : false;
+        if (cv) Object.assign(cv, prefs);
+        try {
+            await API.chat.updatePrefs(id, prefs);
+            if ('muted' in prefs) {
+                if (prefs.muted) App._mutedConvIds && App._mutedConvIds.add(id);
+                else App._mutedConvIds && App._mutedConvIds.delete(id);
+            }
+            // Archiving/unarchiving moves a conversation between the two
+            // views — the item no longer belongs in whichever list is on
+            // screen, so just refetch instead of patching it in place.
+            if ('archived' in prefs && prefs.archived !== wasArchived) {
+                await this.loadConversations();
+            } else {
+                this.renderConversationList();
+            }
+        } catch (e) { UI.toast(e.message, 'error'); this.loadConversations(); }
+    },
+
+    async blockUser(userId, name) {
+        UI.confirmAction(I18N.t('chat.block_user'), I18N.t('chat.block_user_confirm', { name: name || '' }), I18N.t('chat.block_user'), async () => {
+            try {
+                await API.chat.blockUser(userId);
+                this._blockedIds.add(userId);
+                UI.toast(I18N.t('chat.user_blocked'), 'success');
+            } catch (e) { UI.toast(e.message, 'error'); }
+        });
+    },
+
+    async unblockUser(userId) {
+        try {
+            await API.chat.unblockUser(userId);
+            this._blockedIds.delete(userId);
+            UI.toast(I18N.t('chat.user_unblocked'), 'success');
+        } catch (e) { UI.toast(e.message, 'error'); }
+    },
+
+    /* ── Pinned message ── */
+
+    renderPinnedBar() {
+        const el = document.getElementById('chat-pinned-bar');
+        if (!el) return;
+        const m = this._pinnedMessage;
+        if (!m) { el.innerHTML = ''; return; }
+        const text = m.kind === 'sticker' ? m.body : (m.body || I18N.t('chat.attachment_notification'));
+        el.innerHTML = `<div class="chat-pinned-bar-inner" onclick="ChatPage.jumpToMessage(${m.id})">
+            <span class="chat-pinned-icon">📌</span>
+            <div class="chat-pinned-text"><strong>${UI.esc(m.sender_name)}</strong><span>${UI.esc(text)}</span></div>
+            <button class="chat-pending-remove" onclick="event.stopPropagation();ChatPage.unpinMessage()" aria-label="${I18N.t('chat.unpin_message')}">✕</button>
+        </div>`;
+    },
+
+    async pinMessage(id) {
+        try {
+            await API.chat.pinMessage(this._activeId, id);
+            const m = this._messages.find(x => x.id === id);
+            if (m) { this._pinnedMessage = m; this.renderPinnedBar(); }
+        } catch (e) { UI.toast(e.message, 'error'); }
+    },
+
+    async unpinMessage() {
+        try {
+            await API.chat.unpinMessage(this._activeId);
+            this._pinnedMessage = null;
+            this.renderPinnedBar();
+        } catch (e) { UI.toast(e.message, 'error'); }
     },
 
     conversationItemHTML(cv) {
@@ -104,19 +246,36 @@ const ChatPage = {
         const name = this.conversationName(cv);
         const innerAvatar = isDirect && cv.other_participant
             ? UI.avatarHTML(cv.other_participant.user_id, cv.other_participant.full_name, 'chat-avatar')
-            : `<span class="chat-avatar chat-avatar-group">👥</span>`;
+            : this.groupAvatarHTML(cv.id, 'chat-avatar');
         const online = isDirect && cv.other_participant && cv.other_participant.online;
         const avatar = `<span class="chat-avatar-wrap">${innerAvatar}${online ? '<span class="chat-presence-dot"></span>' : ''}</span>`;
         const preview = cv.last_message_body ? UI.esc(cv.last_message_body) : `<em>${I18N.t('chat.no_messages_yet')}</em>`;
         const badge = cv.unread_count > 0 ? `<span class="chat-unread-badge">${cv.unread_count > 99 ? '99+' : cv.unread_count}</span>` : '';
-        return `<div class="chat-conv-item ${cv.id === this._activeId ? 'active' : ''}" onclick="ChatPage.selectConversation(${cv.id})" role="button" tabindex="0" onkeydown="if(event.key==='Enter')ChatPage.selectConversation(${cv.id})">
+        const flags = `${cv.pinned ? '<span class="chat-conv-flag" title="' + I18N.t('chat.pinned') + '">📌</span>' : ''}${cv.muted ? '<span class="chat-conv-flag" title="' + I18N.t('chat.muted') + '">🔕</span>' : ''}`;
+        return `<div class="chat-conv-item ${cv.id === this._activeId ? 'active' : ''}" onclick="ChatPage.selectConversation(${cv.id})" oncontextmenu="ChatPage.showConvListMenu(event,${cv.id})" role="button" tabindex="0" onkeydown="if(event.key==='Enter')ChatPage.selectConversation(${cv.id})">
             ${avatar}
             <div class="chat-conv-item-body">
-                <div class="chat-conv-item-name">${UI.esc(name)}</div>
+                <div class="chat-conv-item-name">${UI.esc(name)}${flags}</div>
                 <div class="chat-conv-item-preview">${preview}</div>
             </div>
             ${badge}
         </div>`;
+    },
+
+    // Group photo when the group has one (an <img> pointed at the
+    // authenticated avatar endpoint, same onerror-falls-back-to-glyph
+    // pattern as UI.avatarHTML), otherwise the plain 👥 placeholder — direct
+    // conversations never call this, they always use UI.avatarHTML instead.
+    groupAvatarHTML(conversationId, extraClass) {
+        const cls = ('chat-avatar chat-avatar-group ' + (extraClass || '')).trim();
+        return `<img class="${cls}" src="${API.chat.groupAvatarURL(conversationId)}" alt="👥" onerror="ChatPage._groupAvatarFallback(this)">`;
+    },
+
+    _groupAvatarFallback(img) {
+        const span = document.createElement('span');
+        span.className = img.className;
+        span.textContent = '👥';
+        img.replaceWith(span);
     },
 
     /* ── Message search ── */
@@ -196,6 +355,12 @@ const ChatPage = {
     },
 
     async selectConversation(id, focusMessageId) {
+        // Switching conversations mid-recording discards it (onstop checks
+        // the conversation id it started in against the new _activeId and
+        // no-ops the send) rather than silently mailing a voice note to
+        // whichever thread happens to be open when the mic is released.
+        if (this._recorder && this._recorder.state === 'recording') this._recorder.stop();
+        this.closeMentionAutocomplete();
         this._activeId = id;
         this._messages = [];
         this._oldestLoadedId = null;
@@ -211,6 +376,7 @@ const ChatPage = {
             const detail = await API.chat.get(id);
             this._activeConversation = detail.conversation;
             this._participants = detail.participants || [];
+            this._pinnedMessage = detail.pinned_message || null;
         } catch (e) {
             thread.innerHTML = `<div class="empty-state"><p>${I18N.t('chat.load_failed')}</p></div>`;
             return;
@@ -281,7 +447,7 @@ const ChatPage = {
         const name = isDirect ? (other ? (other.full_name || other.username) : I18N.t('chat.unknown_user')) : (cv.name || I18N.t('chat.unnamed_group'));
         const headerInner = isDirect && other
             ? UI.avatarHTML(other.user_id, other.full_name || other.username, 'chat-avatar-sm chat-thread-avatar')
-            : `<span class="chat-avatar-sm chat-avatar-group chat-thread-avatar">👥</span>`;
+            : this.groupAvatarHTML(cv.id, 'chat-avatar-sm chat-thread-avatar');
         const headerAvatar = `<span class="chat-avatar-wrap">${headerInner}${isDirect && other && other.online ? '<span class="chat-presence-dot"></span>' : ''}</span>`;
 
         thread.innerHTML = `
@@ -293,7 +459,9 @@ const ChatPage = {
                     <div class="chat-thread-subtitle" id="chat-thread-subtitle"></div>
                 </div>
                 ${!isDirect ? `<button class="btn btn-ghost btn-sm" onclick="ChatPage.showGroupInfoModal()">${I18N.t('chat.group_info')}</button>` : ''}
+                <button class="chat-msg-menu-btn chat-thread-menu-btn" onclick="ChatPage.showConversationMenu(event)" title="${I18N.t('common.actions')}" aria-label="${I18N.t('common.actions')}">⋮</button>
             </div>
+            <div id="chat-pinned-bar"></div>
             <div class="chat-messages" id="chat-messages" onscroll="ChatPage.onMessagesScroll()"></div>
             <button class="chat-scroll-down hidden" id="chat-scroll-down" onclick="ChatPage.jumpToBottom()" aria-label="${I18N.t('chat.scroll_to_latest')}">
                 <span class="chat-scroll-down-arrow">↓</span>
@@ -305,13 +473,15 @@ const ChatPage = {
                 <div class="chat-composer-row">
                     <button class="btn btn-icon btn-ghost btn-sm" onclick="document.getElementById('chat-file-input').click()" title="${I18N.t('chat.attach_file')}" aria-label="${I18N.t('chat.attach_file')}">📎</button>
                     <button class="btn btn-icon btn-ghost btn-sm chat-sticker-toggle-btn" onclick="ChatPage.toggleStickerPicker()" title="${I18N.t('chat.stickers')}" aria-label="${I18N.t('chat.stickers')}">😊</button>
+                    <button class="btn btn-icon btn-ghost btn-sm chat-voice-btn" id="chat-voice-btn" onclick="ChatPage.toggleVoiceRecording()" title="${I18N.t('chat.record_voice')}" aria-label="${I18N.t('chat.record_voice')}">🎤</button>
                     <input type="file" id="chat-file-input" multiple style="display:none" onchange="ChatPage.onFilesPicked(this.files)">
-                    <textarea id="chat-message-input" class="form-control" rows="1" placeholder="${I18N.t('chat.message_placeholder')}" onkeydown="ChatPage.onComposerKeydown(event)" oninput="ChatPage.onComposerInput()"></textarea>
+                    <textarea id="chat-message-input" class="form-control" rows="1" placeholder="${I18N.t('chat.message_placeholder')}" onkeydown="ChatPage.onComposerKeydown(event)" oninput="ChatPage.onComposerInput()" onblur="setTimeout(()=>ChatPage.closeMentionAutocomplete(),150)"></textarea>
                     <button class="btn btn-primary btn-sm" onclick="ChatPage.sendMessage()">${I18N.t('chat.send')}</button>
                 </div>
             </div>`;
         this.renderMessages();
         this.renderPendingAttachments();
+        this.renderPinnedBar();
         this.renderReplyBar();
         this.renderSubtitle();
         // Open on the first unread message when there is one, otherwise at the
@@ -424,6 +594,20 @@ const ChatPage = {
                 <button class="chat-msg-menu-btn" onclick="ChatPage.showMessageMenu(event,${m.id})" title="${I18N.t('common.actions')}" aria-label="${I18N.t('common.actions')}">⋮</button>
             </div>`;
         }
+        if (m.kind === 'voice') {
+            const a = (m.attachments || [])[0];
+            const url = a ? API.chat.attachmentDownloadURL(a.id) : '';
+            return `<div class="chat-msg ${mine ? 'mine' : ''}${groupCls}" id="chat-msg-${m.id}" oncontextmenu="ChatPage.showMessageMenu(event,${m.id})">
+                ${avatarSlot}
+                <div class="chat-msg-bubble chat-voice-bubble">
+                    <span class="chat-voice-icon">🎙️</span>
+                    <audio src="${url}" controls preload="metadata" class="chat-voice-audio"></audio>
+                    <div class="chat-msg-time">${UI.formatDate(m.created_at)} ${this.statusTickHTML(m, mine)}</div>
+                    ${this.reactionsBarHTML(m)}
+                </div>
+                <button class="chat-msg-menu-btn" onclick="ChatPage.showMessageMenu(event,${m.id})" title="${I18N.t('common.actions')}" aria-label="${I18N.t('common.actions')}">⋮</button>
+            </div>`;
+        }
         const attachments = (m.attachments || []).map(a => this.attachmentHTML(a)).join('');
         const senderLabel = (!mine && !isDirect && isGroupStart) ? `<div class="chat-msg-sender">${UI.esc(m.sender_name)}</div>` : '';
         const replyBlock = m.reply_to ? `<div class="chat-reply-preview" onclick="ChatPage.jumpToMessage(${m.reply_to.id})">
@@ -447,12 +631,38 @@ const ChatPage = {
         </div>`;
     },
 
-    // Message body with URLs turned into safe links. UI.escLinkify escapes
-    // first (so no markup survives) and only then wraps http(s) URLs — the
-    // one place a message's own text becomes interactive, done XSS-safely.
+    // Message body with @mentions highlighted and URLs turned into safe
+    // links. Escaping happens ONCE, up front, so neither pass below can ever
+    // reintroduce markup: mentionify only wraps @tokens that exactly match a
+    // CURRENT participant's username (never arbitrary "@anything", which
+    // would just be inert text), and linkifyEscaped mirrors UI.escLinkify's
+    // URL-wrapping but skips its internal re-escaping since the text here is
+    // already escaped (and may already contain mention <span> markup).
     messageBodyHTML(m) {
         if (!m.body) return '';
-        return `<div class="chat-msg-body">${UI.escLinkify(m.body)}</div>`;
+        const html = this.linkifyEscaped(this.mentionify(UI.esc(m.body)));
+        return `<div class="chat-msg-body">${html}</div>`;
+    },
+
+    mentionify(escapedText) {
+        if (!this._participants || !this._participants.length) return escapedText;
+        const byUsername = new Map(this._participants.map(p => [p.username.toLowerCase(), p]));
+        return escapedText.replace(/(^|[\s(])@([A-Za-z0-9_]+)/g, (match, pre, uname) => {
+            const p = byUsername.get(uname.toLowerCase());
+            if (!p) return match;
+            const mine = p.user_id === App.user.id ? ' me' : '';
+            return `${pre}<span class="chat-mention${mine}">@${UI.esc(uname)}</span>`;
+        });
+    },
+
+    linkifyEscaped(escapedText) {
+        return escapedText.replace(/(https?:\/\/[^\s<]+)/g, (url) => {
+            let trail = '';
+            const mtrail = url.match(/([)\].,!?;:'"]+|&quot;|&#39;|&gt;|&lt;|&amp;)$/);
+            if (mtrail) { trail = mtrail[0]; url = url.slice(0, url.length - trail.length); }
+            if (!url) return trail;
+            return `<a href="${url}" target="_blank" rel="noopener noreferrer nofollow">${url}</a>${trail}`;
+        });
     },
 
     // The reaction chips shown under a message. Each chip is one emoji plus
@@ -506,14 +716,45 @@ const ChatPage = {
         UI.showModal(I18N.t('chat.read_receipts'), html, `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.close')}</button>`);
     },
 
+    // Images/video/audio render inline (playable/viewable right in the
+    // bubble); anything else falls back to the plain download-link card.
+    // content_type comes straight from what the browser reported on upload
+    // (see UploadChatAttachment), so this is a client-trusted hint, not a
+    // security boundary — worst case a mislabeled file just renders as a
+    // broken <img>/<video>, no different from an <img src> pointed anywhere
+    // else on the web.
     attachmentHTML(a) {
         const url = API.chat.attachmentDownloadURL(a.id);
+        const ct = a.content_type || '';
+        if (ct.startsWith('image/')) {
+            return `<div class="chat-attachment-media">
+                <img src="${url}" alt="${UI.esc(a.file_name)}" class="chat-attachment-image" loading="lazy" onclick="ChatPage.openImageLightbox(${UI.escJson(url)},${UI.escJson(a.file_name)})">
+            </div>`;
+        }
+        if (ct.startsWith('video/')) {
+            return `<div class="chat-attachment-media"><video src="${url}" controls preload="metadata" class="chat-attachment-video"></video></div>`;
+        }
+        if (ct.startsWith('audio/')) {
+            return `<div class="chat-attachment-audio">
+                <span class="chat-attachment-icon">🎵</span>
+                <div class="chat-attachment-audio-body">
+                    <div class="chat-attachment-name">${UI.esc(a.file_name)}</div>
+                    <audio src="${url}" controls preload="metadata"></audio>
+                </div>
+            </div>`;
+        }
         const icon = UI.fileIcon(a.file_name, false);
         return `<a class="chat-attachment" href="${url}" download="${UI.esc(a.file_name)}">
             <span class="chat-attachment-icon">${icon}</span>
             <span class="chat-attachment-name">${UI.esc(a.file_name)}</span>
             <span class="chat-attachment-size">${UI.formatBytes(a.size_bytes)}</span>
         </a>`;
+    },
+
+    openImageLightbox(url, name) {
+        UI.showModal(name || '', `<img src="${url}" alt="" class="chat-lightbox-image">`,
+            `<a class="btn btn-ghost" href="${url}" download="${UI.esc(name || '')}">${I18N.t('files.action_download')}</a>
+             <button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.close')}</button>`);
     },
 
     scrollToBottom() {
@@ -596,6 +837,55 @@ const ChatPage = {
     onComposerInput() {
         this.autoGrowComposer();
         this.signalTyping();
+        this.updateMentionAutocomplete();
+    },
+
+    /* ── @mention autocomplete (group conversations only — a DM has exactly
+       one other person, so disambiguating who "@" means is moot there;
+       mention HIGHLIGHTING in messageBodyHTML still works for any
+       conversation type, this only gates the typing-time popup) ── */
+
+    updateMentionAutocomplete() {
+        const ta = document.getElementById('chat-message-input');
+        if (!ta || !this._activeConversation || this._activeConversation.type !== 'group') { this.closeMentionAutocomplete(); return; }
+        const text = ta.value.slice(0, ta.selectionStart);
+        const m = text.match(/(?:^|\s)@([A-Za-z0-9_]*)$/);
+        if (!m) { this.closeMentionAutocomplete(); return; }
+        const query = m[1].toLowerCase();
+        const matches = this._participants.filter(p => p.user_id !== App.user.id &&
+            (p.username.toLowerCase().startsWith(query) || (p.full_name || '').toLowerCase().startsWith(query))).slice(0, 6);
+        if (!matches.length) { this.closeMentionAutocomplete(); return; }
+        let wrap = document.getElementById('chat-mention-autocomplete');
+        if (!wrap) {
+            wrap = document.createElement('div');
+            wrap.id = 'chat-mention-autocomplete';
+            wrap.className = 'chat-mention-autocomplete';
+            document.querySelector('.chat-composer')?.appendChild(wrap);
+        }
+        wrap.innerHTML = matches.map(p => `<div class="chat-mention-option" onmousedown="event.preventDefault();ChatPage.insertMention(${UI.escJson(p.username)})">
+            ${UI.avatarHTML(p.user_id, p.full_name, 'chat-avatar-sm')}<span>${UI.esc(p.full_name || p.username)}</span><span class="chat-mention-username">@${UI.esc(p.username)}</span>
+        </div>`).join('');
+    },
+
+    closeMentionAutocomplete() {
+        document.getElementById('chat-mention-autocomplete')?.remove();
+    },
+
+    // Replaces the in-progress "@partial" the cursor sits after with the
+    // chosen "@username " — onmousedown+preventDefault on the option (see
+    // above) keeps the textarea focused throughout, so selectionStart here
+    // is still exactly where the user left off typing.
+    insertMention(username) {
+        const ta = document.getElementById('chat-message-input');
+        if (!ta) return;
+        const pos = ta.selectionStart;
+        const before = ta.value.slice(0, pos).replace(/(^|\s)@[A-Za-z0-9_]*$/, (match, pre) => `${pre}@${username} `);
+        ta.value = before + ta.value.slice(pos);
+        const newPos = before.length;
+        ta.focus();
+        ta.setSelectionRange(newPos, newPos);
+        this.closeMentionAutocomplete();
+        this.autoGrowComposer();
     },
 
     // Fires a "typing" ping up the socket, throttled to at most once every 3s
@@ -774,6 +1064,56 @@ const ChatPage = {
         this.renderPendingAttachments();
     },
 
+    /* ── Voice messages ── */
+
+    _recorder: null,
+    _recordingChunks: [],
+
+    async toggleVoiceRecording() {
+        if (this._recorder && this._recorder.state === 'recording') {
+            this._recorder.stop();
+            return;
+        }
+        if (!navigator.mediaDevices || !window.MediaRecorder) {
+            UI.toast(I18N.t('chat.voice_not_supported'), 'error');
+            return;
+        }
+        let stream;
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch {
+            UI.toast(I18N.t('chat.mic_permission_denied'), 'error');
+            return;
+        }
+        this._recordingChunks = [];
+        const mimeType = (window.MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm')) ? 'audio/webm' : '';
+        const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+        this._recorder = recorder;
+        const convIdAtStart = this._activeId;
+        recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) this._recordingChunks.push(e.data); };
+        recorder.onstop = async () => {
+            stream.getTracks().forEach(t => t.stop());
+            document.getElementById('chat-voice-btn')?.classList.remove('recording');
+            const blob = new Blob(this._recordingChunks, { type: recorder.mimeType || 'audio/webm' });
+            this._recordingChunks = [];
+            this._recorder = null;
+            if (blob.size === 0 || convIdAtStart !== this._activeId) return;
+            await this.sendVoiceMessage(blob, convIdAtStart);
+        };
+        recorder.start();
+        document.getElementById('chat-voice-btn')?.classList.add('recording');
+    },
+
+    async sendVoiceMessage(blob, convId) {
+        try {
+            const ext = blob.type.includes('ogg') ? 'ogg' : 'webm';
+            const file = new File([blob], `voice-message.${ext}`, { type: blob.type || 'audio/webm' });
+            const attachment = await API.chat.uploadAttachment(convId, file);
+            const msg = await API.chat.send(convId, '', [attachment.id], 'voice', null);
+            if (convId === this._activeId) { this.appendMessage(msg); this.loadConversations(); }
+        } catch (e) { UI.toast(e.message, 'error'); }
+    },
+
     renderPendingAttachments() {
         const el = document.getElementById('chat-pending-attachments');
         if (!el) return;
@@ -884,6 +1224,7 @@ const ChatPage = {
         this._pendingAttachments = [];
         this._composerContext = null;
         if (ta) ta.value = '';
+        this.closeMentionAutocomplete();
         this.renderPendingAttachments();
         this.renderReplyBar();
         this.autoGrowComposer();
@@ -980,6 +1321,16 @@ const ChatPage = {
             items.push({ action: 'copy', label: I18N.t('chat.copy'), icon: '📋', handler: () => this.copyMessageText(m.body) });
         }
         items.push({ action: 'forward', label: I18N.t('chat.forward'), icon: '↪️', handler: () => this.showForwardModal(id) });
+        const cv = this._activeConversation;
+        let canPin = true;
+        if (cv && cv.type === 'group') {
+            const me = this._participants.find(p => p.user_id === App.user.id);
+            canPin = cv.created_by === App.user.id || (me && me.role === 'admin');
+        }
+        if (canPin) {
+            const isPinned = this._pinnedMessage && this._pinnedMessage.id === id;
+            items.push({ action: 'pin', label: isPinned ? I18N.t('chat.unpin_message') : I18N.t('chat.pin_message'), icon: '📌', handler: () => isPinned ? this.unpinMessage() : this.pinMessage(id) });
+        }
         if (mine && m.kind === 'text') {
             items.push({ action: 'edit', label: I18N.t('chat.edit'), icon: '✏️', handler: () => this.startEditMessage(id) });
         }
@@ -1047,7 +1398,8 @@ const ChatPage = {
                 <span>${UI.esc(this.conversationName(cv))}</span>
             </label>`).join('');
         UI.showModal(I18N.t('chat.forward'), `
-            <div class="chat-forward-list">${list || `<p class="text-muted">${I18N.t('chat.no_conversations')}</p>`}</div>`,
+            <div class="chat-forward-list">${list || `<p class="text-muted">${I18N.t('chat.no_conversations')}</p>`}</div>
+            <textarea id="chat-forward-caption" class="form-control" rows="2" placeholder="${I18N.t('chat.forward_caption_placeholder')}" style="margin-top:10px"></textarea>`,
             `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="ChatPage.confirmForward()">${I18N.t('chat.send')}</button>`);
     },
 
@@ -1062,8 +1414,9 @@ const ChatPage = {
             UI.toast(I18N.t('chat.forward_select_required'), 'error');
             return;
         }
+        const caption = document.getElementById('chat-forward-caption')?.value.trim() || '';
         try {
-            await API.chat.forward(this._forwardMessageId, Array.from(this._forwardSelected));
+            await API.chat.forward(this._forwardMessageId, Array.from(this._forwardSelected), caption);
             UI.closeModal();
             UI.toast(I18N.t('chat.forwarded'), 'success');
             this.loadConversations();
@@ -1108,11 +1461,20 @@ const ChatPage = {
 
     showNewGroupModal() {
         this._pendingGroupMembers = [];
+        const projects = (typeof App !== 'undefined' ? App.projects : []) || [];
         UI.showModal(I18N.t('chat.new_group'), `
             <div class="form-group">
                 <label>${I18N.t('chat.group_name_label')}</label>
                 <input type="text" id="chat-group-name" class="form-control" placeholder="${I18N.t('chat.group_name_placeholder')}">
             </div>
+            ${projects.length ? `
+            <div class="form-group">
+                <label>${I18N.t('chat.group_project_label')}</label>
+                <select id="chat-group-project" class="form-control">
+                    <option value="">${I18N.t('chat.group_project_none')}</option>
+                    ${projects.map(p => `<option value="${p.id}">${UI.esc(p.name)}</option>`).join('')}
+                </select>
+            </div>` : ''}
             <div class="form-group">
                 <label>${I18N.t('chat.group_members_label')}</label>
                 <input type="text" id="chat-group-search" class="form-control" placeholder="${I18N.t('chat.search_people_placeholder')}"
@@ -1166,8 +1528,10 @@ const ChatPage = {
         const name = document.getElementById('chat-group-name')?.value.trim();
         if (!name) { UI.toast(I18N.t('chat.group_name_required'), 'error'); return; }
         if (!this._pendingGroupMembers.length) { UI.toast(I18N.t('chat.group_members_required'), 'error'); return; }
+        const projectEl = document.getElementById('chat-group-project');
+        const projectId = projectEl && projectEl.value ? parseInt(projectEl.value, 10) : null;
         try {
-            const conv = await API.chat.createGroup(name, this._pendingGroupMembers.map(m => m.id));
+            const conv = await API.chat.createGroup(name, this._pendingGroupMembers.map(m => m.id), projectId);
             UI.closeModal();
             await this.loadConversations();
             await this.selectConversation(conv.id);
@@ -1179,9 +1543,17 @@ const ChatPage = {
     showGroupInfoModal() {
         const cv = this._activeConversation;
         if (!cv) return;
-        const isCreator = cv.created_by === App.user.id;
+        const isOwner = cv.created_by === App.user.id;
+        const me = this._participants.find(p => p.user_id === App.user.id);
+        const isAdmin = !!(me && me.role === 'admin');
+        const canManage = isOwner || isAdmin;
         UI.showModal(I18N.t('chat.group_info'), `
-            ${isCreator ? `
+            <div class="chat-group-avatar-row">
+                ${this.groupAvatarHTML(cv.id, 'chat-avatar-lg')}
+                ${canManage ? `<label class="btn btn-ghost btn-sm chat-avatar-upload-btn">${I18N.t('chat.change_photo')}
+                    <input type="file" accept="image/*" style="display:none" onchange="ChatPage.uploadGroupAvatar(this.files[0])"></label>` : ''}
+            </div>
+            ${canManage ? `
             <div class="form-group">
                 <label>${I18N.t('chat.group_name_label')}</label>
                 <div style="display:flex;gap:8px">
@@ -1191,9 +1563,9 @@ const ChatPage = {
             </div>` : ''}
             <div class="form-group">
                 <label>${I18N.t('chat.members_label')}</label>
-                <div id="chat-members-list">${this._participants.map(p => this.memberRowHTML(p, isCreator)).join('')}</div>
+                <div id="chat-members-list">${this._participants.map(p => this.memberRowHTML(p, isOwner, canManage, cv)).join('')}</div>
             </div>
-            ${isCreator ? `
+            ${canManage ? `
             <div class="form-group">
                 <input type="text" id="chat-add-member-search" class="form-control" placeholder="${I18N.t('chat.search_people_placeholder')}"
                     oninput="ChatPage.searchAddMember(this.value)" autocomplete="off">
@@ -1203,13 +1575,43 @@ const ChatPage = {
              <button class="btn btn-danger" onclick="ChatPage.leaveGroup()">${I18N.t('chat.leave_group')}</button>`);
     },
 
-    memberRowHTML(p, isCreator) {
-        const canRemove = isCreator && p.user_id !== App.user.id;
+    memberRowHTML(p, isOwner, canManage, cv) {
+        const isRowOwner = p.user_id === cv.created_by;
+        const roleBadge = isRowOwner ? `<span class="chat-role-badge owner">${I18N.t('chat.role_owner')}</span>`
+            : p.role === 'admin' ? `<span class="chat-role-badge admin">${I18N.t('chat.role_admin')}</span>` : '';
+        // Removing someone: the owner can remove anyone but themselves; an
+        // admin can only remove a plain member (mirrors the server-side
+        // guard in RemoveParticipant).
+        const canRemove = p.user_id !== App.user.id && !isRowOwner && (isOwner || (canManage && p.role !== 'admin'));
+        // Promoting/demoting is owner-only, and never targets the owner
+        // themselves or the viewer's own row.
+        const canToggleAdmin = isOwner && !isRowOwner && p.user_id !== App.user.id;
         return `<div class="chat-member-row">
             ${UI.avatarHTML(p.user_id, p.full_name, 'chat-avatar-sm')}
-            <span>${UI.esc(p.full_name || p.username)}</span>
+            <span class="chat-member-name">${UI.esc(p.full_name || p.username)}</span>
+            ${roleBadge}
+            ${canToggleAdmin ? `<button class="btn btn-ghost btn-sm chat-role-toggle-btn" onclick="ChatPage.setMemberRole(${p.user_id},'${p.role === 'admin' ? 'member' : 'admin'}')">${p.role === 'admin' ? I18N.t('chat.demote_admin') : I18N.t('chat.promote_admin')}</button>` : ''}
             ${canRemove ? `<button class="chat-pending-remove" onclick="ChatPage.removeMember(${p.user_id})" aria-label="${I18N.t('common.remove')}">✕</button>` : ''}
         </div>`;
+    },
+
+    async setMemberRole(userId, role) {
+        try {
+            await API.chat.setRole(this._activeId, userId, role);
+            const p = this._participants.find(x => x.user_id === userId);
+            if (p) p.role = role;
+            this.showGroupInfoModal();
+        } catch (e) { UI.toast(e.message, 'error'); }
+    },
+
+    async uploadGroupAvatar(file) {
+        if (!file) return;
+        try {
+            await API.chat.uploadGroupAvatar(this._activeId, file);
+            UI.closeModal();
+            this.renderThread();
+            this.loadConversations();
+        } catch (e) { UI.toast(e.message, 'error'); }
     },
 
     async renameGroup() {
@@ -1343,6 +1745,27 @@ const ChatPage = {
             if (App.currentPage !== 'chat') return;
             this.loadConversations();
             if (data.conversation_id === this._activeId) this.selectConversation(this._activeId);
+        });
+        // Mute/pin/archive changed from ANOTHER of this same user's own open
+        // tabs/devices — keep this one's inbox in sync. Never fires for
+        // other participants' preferences (those are never broadcast at all).
+        ChatSocket.on('conversation.prefs', (data) => {
+            const cv = this._conversations.find(c => c.id === data.conversation_id);
+            if (cv) {
+                if (data.muted !== null && data.muted !== undefined) cv.muted = data.muted;
+                if (data.pinned !== null && data.pinned !== undefined) cv.pinned = data.pinned;
+                if (data.archived !== null && data.archived !== undefined && data.archived !== cv.archived) { this.loadConversations(); return; }
+            }
+            if (App.currentPage === 'chat') this.renderConversationList();
+        });
+        // A message was pinned/unpinned — shared, visible state, so this
+        // (unlike prefs above) goes to every participant.
+        ChatSocket.on('conversation.pinned', (data) => {
+            if (data.conversation_id !== this._activeId) return;
+            if (!data.message_id) { this._pinnedMessage = null; this.renderPinnedBar(); return; }
+            const m = this._messages.find(x => x.id === data.message_id);
+            this._pinnedMessage = m || this._pinnedMessage;
+            if (App.currentPage === 'chat') this.renderPinnedBar();
         });
         // Typing and presence can arrive while on the chat page for any
         // conversation the user is in — the handlers themselves scope updates

@@ -2,11 +2,14 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"paylash/internal/authutil"
 	"paylash/internal/models"
 	"paylash/internal/webpush"
+	"sync"
+	"time"
 )
 
 // pushSubscriber is the VAPID "sub" contact — an identifier for the app
@@ -115,12 +118,11 @@ func pushContentFor(level string, msg *models.MessageView) (title, body string) 
 	}
 }
 
-// pushChatMessage delivers a web push for msg to every participant (other than
-// the sender) who has NO live WS connection — i.e. whose app is closed, the
-// one case the in-app/native notifications can't cover. Best-effort: run in a
-// goroutine by callers, and a delivery error (including an unreachable push
-// service on an offline LAN) is logged and shrugged off. A push service
-// reporting the endpoint gone (404/410) prunes that dead subscription.
+// pushChatMessage hands msg off to the batcher for every participant (other
+// than the sender) who's eligible for a push right now — no live WS
+// connection (app closed, the one case in-app/native notifications can't
+// cover) and hasn't muted this conversation. Best-effort: run in a goroutine
+// by callers.
 func (h *Handler) pushChatMessage(convID, senderID int, msg *models.MessageView) {
 	if h.vapid == nil {
 		return
@@ -130,36 +132,125 @@ func (h *Handler) pushChatMessage(convID, senderID int, msg *models.MessageView)
 		return
 	}
 	for _, p := range participants {
-		if p.UserID == senderID || h.chatHub.isOnline(p.UserID) {
+		if p.UserID == senderID || p.Muted || h.chatHub.isOnline(p.UserID) {
 			continue
 		}
-		recipient, err := h.db.GetUserByID(p.UserID)
-		if err != nil || recipient == nil {
-			continue
-		}
-		title, body := pushContentFor(recipient.ChatNotifyLevel, msg)
-		payload, err := json.Marshal(map[string]any{
-			"title": title, "body": body, "conversation_id": convID,
-		})
+		h.pushBatcher.enqueue(p.UserID, convID, msg)
+	}
+}
+
+// pushDigestWindow is how long the batcher waits, per recipient, after the
+// first eligible message before actually sending a push — a short debounce
+// so a burst (several messages in a row, or several different conversations
+// going quiet at once) collapses into one push instead of one per message,
+// without meaningfully delaying the "phone is asleep" notification case a
+// lone message still hits.
+const pushDigestWindow = 4 * time.Second
+
+// pendingPush accumulates everything enqueue()'d for one recipient during
+// one debounce window.
+type pendingPush struct {
+	timer      *time.Timer
+	count      int
+	convIDs    map[int]bool
+	lastConvID int
+	lastMsg    *models.MessageView
+}
+
+// pushBatcher coalesces per-recipient push notifications across
+// pushDigestWindow — a lone message still produces exactly one push, worded
+// identically to before (see sendPushDigest), so the common case is
+// unchanged; only a genuine burst gets combined.
+type pushBatcher struct {
+	h       *Handler
+	mu      sync.Mutex
+	pending map[int]*pendingPush
+}
+
+func newPushBatcher(h *Handler) *pushBatcher {
+	return &pushBatcher{h: h, pending: make(map[int]*pendingPush)}
+}
+
+func (b *pushBatcher) enqueue(recipientID, convID int, msg *models.MessageView) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	p := b.pending[recipientID]
+	if p == nil {
+		p = &pendingPush{convIDs: make(map[int]bool)}
+		b.pending[recipientID] = p
+		p.timer = time.AfterFunc(pushDigestWindow, func() { b.flush(recipientID) })
+	}
+	p.count++
+	p.convIDs[convID] = true
+	p.lastConvID = convID
+	p.lastMsg = msg
+}
+
+func (b *pushBatcher) flush(recipientID int) {
+	b.mu.Lock()
+	p := b.pending[recipientID]
+	delete(b.pending, recipientID)
+	b.mu.Unlock()
+	if p == nil {
+		return
+	}
+	b.h.sendPushDigest(recipientID, p)
+}
+
+// sendPushDigest delivers the single push a debounce window collapsed to —
+// re-checking online/mute state right before sending (not trusting whatever
+// it was at enqueue time, several seconds earlier) since the recipient may
+// have opened the app or muted the conversation in the meantime.
+func (h *Handler) sendPushDigest(recipientID int, p *pendingPush) {
+	if h.chatHub.isOnline(recipientID) {
+		return
+	}
+	recipient, err := h.db.GetUserByID(recipientID)
+	if err != nil || recipient == nil {
+		return
+	}
+	var title, body string
+	if p.count == 1 && p.lastMsg != nil {
+		title, body = pushContentFor(recipient.ChatNotifyLevel, p.lastMsg)
+	} else {
+		title, body = pushDigestContentFor(recipient.ChatNotifyLevel, p)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"title": title, "body": body, "conversation_id": p.lastConvID,
+	})
+	if err != nil {
+		return
+	}
+	subs, err := h.db.ListPushSubscriptions(recipientID)
+	if err != nil {
+		return
+	}
+	for _, s := range subs {
+		sub := &webpush.Subscription{Endpoint: s.Endpoint, P256dh: s.P256dh, Auth: s.Auth}
+		status, err := webpush.Send(h.pushClient, h.vapid, pushSubscriber, sub, payload, 3600)
 		if err != nil {
+			log.Printf("web push to user %d: %v", recipientID, err)
 			continue
 		}
-		subs, err := h.db.ListPushSubscriptions(p.UserID)
-		if err != nil {
-			continue
-		}
-		for _, s := range subs {
-			sub := &webpush.Subscription{Endpoint: s.Endpoint, P256dh: s.P256dh, Auth: s.Auth}
-			status, err := webpush.Send(h.pushClient, h.vapid, pushSubscriber, sub, payload, 3600)
-			if err != nil {
-				log.Printf("web push to user %d: %v", p.UserID, err)
-				continue
-			}
-			if status == http.StatusNotFound || status == http.StatusGone {
-				if err := h.db.DeletePushSubscription(s.Endpoint); err != nil {
-					log.Printf("prune dead push subscription: %v", err)
-				}
+		if status == http.StatusNotFound || status == http.StatusGone {
+			if err := h.db.DeletePushSubscription(s.Endpoint); err != nil {
+				log.Printf("prune dead push subscription: %v", err)
 			}
 		}
 	}
+}
+
+// pushDigestContentFor builds the title/body for a COMBINED push (more than
+// one qualifying message landed in one debounce window) — honors the same
+// privacy level as pushContentFor, but a digest spanning multiple messages/
+// conversations has no single sender or body to show even at "full", so it
+// falls back to a count summary instead.
+func pushDigestContentFor(level string, p *pendingPush) (title, body string) {
+	if level == "hidden" {
+		return "Paýlaş", "💬"
+	}
+	if len(p.convIDs) > 1 {
+		return "Paýlaş", fmt.Sprintf("%d täze habar, %d söhbetde", p.count, len(p.convIDs))
+	}
+	return "Paýlaş", fmt.Sprintf("%d täze habar", p.count)
 }

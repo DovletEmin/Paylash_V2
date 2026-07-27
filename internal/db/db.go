@@ -315,6 +315,45 @@ func (d *DB) Migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id)`,
 
+		// Group roles: 'member' (default) or 'admin'. The conversation's
+		// creator is always its owner (conversations.created_by, unchanged)
+		// and is never represented here — an admin can do everything an
+		// owner can EXCEPT promote/demote other admins (see requireOwner /
+		// requireManager in internal/api/chat.go).
+		`ALTER TABLE conversation_participants ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'member'`,
+
+		// Per-user, per-conversation preferences — none of these affect what
+		// any OTHER participant sees. muted: skip sound/toast/native/push
+		// notifications (the conversation still appears and still counts
+		// toward unread). pinned_at: non-null sorts this conversation to the
+		// top of the inbox. archived_at: non-null hides it from the main
+		// inbox (visible in a separate archived view instead).
+		`ALTER TABLE conversation_participants ADD COLUMN IF NOT EXISTS muted BOOLEAN NOT NULL DEFAULT FALSE`,
+		`ALTER TABLE conversation_participants ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMPTZ`,
+		`ALTER TABLE conversation_participants ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`,
+
+		// Group photo: avatar_url stores just the object key inside
+		// storage.ChatAttachmentsBucket (mirrors message_attachments.minio_key
+		// — never a full bucket/key pair, since it's always that one bucket).
+		// pinned_message_id: a single pinned message per conversation:
+		// ON DELETE SET NULL so a hard-deleted message (never happens today —
+		// deletes are soft — but safe regardless) just quietly unpins rather
+		// than leaving a dangling reference.
+		`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS avatar_url VARCHAR(500) NOT NULL DEFAULT ''`,
+		`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS pinned_message_id INT REFERENCES messages(id) ON DELETE SET NULL`,
+
+		// User-to-user blocking: a row means blocker_id has blocked
+		// blocked_id. Checked symmetrically when sending a direct message
+		// (see SendMessage) — while either side has blocked the other,
+		// neither can message the other in their DM. Existing history stays
+		// visible; this only stops new sends.
+		`CREATE TABLE IF NOT EXISTS blocked_users (
+			blocker_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			blocked_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (blocker_id, blocked_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_blocked_users_blocked ON blocked_users(blocked_id)`,
 	}
 
 	for _, m := range migrations {

@@ -300,15 +300,24 @@ type PushSubscription struct {
 // prefill-only convenience (pre-populates the participant picker at
 // creation time) — it has no ongoing effect on membership or access.
 type Conversation struct {
-	ID             int        `json:"id"`
-	Type           string     `json:"type"` // "direct" | "group"
-	Name           *string    `json:"name,omitempty"`
-	ProjectID      *int       `json:"project_id,omitempty"`
-	CreatedBy      *int       `json:"created_by"`
-	DirectUserLow  *int       `json:"-"`
-	DirectUserHigh *int       `json:"-"`
-	LastMessageAt  time.Time  `json:"last_message_at"`
-	CreatedAt      time.Time  `json:"created_at"`
+	ID             int       `json:"id"`
+	Type           string    `json:"type"` // "direct" | "group"
+	Name           *string   `json:"name,omitempty"`
+	ProjectID      *int      `json:"project_id,omitempty"`
+	CreatedBy      *int      `json:"created_by"`
+	DirectUserLow  *int      `json:"-"`
+	DirectUserHigh *int      `json:"-"`
+	// AvatarURL is the object key inside storage.ChatAttachmentsBucket for a
+	// group's photo ("" = none, direct conversations never have one) —
+	// json:"-" like MessageAttachment.MinioKey, since it's only ever
+	// resolved server-side by the avatar-serving endpoint, never sent raw.
+	AvatarURL string `json:"-"`
+	// PinnedMessageID is the single pinned message for this conversation, if
+	// any. Resolved to a full MessageView (PinnedMessage) by handlers that
+	// return it to the client — this raw id is what's actually stored.
+	PinnedMessageID *int      `json:"-"`
+	LastMessageAt   time.Time `json:"last_message_at"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 // ConversationView is a conversation as rendered in the conversation list —
@@ -322,6 +331,12 @@ type ConversationView struct {
 	// in the DM, so the client never needs a second call to know who it's
 	// showing.
 	OtherParticipant *ParticipantView `json:"other_participant,omitempty"`
+	// Muted/Pinned/Archived are the REQUESTER's own preferences for this
+	// conversation (from their conversation_participants row) — never
+	// another participant's.
+	Muted    bool `json:"muted"`
+	Pinned   bool `json:"pinned"`
+	Archived bool `json:"archived"`
 }
 
 type ParticipantView struct {
@@ -335,6 +350,14 @@ type ParticipantView struct {
 	// last disconnect, used to render "last seen X" when they're offline.
 	Online     bool       `json:"online"`
 	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
+	// Role is "member" or "admin" — the conversation's owner (Conversation.
+	// CreatedBy) is never "admin" here, ownership is tracked separately.
+	Role string `json:"role"`
+	// Muted is this row's own user's mute preference for the conversation —
+	// json:"-" because a participant must never learn whether ANOTHER
+	// participant has muted the chat, only pushChatMessage (server-side) and
+	// the owning user's own client read it.
+	Muted bool `json:"-"`
 }
 
 // Message is a chat message, optionally soft-deleted (DeletedAt set, Body

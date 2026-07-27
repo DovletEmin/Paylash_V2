@@ -4,8 +4,10 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"path/filepath"
 	"paylash/internal/authutil"
 	"paylash/internal/models"
 	"paylash/internal/storage"
@@ -104,7 +106,8 @@ func (h *Handler) SearchChatMessages(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ListConversations(w http.ResponseWriter, r *http.Request) {
 	user := authutil.GetUser(r)
-	list, err := h.db.ListConversationsForUser(user.ID)
+	archived := r.URL.Query().Get("archived") == "1"
+	list, err := h.db.ListConversationsForUser(user.ID, archived)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "sözleşmeleri alyp bolmady")
 		return
@@ -193,12 +196,19 @@ func (h *Handler) GetConversationDetail(w http.ResponseWriter, r *http.Request) 
 	for i := range participants {
 		participants[i].Online = h.chatHub.isOnline(participants[i].UserID)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"conversation": conv, "participants": participants})
+	var pinnedMessage *models.MessageView
+	if conv.PinnedMessageID != nil {
+		pinnedMessage, err = h.db.GetMessageView(*conv.PinnedMessageID)
+		if err != nil {
+			pinnedMessage = nil
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"conversation": conv, "participants": participants, "pinned_message": pinnedMessage})
 }
 
-// requireCreator loads the conversation and checks the requester created it
-// — used by rename/add-participants/remove-someone-else. Only the creator
-// may manage group membership; there is no admin override here either, same
+// requireCreator loads the conversation and checks the requester is its
+// OWNER (the creator) — used only for actions no admin may do: promoting or
+// demoting another admin. There is no wider admin override here either, same
 // privacy stance as requireParticipant.
 func requireCreator(h *Handler, w http.ResponseWriter, convID int, userID int) (*models.Conversation, bool) {
 	conv, err := h.db.GetConversation(convID)
@@ -217,6 +227,32 @@ func requireCreator(h *Handler, w http.ResponseWriter, convID int, userID int) (
 	return conv, true
 }
 
+// requireManager is the relaxed permission tier for day-to-day group
+// management — rename, add members, remove a non-admin member, pin a
+// message, set the group photo. The owner (creator) or any admin may do
+// these; promoting/demoting admins themselves stays owner-only (see
+// requireCreator / SetParticipantRole).
+func requireManager(h *Handler, w http.ResponseWriter, convID int, userID int) (*models.Conversation, bool) {
+	conv, err := h.db.GetConversation(convID)
+	if err != nil || conv == nil {
+		writeError(w, http.StatusNotFound, "tapylmady")
+		return nil, false
+	}
+	if conv.Type != "group" {
+		writeError(w, http.StatusBadRequest, "diňe topar üçin")
+		return nil, false
+	}
+	if conv.CreatedBy != nil && *conv.CreatedBy == userID {
+		return conv, true
+	}
+	role, err := h.db.GetParticipantRole(convID, userID)
+	if err != nil || role != "admin" {
+		writeError(w, http.StatusForbidden, "diňe dolandyryjylar üýtgedip biler")
+		return nil, false
+	}
+	return conv, true
+}
+
 func (h *Handler) RenameConversation(w http.ResponseWriter, r *http.Request) {
 	convID, err := conversationIDFromPath(r)
 	if err != nil {
@@ -227,7 +263,7 @@ func (h *Handler) RenameConversation(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, ok := requireCreator(h, w, convID, user.ID); !ok {
+	if _, ok := requireManager(h, w, convID, user.ID); !ok {
 		return
 	}
 	var req struct {
@@ -260,7 +296,7 @@ func (h *Handler) AddParticipants(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, ok := requireCreator(h, w, convID, user.ID); !ok {
+	if _, ok := requireManager(h, w, convID, user.ID); !ok {
 		return
 	}
 	var req struct {
@@ -278,9 +314,11 @@ func (h *Handler) AddParticipants(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// RemoveParticipant allows two things: the creator removing anyone, or any
-// participant removing themselves (leaving) — a participant leaving never
-// needs the creator's permission.
+// RemoveParticipant allows: the owner or an admin removing someone else, or
+// any participant removing themselves (leaving, which never needs anyone's
+// permission). An admin (not the owner) may only remove a plain member —
+// removing the owner or another admin stays owner-only, so admins can't
+// kick each other out.
 func (h *Handler) RemoveParticipant(w http.ResponseWriter, r *http.Request) {
 	convID, err := conversationIDFromPath(r)
 	if err != nil {
@@ -297,12 +335,74 @@ func (h *Handler) RemoveParticipant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if targetID != user.ID {
-		if _, ok := requireCreator(h, w, convID, user.ID); !ok {
+		conv, ok := requireManager(h, w, convID, user.ID)
+		if !ok {
 			return
+		}
+		isOwner := conv.CreatedBy != nil && *conv.CreatedBy == user.ID
+		if !isOwner {
+			if conv.CreatedBy != nil && *conv.CreatedBy == targetID {
+				writeError(w, http.StatusForbidden, "diňe eýesi özüni aýryp biler")
+				return
+			}
+			targetRole, err := h.db.GetParticipantRole(convID, targetID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "ýalňyşlyk")
+				return
+			}
+			if targetRole == "admin" {
+				writeError(w, http.StatusForbidden, "diňe eýesi admini aýryp biler")
+				return
+			}
 		}
 	}
 	if err := h.db.RemoveParticipant(convID, targetID); err != nil {
 		writeError(w, http.StatusInternalServerError, "aýryp bolmady")
+		return
+	}
+	notifyConversationUpdated(h, convID)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// SetParticipantRole promotes a member to admin or demotes an admin back to
+// member — owner-only (requireCreator), and the owner can't change their own
+// role through this endpoint (they're always the top of the hierarchy via
+// Conversation.CreatedBy, not the role column).
+func (h *Handler) SetParticipantRole(w http.ResponseWriter, r *http.Request) {
+	convID, err := conversationIDFromPath(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry ID")
+		return
+	}
+	targetID, err := strconv.Atoi(r.PathValue("userId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry ulanyjy ID")
+		return
+	}
+	user, ok := requireParticipant(h, w, r, convID)
+	if !ok {
+		return
+	}
+	if _, ok := requireCreator(h, w, convID, user.ID); !ok {
+		return
+	}
+	if targetID == user.ID {
+		writeError(w, http.StatusBadRequest, "öz roluňyzy üýtgedip bilmersiňiz")
+		return
+	}
+	var req struct {
+		Role string `json:"role"`
+	}
+	if err := readJSON(r, &req); err != nil || (req.Role != "admin" && req.Role != "member") {
+		writeError(w, http.StatusBadRequest, "nädogry rol")
+		return
+	}
+	if isMember, err := h.db.IsParticipant(convID, targetID); err != nil || !isMember {
+		writeError(w, http.StatusNotFound, "agza tapylmady")
+		return
+	}
+	if err := h.db.SetParticipantRole(convID, targetID, req.Role); err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk")
 		return
 	}
 	notifyConversationUpdated(h, convID)
@@ -353,6 +453,21 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A direct conversation blocked by either side rejects new sends outright
+	// (existing history stays visible — see IsEitherBlocked). Groups are
+	// unaffected: blocking is a DM-privacy feature, not a way to be silently
+	// removed from shared group conversations.
+	if conv, err := h.db.GetConversation(convID); err == nil && conv != nil && conv.Type == "direct" && conv.DirectUserLow != nil && conv.DirectUserHigh != nil {
+		other := *conv.DirectUserLow
+		if other == user.ID {
+			other = *conv.DirectUserHigh
+		}
+		if blocked, err := h.db.IsEitherBlocked(user.ID, other); err == nil && blocked {
+			writeError(w, http.StatusForbidden, "bu ulanyja habar iberip bolmaýar")
+			return
+		}
+	}
+
 	userKey := strconv.Itoa(user.ID)
 	if h.messageLimiter.blocked(userKey) {
 		writeError(w, http.StatusTooManyRequests, "köp synanyşyk boldy, birazdan gaýtadan synanyşyň")
@@ -375,7 +490,7 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	if kind == "" {
 		kind = "text"
 	}
-	if kind != "text" && kind != "sticker" {
+	if kind != "text" && kind != "sticker" && kind != "voice" {
 		writeError(w, http.StatusBadRequest, "nädogry görnüş")
 		return
 	}
@@ -393,6 +508,15 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "stikere goşundy goşup bolmaz")
 			return
 		}
+	} else if kind == "voice" {
+		// A voice message IS its one audio attachment — body carries no text
+		// (any typed text is just discarded rather than rejected, since the
+		// client never means to send it as a caption here).
+		if len(req.AttachmentIDs) != 1 {
+			writeError(w, http.StatusBadRequest, "ses habary bir faýldan ybarat bolmaly")
+			return
+		}
+		body = ""
 	} else {
 		if body == "" && len(req.AttachmentIDs) == 0 {
 			writeError(w, http.StatusBadRequest, "habar boş bolup bilmez")
@@ -530,7 +654,8 @@ func (h *Handler) ForwardMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		ConversationIDs []int `json:"conversation_ids"`
+		ConversationIDs []int  `json:"conversation_ids"`
+		Caption         string `json:"caption"`
 	}
 	if err := readJSON(r, &req); err != nil || len(req.ConversationIDs) == 0 {
 		writeError(w, http.StatusBadRequest, "nädogry maglumat")
@@ -538,6 +663,11 @@ func (h *Handler) ForwardMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.ConversationIDs) > 20 {
 		writeError(w, http.StatusBadRequest, "gaty köp sözleşme saýlandy")
+		return
+	}
+	caption := strings.TrimSpace(req.Caption)
+	if len(caption) > maxMessageLength {
+		writeError(w, http.StatusBadRequest, "teswir gaty uzyn")
 		return
 	}
 	for _, cid := range req.ConversationIDs {
@@ -572,6 +702,22 @@ func (h *Handler) ForwardMessage(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		go h.pushChatMessage(cid, user.ID, &forwarded[i])
+
+		// An optional caption rides along as its own plain-text follow-up
+		// message in the same target conversation, right after the forwarded
+		// copy — same two-message shape a caption produces in Telegram, and
+		// it reuses CreateMessage/broadcast/push exactly as a normal send
+		// would rather than needing a caption column on messages.
+		if caption != "" {
+			if capMsg, err := h.db.CreateMessage(cid, user.ID, caption, "text", nil, nil); err == nil {
+				if participants, err := h.db.ListParticipants(cid); err == nil {
+					h.chatHub.broadcast(participantIDs(participants), map[string]any{
+						"type": "message.new", "conversation_id": cid, "message": capMsg,
+					})
+				}
+				go h.pushChatMessage(cid, user.ID, capMsg)
+			}
+		}
 	}
 }
 
@@ -671,6 +817,17 @@ func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 			"type": "message.deleted", "conversation_id": convID, "message_id": msgID,
 		})
 	}
+
+	// If the message being deleted was the conversation's pinned one, unpin
+	// it too rather than leaving the pinned-message bar pointing at a
+	// tombstone — cleared conditionally so this can't race a concurrent
+	// re-pin to a different message that happened in between.
+	if cleared, err := h.db.ClearPinnedMessageIfEquals(convID, msgID); err == nil && cleared && participants != nil {
+		h.chatHub.broadcast(participantIDs(participants), map[string]any{
+			"type": "conversation.pinned", "conversation_id": convID, "message_id": nil,
+		})
+	}
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -870,6 +1027,277 @@ func (h *Handler) ChatUnreadCount(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]int{"count": count})
 }
 
+// UpdateConversationPrefs sets any subset of the caller's own mute/pin/
+// archive preference for one conversation — never visible to, or settable
+// for, any other participant. Broadcast afterward is scoped to the SAME
+// user's own other connections only (multi-tab/device sync), never to the
+// rest of the conversation.
+func (h *Handler) UpdateConversationPrefs(w http.ResponseWriter, r *http.Request) {
+	convID, err := conversationIDFromPath(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry ID")
+		return
+	}
+	user, ok := requireParticipant(h, w, r, convID)
+	if !ok {
+		return
+	}
+	var req struct {
+		Muted    *bool `json:"muted"`
+		Pinned   *bool `json:"pinned"`
+		Archived *bool `json:"archived"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry maglumat")
+		return
+	}
+	if req.Muted != nil {
+		if err := h.db.SetConversationMuted(convID, user.ID, *req.Muted); err != nil {
+			writeError(w, http.StatusInternalServerError, "ýalňyşlyk")
+			return
+		}
+	}
+	if req.Pinned != nil {
+		if err := h.db.SetConversationPinned(convID, user.ID, *req.Pinned); err != nil {
+			writeError(w, http.StatusInternalServerError, "ýalňyşlyk")
+			return
+		}
+	}
+	if req.Archived != nil {
+		if err := h.db.SetConversationArchived(convID, user.ID, *req.Archived); err != nil {
+			writeError(w, http.StatusInternalServerError, "ýalňyşlyk")
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	h.chatHub.broadcast([]int{user.ID}, map[string]any{
+		"type": "conversation.prefs", "conversation_id": convID,
+		"muted": req.Muted, "pinned": req.Pinned, "archived": req.Archived,
+	})
+}
+
+// ListMutedConversations backs the client-side mute cache (App._mutedConvIds)
+// that gates in-app toast/sound/native notification for a live "message.new"
+// — fetched once at login, not on every message.
+func (h *Handler) ListMutedConversations(w http.ResponseWriter, r *http.Request) {
+	user := authutil.GetUser(r)
+	ids, err := h.db.ListMutedConversationIDs(user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk")
+		return
+	}
+	if ids == nil {
+		ids = []int{}
+	}
+	writeJSON(w, http.StatusOK, ids)
+}
+
+// PinMessage sets a conversation's single pinned message. Either participant
+// may pin in a direct conversation; in a group, owner or admin only
+// (requireManager) — mirrors who may rename/manage the group.
+func (h *Handler) PinMessage(w http.ResponseWriter, r *http.Request) {
+	convID, err := conversationIDFromPath(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry ID")
+		return
+	}
+	msgID, err := strconv.Atoi(r.PathValue("messageId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry habar ID")
+		return
+	}
+	user, ok := requireParticipant(h, w, r, convID)
+	if !ok {
+		return
+	}
+	conv, err := h.db.GetConversation(convID)
+	if err != nil || conv == nil {
+		writeError(w, http.StatusNotFound, "tapylmady")
+		return
+	}
+	if conv.Type == "group" {
+		if _, ok := requireManager(h, w, convID, user.ID); !ok {
+			return
+		}
+	}
+	msg, err := h.db.GetMessage(msgID)
+	if err != nil || msg == nil || msg.ConversationID != convID || msg.DeletedAt != nil {
+		writeError(w, http.StatusNotFound, "habar tapylmady")
+		return
+	}
+	if err := h.db.SetPinnedMessage(convID, msgID); err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	if participants, err := h.db.ListParticipants(convID); err == nil {
+		h.chatHub.broadcast(participantIDs(participants), map[string]any{
+			"type": "conversation.pinned", "conversation_id": convID, "message_id": msgID,
+		})
+	}
+}
+
+// UnpinMessage clears whatever is currently pinned — same permission rule as
+// PinMessage.
+func (h *Handler) UnpinMessage(w http.ResponseWriter, r *http.Request) {
+	convID, err := conversationIDFromPath(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry ID")
+		return
+	}
+	user, ok := requireParticipant(h, w, r, convID)
+	if !ok {
+		return
+	}
+	conv, err := h.db.GetConversation(convID)
+	if err != nil || conv == nil {
+		writeError(w, http.StatusNotFound, "tapylmady")
+		return
+	}
+	if conv.Type == "group" {
+		if _, ok := requireManager(h, w, convID, user.ID); !ok {
+			return
+		}
+	}
+	if err := h.db.ClearPinnedMessage(convID); err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	if participants, err := h.db.ListParticipants(convID); err == nil {
+		h.chatHub.broadcast(participantIDs(participants), map[string]any{
+			"type": "conversation.pinned", "conversation_id": convID, "message_id": nil,
+		})
+	}
+}
+
+// maxGroupAvatarSize mirrors UploadAvatar's personal-avatar cap (auth.go).
+const maxGroupAvatarSize = 5 << 20
+
+// UploadGroupAvatar sets a group's photo — owner or admin only.
+func (h *Handler) UploadGroupAvatar(w http.ResponseWriter, r *http.Request) {
+	convID, err := conversationIDFromPath(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry ID")
+		return
+	}
+	user, ok := requireParticipant(h, w, r, convID)
+	if !ok {
+		return
+	}
+	if _, ok := requireManager(h, w, convID, user.ID); !ok {
+		return
+	}
+	userKey := strconv.Itoa(user.ID)
+	if h.avatarLimiter.blocked(userKey) {
+		writeError(w, http.StatusTooManyRequests, "köp synanyşyk boldy, birazdan gaýtadan synanyşyň")
+		return
+	}
+	h.avatarLimiter.record(userKey)
+	if err := r.ParseMultipartForm(maxGroupAvatarSize); err != nil {
+		writeError(w, http.StatusBadRequest, "faýl juda uly (maks 5MB)")
+		return
+	}
+	file, header, err := r.FormFile("avatar")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "faýl tapylmady")
+		return
+	}
+	defer file.Close()
+	ct := header.Header.Get("Content-Type")
+	if !strings.HasPrefix(ct, "image/") {
+		writeError(w, http.StatusBadRequest, "diňe surat faýly rugsat berilýär")
+		return
+	}
+	if err := h.minio.EnsureBucket(r.Context(), storage.ChatAttachmentsBucket); err != nil {
+		writeError(w, http.StatusInternalServerError, "ammar ýalňyşlygy")
+		return
+	}
+	key := fmt.Sprintf("avatars/%d/%d%s", convID, time.Now().Unix(), extFromMime(ct))
+	if err := h.minio.Upload(r.Context(), storage.ChatAttachmentsBucket, key, file, header.Size, ct); err != nil {
+		writeError(w, http.StatusInternalServerError, "ýükläp bolmady")
+		return
+	}
+	if err := h.db.SetConversationAvatar(convID, key); err != nil {
+		writeError(w, http.StatusInternalServerError, "ýatda saklap bolmady")
+		return
+	}
+	notifyConversationUpdated(h, convID)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// ServeGroupAvatar streams a group's photo — gated the same as any other
+// chat content: the requester must be a participant.
+func (h *Handler) ServeGroupAvatar(w http.ResponseWriter, r *http.Request) {
+	convID, err := conversationIDFromPath(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry ID")
+		return
+	}
+	if _, ok := requireParticipant(h, w, r, convID); !ok {
+		return
+	}
+	conv, err := h.db.GetConversation(convID)
+	if err != nil || conv == nil || conv.AvatarURL == "" {
+		writeError(w, http.StatusNotFound, "surat tapylmady")
+		return
+	}
+	obj, err := h.minio.Download(r.Context(), storage.ChatAttachmentsBucket, conv.AvatarURL)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "surat tapylmady")
+		return
+	}
+	defer obj.Close()
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Content-Type", mimeFromExt(filepath.Ext(conv.AvatarURL)))
+	io.Copy(w, obj)
+}
+
+// BlockUser stops the target from being able to message the caller directly
+// (see IsEitherBlocked, checked by SendMessage) and hides them from the
+// caller's own "new DM" search — existing message history is untouched.
+func (h *Handler) BlockUser(w http.ResponseWriter, r *http.Request) {
+	user := authutil.GetUser(r)
+	targetID, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil || targetID == user.ID {
+		writeError(w, http.StatusBadRequest, "nädogry ulanyjy ID")
+		return
+	}
+	if err := h.db.BlockUser(user.ID, targetID); err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *Handler) UnblockUser(w http.ResponseWriter, r *http.Request) {
+	user := authutil.GetUser(r)
+	targetID, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry ulanyjy ID")
+		return
+	}
+	if err := h.db.UnblockUser(user.ID, targetID); err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// ListBlockedUsers backs the "Blocked users" list in the profile modal.
+func (h *Handler) ListBlockedUsers(w http.ResponseWriter, r *http.Request) {
+	user := authutil.GetUser(r)
+	list, err := h.db.ListBlockedUsers(user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk")
+		return
+	}
+	if list == nil {
+		list = []models.UserSearchResult{}
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
 // UpdateNotificationPrefs is not conversation-scoped — it's a per-user
 // setting, same privacy-preference surface as theme/password (see
 // App.showProfileModal on the frontend).
@@ -921,9 +1349,10 @@ func notifyConversationUpdated(h *Handler, convID int) {
 }
 
 // onUserOnline fires when a user opens their first live socket — tell everyone
-// they share a direct conversation with so a DM header can flip to "online".
+// they share ANY conversation (direct or group) with so a DM header, or a
+// fellow group member's row, can flip to "online".
 func (h *Handler) onUserOnline(userID int) {
-	contacts, err := h.db.ListDirectContactIDs(userID)
+	contacts, err := h.db.ListConversationContactIDs(userID)
 	if err != nil || len(contacts) == 0 {
 		return
 	}
@@ -931,12 +1360,13 @@ func (h *Handler) onUserOnline(userID int) {
 }
 
 // onUserOffline fires when a user's last socket drops — persist their
-// last-seen time and tell their DM partners they're now offline.
+// last-seen time and tell everyone sharing a conversation with them that
+// they're now offline.
 func (h *Handler) onUserOffline(userID int) {
 	if err := h.db.UpdateLastSeen(userID); err != nil {
 		log.Printf("update last_seen for %d: %v", userID, err)
 	}
-	contacts, err := h.db.ListDirectContactIDs(userID)
+	contacts, err := h.db.ListConversationContactIDs(userID)
 	if err != nil || len(contacts) == 0 {
 		return
 	}

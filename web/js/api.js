@@ -223,7 +223,7 @@ const API = {
             if (conversationId) url += `&conversation_id=${conversationId}`;
             return API._request('GET', url);
         },
-        list() { return API._request('GET', '/api/chat/conversations'); },
+        list(archived) { return API._request('GET', `/api/chat/conversations${archived ? '?archived=1' : ''}`); },
         createDirect(userId) { return API._request('POST', '/api/chat/conversations', { type: 'direct', user_id: userId }); },
         createGroup(name, participantIds, projectId) {
             const body = { type: 'group', name, participant_ids: participantIds };
@@ -234,6 +234,21 @@ const API = {
         rename(id, name) { return API._request('PATCH', `/api/chat/conversations/${id}`, { name }); },
         addParticipants(id, userIds) { return API._request('POST', `/api/chat/conversations/${id}/participants`, { user_ids: userIds }); },
         removeParticipant(id, userId) { return API._request('DELETE', `/api/chat/conversations/${id}/participants/${userId}`); },
+        setRole(id, userId, role) { return API._request('PATCH', `/api/chat/conversations/${id}/participants/${userId}/role`, { role }); },
+        updatePrefs(id, prefs) { return API._request('PATCH', `/api/chat/conversations/${id}/prefs`, prefs); },
+        listMuted() { return API._request('GET', '/api/chat/muted-conversations'); },
+        pinMessage(id, messageId) { return API._request('POST', `/api/chat/conversations/${id}/messages/${messageId}/pin`); },
+        unpinMessage(id) { return API._request('DELETE', `/api/chat/conversations/${id}/pinned-message`); },
+        uploadGroupAvatar(id, file) {
+            const form = new FormData();
+            form.append('avatar', file);
+            return fetch(`/api/chat/conversations/${id}/avatar`, { method: 'POST', body: form, credentials: 'same-origin' })
+                .then(r => r.json().then(d => r.ok ? d : Promise.reject(new Error(d.error || I18N.t('common.error_short')))));
+        },
+        groupAvatarURL(id) { return `/api/chat/conversations/${id}/avatar`; },
+        blockUser(userId) { return API._request('POST', `/api/chat/users/${userId}/block`); },
+        unblockUser(userId) { return API._request('DELETE', `/api/chat/users/${userId}/block`); },
+        listBlocked() { return API._request('GET', '/api/chat/blocked-users'); },
         listMessages(id, beforeId, limit) {
             let url = `/api/chat/conversations/${id}/messages?limit=${limit || 50}`;
             if (beforeId) url += `&before_id=${beforeId}`;
@@ -251,8 +266,8 @@ const API = {
         deleteMessage(id, messageId, forWhom) {
             return API._request('DELETE', `/api/chat/conversations/${id}/messages/${messageId}?for=${forWhom || 'everyone'}`);
         },
-        forward(messageId, conversationIds) {
-            return API._request('POST', `/api/chat/messages/${messageId}/forward`, { conversation_ids: conversationIds });
+        forward(messageId, conversationIds, caption) {
+            return API._request('POST', `/api/chat/messages/${messageId}/forward`, { conversation_ids: conversationIds, caption: caption || '' });
         },
         toggleReaction(id, messageId, emoji) {
             return API._request('POST', `/api/chat/conversations/${id}/messages/${messageId}/reactions`, { emoji });

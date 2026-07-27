@@ -25,9 +25,11 @@ type Handler struct {
 	// Web Push: nil disables push entirely (key generation failed, or the
 	// build is running somewhere it can never reach a push service). pushClient
 	// has a short timeout so an unreachable push service never ties up a
-	// goroutine for long.
-	vapid      *webpush.VAPIDKeys
-	pushClient *http.Client
+	// goroutine for long. pushBatcher coalesces bursts of pushes to the same
+	// recipient into one (see pushDigestWindow).
+	vapid       *webpush.VAPIDKeys
+	pushClient  *http.Client
+	pushBatcher *pushBatcher
 }
 
 func NewHandler(database *db.DB, minioClient *storage.MinioClient, cfg *config.Config) *Handler {
@@ -42,6 +44,7 @@ func NewHandler(database *db.DB, minioClient *storage.MinioClient, cfg *config.C
 		chatHub:               newChatHub(),
 		pushClient:            &http.Client{Timeout: 10 * time.Second},
 	}
+	h.pushBatcher = newPushBatcher(h)
 	h.initPush()
 	return h
 }

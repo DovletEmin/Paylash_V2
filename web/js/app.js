@@ -64,14 +64,29 @@ const App = {
         if (this.user) {
             this.startNotifPolling();
             this.startChatUnreadPolling();
+            this._loadMutedConvIds();
             this._bindChatSocketListeners();
             ChatSocket.connect();
             if (typeof Push !== 'undefined') Push.init();
         } else {
             this.stopNotifPolling();
             this.stopChatUnreadPolling();
+            this._mutedConvIds = new Set();
             ChatSocket.disconnect();
         }
+    },
+
+    // Cache of the current user's own muted conversation ids — fetched once
+    // at login and kept in sync via the "conversation.prefs" WS event (see
+    // _bindChatSocketListeners) plus ChatPage.setConvPrefs updating it
+    // instantly on the tab that actually toggled it. Consulted below so a
+    // muted chat never pops a toast/native notification/sound, regardless of
+    // whether the Chat page itself has been opened yet this session.
+    _mutedConvIds: new Set(),
+
+    async _loadMutedConvIds() {
+        try { this._mutedConvIds = new Set(await API.chat.listMuted() || []); }
+        catch { /* transient — worst case a muted chat isn't silenced until next load */ }
     },
 
     /* ── Shared-file notifications ──
@@ -165,6 +180,9 @@ const App = {
             const viewingThisConv = App.currentPage === 'chat' && typeof ChatPage !== 'undefined' && ChatPage._activeId === data.conversation_id;
             const focused = document.hasFocus() && !document.hidden;
             if (viewingThisConv && focused) return; // already looking right at it — no alert needed
+            // Muted: still counts toward unread (checkChatUnread above already
+            // ran) but never pops a toast/sound/native notification.
+            if (App._mutedConvIds.has(data.conversation_id)) return;
 
             const level = (App.user && App.user.chat_notify_level) || 'full';
             const senderName = data.message ? (data.message.sender_name || I18N.t('chat.title')) : I18N.t('chat.title');
@@ -194,6 +212,14 @@ const App = {
         });
         ChatSocket.on('message.deleted', () => App.checkChatUnread());
         ChatSocket.on('conversation.updated', () => App.checkChatUnread());
+        // Mirrors ChatPage's own "conversation.prefs" handler (self-sync
+        // across this same user's other tabs/devices) — kept independently
+        // here too since this cache must stay correct even before the Chat
+        // page has ever been opened this session.
+        ChatSocket.on('conversation.prefs', (data) => {
+            if (data.muted === true) App._mutedConvIds.add(data.conversation_id);
+            else if (data.muted === false) App._mutedConvIds.delete(data.conversation_id);
+        });
     },
 
     async loadProjects() {
@@ -409,9 +435,42 @@ const App = {
                 <label class="checkbox-option"><input type="checkbox" id="prof-notify-sound" ${sound ? 'checked' : ''}> <span>${I18N.t('app.chat_notify_sound_label')}</span></label>
             </div>
             <hr style="border:none;border-top:1px solid var(--border);margin:12px 0">
+            <div class="form-group">
+                <label>${I18N.t('app.blocked_users_label')}</label>
+                <div id="prof-blocked-list"><div class="empty-state"><div class="spinner"></div></div></div>
+            </div>
+            <hr style="border:none;border-top:1px solid var(--border);margin:12px 0">
             <button type="button" class="btn btn-ghost btn-sm" style="width:100%" onclick="App.logoutOtherDevices()">${I18N.t('app.logout_others_button')}</button>
             <p class="text-muted" style="font-size:.72rem;margin-top:4px">${I18N.t('app.logout_others_hint')}</p>`,
             `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="App.saveProfile()">${I18N.t('common.save')}</button>`);
+        this.loadBlockedUsersList();
+    },
+
+    async loadBlockedUsersList() {
+        const el = document.getElementById('prof-blocked-list');
+        if (!el) return;
+        let list;
+        try { list = await API.chat.listBlocked() || []; } catch { list = []; }
+        // The modal may have been closed (or reopened as a different modal)
+        // by the time this resolves — re-check the element is still ours.
+        if (!document.getElementById('prof-blocked-list')) return;
+        if (!list.length) {
+            el.innerHTML = `<p class="text-muted" style="font-size:.8rem">${I18N.t('app.no_blocked_users')}</p>`;
+            return;
+        }
+        el.innerHTML = list.map(u => `<div class="chat-member-row">
+            ${UI.avatarHTML(u.id, u.full_name, 'chat-avatar-sm')}
+            <span class="chat-member-name">${UI.esc(u.full_name || u.username)}</span>
+            <button class="btn btn-ghost btn-sm" onclick="App.unblockUserFromProfile(${u.id})">${I18N.t('chat.unblock_user')}</button>
+        </div>`).join('');
+    },
+
+    async unblockUserFromProfile(userId) {
+        try {
+            await API.chat.unblockUser(userId);
+            if (typeof ChatPage !== 'undefined') ChatPage._blockedIds.delete(userId);
+            this.loadBlockedUsersList();
+        } catch (e) { UI.toast(e.message, 'error'); }
     },
 
     logoutOtherDevices() {

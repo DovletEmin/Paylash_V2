@@ -13,11 +13,14 @@ import (
 // filter — SearchUsers deliberately hides the admin account from the share
 // picker (nothing to "share" with someone who already sees everything), but
 // messaging the studio lead is a completely normal thing to want in chat.
+// People excludeUserID has blocked are left out too, so starting a "new DM"
+// never re-surfaces someone they deliberately blocked.
 func (d *DB) SearchChatUsers(query string, excludeUserID, limit int) ([]models.UserSearchResult, error) {
 	rows, err := d.Query(
 		`SELECT id, username, display_name
 		 FROM users
 		 WHERE id != $1 AND (username ILIKE $2 OR display_name ILIKE $2)
+		   AND id NOT IN (SELECT blocked_id FROM blocked_users WHERE blocker_id = $1)
 		 ORDER BY username LIMIT $3`,
 		excludeUserID, "%"+query+"%", limit,
 	)
@@ -132,9 +135,9 @@ func (d *DB) CreateGroupConversation(name string, createdBy int, projectID *int,
 func (d *DB) GetConversation(id int) (*models.Conversation, error) {
 	c := &models.Conversation{}
 	err := d.QueryRow(
-		`SELECT id, type, name, project_id, created_by, direct_user_low, direct_user_high, last_message_at, created_at
+		`SELECT id, type, name, project_id, created_by, direct_user_low, direct_user_high, avatar_url, pinned_message_id, last_message_at, created_at
 		 FROM conversations WHERE id = $1`, id,
-	).Scan(&c.ID, &c.Type, &c.Name, &c.ProjectID, &c.CreatedBy, &c.DirectUserLow, &c.DirectUserHigh, &c.LastMessageAt, &c.CreatedAt)
+	).Scan(&c.ID, &c.Type, &c.Name, &c.ProjectID, &c.CreatedBy, &c.DirectUserLow, &c.DirectUserHigh, &c.AvatarURL, &c.PinnedMessageID, &c.LastMessageAt, &c.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -142,16 +145,20 @@ func (d *DB) GetConversation(id int) (*models.Conversation, error) {
 }
 
 // ListConversationsForUser returns every conversation userID participates
-// in, newest-activity first, each with an unread count (messages since that
-// user's own last_read_at, excluding their own), a last-message preview,
-// and — for direct conversations — the other participant's info, so the
-// client never needs a second round-trip to render the inbox.
-func (d *DB) ListConversationsForUser(userID int) ([]models.ConversationView, error) {
+// in — pinned ones first (most-recently-pinned first), then the rest by
+// newest activity — each with an unread count (messages since that user's
+// own last_read_at, excluding their own), a last-message preview, and — for
+// direct conversations — the other participant's info, so the client never
+// needs a second round-trip to render the inbox. archived selects which set:
+// false (the normal inbox) returns only conversations the user hasn't
+// archived; true returns ONLY the archived ones (the separate archived view).
+func (d *DB) ListConversationsForUser(userID int, archived bool) ([]models.ConversationView, error) {
 	rows, err := d.Query(`
 		SELECT c.id, c.type, c.name, c.project_id, c.created_by, c.last_message_at, c.created_at,
 		       COALESCE(unread.cnt, 0) AS unread_count,
 		       lm.body, lm.created_at,
-		       other.user_id, other.username, other.display_name, other.avatar_url
+		       other.user_id, other.username, other.display_name, other.avatar_url,
+		       cp.muted, cp.pinned_at IS NOT NULL, cp.archived_at IS NOT NULL
 		FROM conversations c
 		JOIN conversation_participants cp ON cp.conversation_id = c.id AND cp.user_id = $1
 		LEFT JOIN LATERAL (
@@ -171,7 +178,8 @@ func (d *DB) ListConversationsForUser(userID int) ([]models.ConversationView, er
 			WHERE cp2.conversation_id = c.id AND cp2.user_id != $1 AND c.type = 'direct'
 			LIMIT 1
 		) other ON true
-		ORDER BY c.last_message_at DESC`, userID)
+		WHERE (cp.archived_at IS NOT NULL) = $2
+		ORDER BY (cp.pinned_at IS NULL), cp.pinned_at DESC, c.last_message_at DESC`, userID, archived)
 	if err != nil {
 		return nil, err
 	}
@@ -188,6 +196,7 @@ func (d *DB) ListConversationsForUser(userID int) ([]models.ConversationView, er
 			&cv.ID, &cv.Type, &cv.Name, &cv.ProjectID, &cv.CreatedBy, &cv.LastMessageAt, &cv.CreatedAt,
 			&cv.UnreadCount, &lastBody, &lastAt,
 			&otherID, &otherUsername, &otherDisplayName, &otherAvatar,
+			&cv.Muted, &cv.Pinned, &cv.Archived,
 		); err != nil {
 			return nil, err
 		}
@@ -316,9 +325,13 @@ func (d *DB) RemoveParticipant(conversationID, userID int) error {
 	}
 
 	if createdBy.Valid && int(createdBy.Int64) == userID {
+		// Prefer handing ownership to an existing admin (they're already
+		// trusted with group management) over a plain member; earliest to
+		// join breaks ties within either group.
 		var newOwner sql.NullInt64
 		err := tx.QueryRow(
-			`SELECT user_id FROM conversation_participants WHERE conversation_id = $1 ORDER BY joined_at LIMIT 1`,
+			`SELECT user_id FROM conversation_participants WHERE conversation_id = $1
+			 ORDER BY (role = 'admin') DESC, joined_at LIMIT 1`,
 			conversationID,
 		).Scan(&newOwner)
 		if err != nil && err != sql.ErrNoRows {
@@ -339,7 +352,7 @@ func (d *DB) RemoveParticipant(conversationID, userID int) error {
 
 func (d *DB) ListParticipants(conversationID int) ([]models.ParticipantView, error) {
 	rows, err := d.Query(
-		`SELECT u.id, u.username, COALESCE(u.display_name, u.username, ''), u.avatar_url, cp.last_read_at, u.last_seen_at
+		`SELECT u.id, u.username, COALESCE(u.display_name, u.username, ''), u.avatar_url, cp.last_read_at, u.last_seen_at, cp.role, cp.muted
 		 FROM conversation_participants cp
 		 JOIN users u ON u.id = cp.user_id
 		 WHERE cp.conversation_id = $1
@@ -353,7 +366,7 @@ func (d *DB) ListParticipants(conversationID int) ([]models.ParticipantView, err
 	for rows.Next() {
 		var p models.ParticipantView
 		var lastSeen sql.NullTime
-		if err := rows.Scan(&p.UserID, &p.Username, &p.DisplayName, &p.AvatarURL, &p.LastReadAt, &lastSeen); err != nil {
+		if err := rows.Scan(&p.UserID, &p.Username, &p.DisplayName, &p.AvatarURL, &p.LastReadAt, &lastSeen, &p.Role, &p.Muted); err != nil {
 			return nil, err
 		}
 		if lastSeen.Valid {
@@ -365,6 +378,132 @@ func (d *DB) ListParticipants(conversationID int) ([]models.ParticipantView, err
 	return list, rows.Err()
 }
 
+// GetParticipantRole returns "member" or "admin" for a participant, or ""
+// (with no error) if userID isn't a participant of conversationID at all.
+func (d *DB) GetParticipantRole(conversationID, userID int) (string, error) {
+	var role string
+	err := d.QueryRow(
+		`SELECT role FROM conversation_participants WHERE conversation_id = $1 AND user_id = $2`,
+		conversationID, userID,
+	).Scan(&role)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return role, err
+}
+
+// SetParticipantRole promotes/demotes a participant — the caller (API layer)
+// has already verified the requester is the conversation's owner.
+func (d *DB) SetParticipantRole(conversationID, userID int, role string) error {
+	_, err := d.Exec(
+		`UPDATE conversation_participants SET role = $1 WHERE conversation_id = $2 AND user_id = $3`,
+		role, conversationID, userID,
+	)
+	return err
+}
+
+// SetConversationMuted/SetConversationPinned/SetConversationArchived set one
+// user's own preference for a conversation — never affects any other
+// participant's view of it. Pinned/archived use a timestamp (non-null =
+// active) so ListConversationsForUser can sort pinned conversations by how
+// recently they were pinned.
+func (d *DB) SetConversationMuted(conversationID, userID int, muted bool) error {
+	_, err := d.Exec(
+		`UPDATE conversation_participants SET muted = $1 WHERE conversation_id = $2 AND user_id = $3`,
+		muted, conversationID, userID,
+	)
+	return err
+}
+
+func (d *DB) SetConversationPinned(conversationID, userID int, pinned bool) error {
+	var expr string
+	if pinned {
+		expr = "NOW()"
+	} else {
+		expr = "NULL"
+	}
+	_, err := d.Exec(
+		`UPDATE conversation_participants SET pinned_at = `+expr+` WHERE conversation_id = $1 AND user_id = $2`,
+		conversationID, userID,
+	)
+	return err
+}
+
+func (d *DB) SetConversationArchived(conversationID, userID int, archived bool) error {
+	var expr string
+	if archived {
+		expr = "NOW()"
+	} else {
+		expr = "NULL"
+	}
+	_, err := d.Exec(
+		`UPDATE conversation_participants SET archived_at = `+expr+` WHERE conversation_id = $1 AND user_id = $2`,
+		conversationID, userID,
+	)
+	return err
+}
+
+// ListMutedConversationIDs backs the client-side mute cache (App._mutedConvIds)
+// that gates in-app toast/sound/native-notification for a live "message.new"
+// event — fetched once at login and kept in sync from there rather than
+// re-fetched on every message.
+func (d *DB) ListMutedConversationIDs(userID int) ([]int, error) {
+	rows, err := d.Query(
+		`SELECT conversation_id FROM conversation_participants WHERE user_id = $1 AND muted = TRUE`,
+		userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// SetConversationAvatar sets (or, with key="", clears) a group's photo.
+func (d *DB) SetConversationAvatar(conversationID int, key string) error {
+	_, err := d.Exec(`UPDATE conversations SET avatar_url = $1 WHERE id = $2`, key, conversationID)
+	return err
+}
+
+// SetPinnedMessage pins messageID as the conversation's one pinned message
+// (replacing any previous pin).
+func (d *DB) SetPinnedMessage(conversationID, messageID int) error {
+	_, err := d.Exec(`UPDATE conversations SET pinned_message_id = $1 WHERE id = $2`, messageID, conversationID)
+	return err
+}
+
+// ClearPinnedMessage unconditionally unpins a conversation — the explicit
+// "unpin" action, whatever is currently pinned.
+func (d *DB) ClearPinnedMessage(conversationID int) error {
+	_, err := d.Exec(`UPDATE conversations SET pinned_message_id = NULL WHERE id = $1`, conversationID)
+	return err
+}
+
+// ClearPinnedMessageIfEquals unpins a conversation's pinned message, but only
+// if it's currently pinned to exactly messageID — a defensive safety net run
+// when a message is deleted, without racing a concurrent re-pin to a
+// different message. Reports whether it actually cleared anything, so the
+// caller only needs to tell participants when the pin genuinely changed.
+func (d *DB) ClearPinnedMessageIfEquals(conversationID, messageID int) (bool, error) {
+	res, err := d.Exec(
+		`UPDATE conversations SET pinned_message_id = NULL WHERE id = $1 AND pinned_message_id = $2`,
+		conversationID, messageID,
+	)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // UpdateLastSeen stamps a user's last-seen time — called when their last live
 // WS connection drops, so a DM header can show "last seen X".
 func (d *DB) UpdateLastSeen(userID int) error {
@@ -372,16 +511,20 @@ func (d *DB) UpdateLastSeen(userID int) error {
 	return err
 }
 
-// ListDirectContactIDs returns every user id that shares at least one direct
-// conversation with userID — the audience for that user's presence
-// (online/offline) broadcasts, so we notify exactly the people who'd see it in
-// a DM header and no one else.
-func (d *DB) ListDirectContactIDs(userID int) ([]int, error) {
+// ListConversationContactIDs returns every user id that shares at least one
+// conversation — direct OR group — with userID: the audience for that user's
+// presence (online/offline) broadcasts. A direct partner sees it flip in
+// their DM header; a fellow group member sees it in that group's member
+// list/subtitle (ChatPage.handlePresence already patches both from a single
+// "presence" event — this used to only cover direct partners, so a group-only
+// contact's online dot never updated live).
+func (d *DB) ListConversationContactIDs(userID int) ([]int, error) {
 	rows, err := d.Query(
-		`SELECT DISTINCT CASE WHEN direct_user_low = $1 THEN direct_user_high ELSE direct_user_low END
-		 FROM conversations
-		 WHERE type = 'direct' AND (direct_user_low = $1 OR direct_user_high = $1)
-		   AND direct_user_low IS NOT NULL AND direct_user_high IS NOT NULL`,
+		`SELECT DISTINCT cp2.user_id
+		 FROM conversation_participants cp1
+		 JOIN conversation_participants cp2
+		   ON cp2.conversation_id = cp1.conversation_id AND cp2.user_id != cp1.user_id
+		 WHERE cp1.user_id = $1`,
 		userID,
 	)
 	if err != nil {
