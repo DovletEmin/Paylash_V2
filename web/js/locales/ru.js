@@ -309,6 +309,24 @@ window.PAYLASH_LOCALE_RU = {
     'chat.voice_not_supported': 'Голосовые сообщения не поддерживаются в этом браузере',
     'chat.mic_permission_denied': 'Доступ к микрофону запрещён',
     'chat.forward_caption_placeholder': 'Добавить подпись (необязательно)…',
+    'chat.media_gallery': 'Медиа и файлы',
+    'chat.gallery_media': 'Медиа',
+    'chat.gallery_files': 'Файлы',
+    'chat.gallery_empty': 'Здесь пока ничего нет',
+    'chat.select_message': 'Выделить',
+    'chat.select_messages': 'Выделить сообщения',
+    'chat.selected_count': { one: 'Выбрано {count}', few: 'Выбрано {count}', many: 'Выбрано {count}' },
+    'chat.bulk_delete_me_confirm': {
+        one: 'Удалить {count} сообщение у себя? Оно исчезнет только из вашего вида.',
+        few: 'Удалить {count} сообщения у себя? Они исчезнут только из вашего вида.',
+        many: 'Удалить {count} сообщений у себя? Они исчезнут только из вашего вида.',
+    },
+    'chat.bulk_delete_everyone_confirm': {
+        one: 'Удалить {count} сообщение у всех? Будет удалено, только если это ваше сообщение.',
+        few: 'Удалить {count} сообщения у всех? Будут удалены только ваши сообщения из выбранных.',
+        many: 'Удалить {count} сообщений у всех? Будут удалены только ваши сообщения из выбранных.',
+    },
+    'chat.bulk_delete_partial': 'Удалено {deleted} из {total} — остальные не ваши, их нельзя удалить у всех.',
 
     // страница «Общий доступ» + окно шаринга
     'shares.tab_with_me': 'Доступно мне',

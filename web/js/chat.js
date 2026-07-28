@@ -14,7 +14,7 @@ const ChatPage = {
     // never both at once (starting one clears the other), same as Telegram.
     _composerContext: null, // { type: 'reply', id, senderName, body, kind } | { type: 'edit', id }
     _pendingSeq: 0,
-    _forwardMessageId: null,
+    _forwardMessageIds: null,
     _forwardSelected: null,
     // Id of the first unread message when the conversation was opened, so a
     // "new messages" divider can be drawn above it (cleared on next open once
@@ -70,6 +70,19 @@ const ChatPage = {
     _viewingArchived: false,
     _blockedIds: new Set(),
     _pinnedMessage: null,
+
+    // Shared-media gallery modal state.
+    _galleryTab: 'media',
+    _galleryItems: [],
+    _galleryOldestId: null,
+    _galleryHasMore: true,
+    _galleryLoading: false,
+
+    // Multi-select mode: bulk delete/forward across several messages at
+    // once. Reset whenever a different conversation is opened (see
+    // selectConversation).
+    _selectMode: false,
+    _selectedIds: new Set(),
 
     async init() {
         this._bindSocketListeners();
@@ -153,6 +166,7 @@ const ChatPage = {
             { action: 'pin', label: cv.pinned ? I18N.t('chat.unpin_chat') : I18N.t('chat.pin_chat'), icon: '📌', handler: () => this.setConvPrefs(this._activeId, { pinned: !cv.pinned }) },
             { action: 'mute', label: cv.muted ? I18N.t('chat.unmute_chat') : I18N.t('chat.mute_chat'), icon: '🔕', handler: () => this.setConvPrefs(this._activeId, { muted: !cv.muted }) },
             { action: 'archive', label: cv.archived ? I18N.t('chat.unarchive_chat') : I18N.t('chat.archive_chat'), icon: '📥', handler: () => this.setConvPrefs(this._activeId, { archived: !cv.archived }) },
+            { action: 'select', label: I18N.t('chat.select_messages'), icon: '☑️', handler: () => this.enterSelectMode() },
         ];
         if (this._activeConversation && this._activeConversation.type === 'direct') {
             const other = this._participants.find(p => p.user_id !== App.user.id);
@@ -366,6 +380,8 @@ const ChatPage = {
         this._oldestLoadedId = null;
         this._hasMoreHistory = true;
         this._composerContext = null;
+        this._selectMode = false;
+        this._selectedIds = new Set();
         this._updateMobileClass();
         this.renderConversationList();
 
@@ -459,6 +475,7 @@ const ChatPage = {
                     <div class="chat-thread-subtitle" id="chat-thread-subtitle"></div>
                 </div>
                 ${!isDirect ? `<button class="btn btn-ghost btn-sm" onclick="ChatPage.showGroupInfoModal()">${I18N.t('chat.group_info')}</button>` : ''}
+                <button class="btn btn-icon btn-ghost btn-sm" onclick="ChatPage.showMediaGalleryModal()" title="${I18N.t('chat.media_gallery')}" aria-label="${I18N.t('chat.media_gallery')}">🖼️</button>
                 <button class="chat-msg-menu-btn chat-thread-menu-btn" onclick="ChatPage.showConversationMenu(event)" title="${I18N.t('common.actions')}" aria-label="${I18N.t('common.actions')}">⋮</button>
             </div>
             <div id="chat-pinned-bar"></div>
@@ -467,18 +484,7 @@ const ChatPage = {
                 <span class="chat-scroll-down-arrow">↓</span>
                 <span class="chat-scroll-down-count" id="chat-scroll-down-count"></span>
             </button>
-            <div class="chat-composer">
-                <div id="chat-reply-bar"></div>
-                <div id="chat-pending-attachments"></div>
-                <div class="chat-composer-row">
-                    <button class="btn btn-icon btn-ghost btn-sm" onclick="document.getElementById('chat-file-input').click()" title="${I18N.t('chat.attach_file')}" aria-label="${I18N.t('chat.attach_file')}">📎</button>
-                    <button class="btn btn-icon btn-ghost btn-sm chat-sticker-toggle-btn" onclick="ChatPage.toggleStickerPicker()" title="${I18N.t('chat.stickers')}" aria-label="${I18N.t('chat.stickers')}">😊</button>
-                    <button class="btn btn-icon btn-ghost btn-sm chat-voice-btn" id="chat-voice-btn" onclick="ChatPage.toggleVoiceRecording()" title="${I18N.t('chat.record_voice')}" aria-label="${I18N.t('chat.record_voice')}">🎤</button>
-                    <input type="file" id="chat-file-input" multiple style="display:none" onchange="ChatPage.onFilesPicked(this.files)">
-                    <textarea id="chat-message-input" class="form-control" rows="1" placeholder="${I18N.t('chat.message_placeholder')}" onkeydown="ChatPage.onComposerKeydown(event)" oninput="ChatPage.onComposerInput()" onblur="setTimeout(()=>ChatPage.closeMentionAutocomplete(),150)"></textarea>
-                    <button class="btn btn-primary btn-sm" onclick="ChatPage.sendMessage()">${I18N.t('chat.send')}</button>
-                </div>
-            </div>`;
+            ${this._selectMode ? this.selectionToolbarHTML() : this.composerHTML()}`;
         this.renderMessages();
         this.renderPendingAttachments();
         this.renderPinnedBar();
@@ -494,6 +500,207 @@ const ChatPage = {
             this.scrollToBottom();
         }
         this.updateScrollDownPill();
+    },
+
+    // The normal message composer — factored out of renderThread so
+    // refreshSelectModeUI can swap it for selectionToolbarHTML() (and back)
+    // without a full renderThread(), which would also reset scroll position.
+    composerHTML() {
+        return `<div class="chat-composer">
+                <div id="chat-reply-bar"></div>
+                <div id="chat-pending-attachments"></div>
+                <div class="chat-composer-row">
+                    <button class="btn btn-icon btn-ghost btn-sm" onclick="document.getElementById('chat-file-input').click()" title="${I18N.t('chat.attach_file')}" aria-label="${I18N.t('chat.attach_file')}">📎</button>
+                    <button class="btn btn-icon btn-ghost btn-sm chat-sticker-toggle-btn" onclick="ChatPage.toggleStickerPicker()" title="${I18N.t('chat.stickers')}" aria-label="${I18N.t('chat.stickers')}">😊</button>
+                    <button class="btn btn-icon btn-ghost btn-sm chat-voice-btn" id="chat-voice-btn" onclick="ChatPage.toggleVoiceRecording()" title="${I18N.t('chat.record_voice')}" aria-label="${I18N.t('chat.record_voice')}">🎤</button>
+                    <input type="file" id="chat-file-input" multiple style="display:none" onchange="ChatPage.onFilesPicked(this.files)">
+                    <textarea id="chat-message-input" class="form-control" rows="1" placeholder="${I18N.t('chat.message_placeholder')}" onkeydown="ChatPage.onComposerKeydown(event)" oninput="ChatPage.onComposerInput()" onblur="setTimeout(()=>ChatPage.closeMentionAutocomplete(),150)"></textarea>
+                    <button class="btn btn-primary btn-sm" onclick="ChatPage.sendMessage()">${I18N.t('chat.send')}</button>
+                </div>
+            </div>`;
+    },
+
+    /* ── Multi-select (bulk delete / bulk forward) ── */
+
+    // The toolbar that replaces the composer while _selectMode is active.
+    selectionToolbarHTML() {
+        const count = this._selectedIds.size;
+        const disabled = count === 0 ? 'disabled' : '';
+        return `<div class="chat-selection-toolbar" id="chat-selection-toolbar">
+            <button class="btn btn-icon btn-ghost btn-sm" onclick="ChatPage.exitSelectMode()" aria-label="${I18N.t('common.cancel')}">✕</button>
+            <span class="chat-selection-count">${I18N.tn('chat.selected_count', count, { count })}</span>
+            <div class="chat-selection-actions">
+                <button class="btn btn-icon btn-ghost btn-sm" onclick="ChatPage.bulkForward()" title="${I18N.t('chat.forward')}" ${disabled}>↪️</button>
+                <button class="btn btn-icon btn-ghost btn-sm" onclick="ChatPage.bulkDelete('me')" title="${I18N.t('chat.delete_for_me')}" ${disabled}>🗑</button>
+                <button class="btn btn-icon btn-ghost btn-sm chat-selection-delete-all" onclick="ChatPage.bulkDelete('everyone')" title="${I18N.t('chat.delete_for_everyone')}" ${disabled}>❌</button>
+            </div>
+        </div>`;
+    },
+
+    enterSelectMode(preselectId) {
+        this._selectMode = true;
+        this._selectedIds = new Set();
+        if (preselectId) this._selectedIds.add(preselectId);
+        this.refreshSelectModeUI();
+    },
+
+    exitSelectMode() {
+        this._selectMode = false;
+        this._selectedIds.clear();
+        this.refreshSelectModeUI();
+    },
+
+    // Swaps the composer for the selection toolbar (or back) and re-renders
+    // message bubbles so their checkboxes show/hide — deliberately not a
+    // full renderThread(), which would also reset scroll position; entering
+    // select mode from a message deep in history must leave the view
+    // exactly where it was. renderMessages() resets scrollTop as a side
+    // effect of replacing #chat-messages' innerHTML (see loadOlder, which
+    // works around the same thing), so it's saved and restored here too.
+    refreshSelectModeUI() {
+        const composerSlot = document.querySelector('.chat-thread .chat-composer, .chat-thread .chat-selection-toolbar');
+        if (composerSlot) composerSlot.outerHTML = this._selectMode ? this.selectionToolbarHTML() : this.composerHTML();
+        const messagesEl = document.getElementById('chat-messages');
+        if (!messagesEl) return;
+        messagesEl.classList.toggle('select-mode', this._selectMode);
+        const prevTop = messagesEl.scrollTop;
+        this.renderMessages();
+        const newEl = document.getElementById('chat-messages');
+        if (newEl) newEl.scrollTop = prevTop;
+    },
+
+    toggleMessageSelected(id) {
+        if (this._selectedIds.has(id)) this._selectedIds.delete(id);
+        else this._selectedIds.add(id);
+        const node = document.getElementById('chat-msg-' + id);
+        if (node) {
+            node.classList.toggle('selected', this._selectedIds.has(id));
+            const cb = node.querySelector('.chat-msg-select input');
+            if (cb) cb.checked = this._selectedIds.has(id);
+        }
+        const toolbar = document.getElementById('chat-selection-toolbar');
+        if (toolbar) toolbar.outerHTML = this.selectionToolbarHTML();
+    },
+
+    // Intercepts a click on a message bubble while in select mode, toggling
+    // its checkbox instead of doing nothing — but only for the bubble
+    // itself, not for something genuinely interactive inside it (a link, a
+    // reaction chip, an audio/video control), which should keep working
+    // normally even mid-selection.
+    onMessageClick(ev, id) {
+        if (!this._selectMode) return;
+        if (ev.target.closest('a, button, .chat-reaction, audio, video, input')) return;
+        this.toggleMessageSelected(id);
+    },
+
+    selectCheckboxHTML(m) {
+        if (m._pending) return '';
+        return `<label class="chat-msg-select" onclick="event.stopPropagation()">
+            <input type="checkbox" ${this._selectedIds.has(m.id) ? 'checked' : ''} onchange="ChatPage.toggleMessageSelected(${m.id})">
+        </label>`;
+    },
+
+    async bulkDelete(forWhom) {
+        const ids = Array.from(this._selectedIds);
+        if (!ids.length) return;
+        const title = forWhom === 'me' ? I18N.t('chat.delete_for_me') : I18N.t('chat.delete_for_everyone');
+        const body = forWhom === 'me'
+            ? I18N.tn('chat.bulk_delete_me_confirm', ids.length, { count: ids.length })
+            : I18N.tn('chat.bulk_delete_everyone_confirm', ids.length, { count: ids.length });
+        UI.confirmAction(title, body, I18N.t('common.delete'), async () => {
+            try {
+                const res = await API.chat.bulkDelete(this._activeId, ids, forWhom);
+                const deleted = new Set(res.deleted_ids || []);
+                if (forWhom === 'me') {
+                    this._messages = this._messages.filter(m => !deleted.has(m.id));
+                } else {
+                    this._messages.forEach(m => {
+                        if (!deleted.has(m.id)) return;
+                        m.deleted_at = new Date().toISOString(); m.body = ''; m.attachments = []; m.reactions = [];
+                    });
+                }
+                this.exitSelectMode();
+                if (deleted.size < ids.length) UI.toast(I18N.t('chat.bulk_delete_partial', { deleted: deleted.size, total: ids.length }), 'info');
+                this.loadConversations();
+            } catch (e) { UI.toast(e.message, 'error'); }
+        });
+    },
+
+    bulkForward() {
+        const ids = Array.from(this._selectedIds);
+        if (!ids.length) return;
+        this.showForwardModal(ids);
+    },
+
+    /* ── Shared-media gallery (Media / Files tabs) ── */
+
+    async showMediaGalleryModal() {
+        this._galleryTab = 'media';
+        this._galleryItems = [];
+        this._galleryOldestId = null;
+        this._galleryHasMore = true;
+        UI.showModal(I18N.t('chat.media_gallery'), `
+            <div class="chat-gallery-tabs">
+                <button class="chat-gallery-tab active" data-tab="media" onclick="ChatPage.switchGalleryTab('media')">${I18N.t('chat.gallery_media')}</button>
+                <button class="chat-gallery-tab" data-tab="files" onclick="ChatPage.switchGalleryTab('files')">${I18N.t('chat.gallery_files')}</button>
+            </div>
+            <div class="chat-gallery-body" id="chat-gallery-body"><div class="empty-state"><div class="spinner"></div></div></div>`,
+            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.close')}</button>`);
+        await this.loadGalleryPage(true);
+    },
+
+    async switchGalleryTab(tab) {
+        if (this._galleryTab === tab) return;
+        this._galleryTab = tab;
+        document.querySelectorAll('.chat-gallery-tab').forEach(el => el.classList.toggle('active', el.dataset.tab === tab));
+        this._galleryItems = [];
+        this._galleryOldestId = null;
+        this._galleryHasMore = true;
+        await this.loadGalleryPage(true);
+    },
+
+    async loadGalleryPage(reset) {
+        const body = document.getElementById('chat-gallery-body');
+        if (!body || this._galleryLoading) return;
+        this._galleryLoading = true;
+        if (reset) body.innerHTML = `<div class="empty-state"><div class="spinner"></div></div>`;
+        try {
+            const items = (await API.chat.media(this._activeId, this._galleryTab, reset ? null : this._galleryOldestId, 60)) || [];
+            if (items.length) this._galleryOldestId = items[items.length - 1].id;
+            this._galleryHasMore = items.length >= 60;
+            this._galleryItems = reset ? items : [...this._galleryItems, ...items];
+            this.renderGallery();
+        } catch {
+            if (reset) body.innerHTML = `<div class="empty-state"><p class="text-muted">${I18N.t('chat.load_failed')}</p></div>`;
+        }
+        this._galleryLoading = false;
+    },
+
+    renderGallery() {
+        const body = document.getElementById('chat-gallery-body');
+        if (!body) return;
+        if (!this._galleryItems.length) {
+            body.innerHTML = `<div class="empty-state"><p class="text-muted">${I18N.t('chat.gallery_empty')}</p></div>`;
+            return;
+        }
+        const html = this._galleryTab === 'media'
+            ? `<div class="chat-gallery-grid">${this._galleryItems.map(a => this.galleryMediaTileHTML(a)).join('')}</div>`
+            : `<div class="chat-gallery-file-list">${this._galleryItems.map(a => this.attachmentHTML(a)).join('')}</div>`;
+        const more = this._galleryHasMore ? `<div class="chat-load-more" onclick="ChatPage.loadGalleryPage(false)">${I18N.t('chat.load_older')}</div>` : '';
+        body.innerHTML = html + more;
+    },
+
+    galleryMediaTileHTML(a) {
+        const url = API.chat.attachmentDownloadURL(a.id);
+        const isVideo = (a.content_type || '').startsWith('video/');
+        if (isVideo) {
+            return `<div class="chat-gallery-tile chat-gallery-tile-video" onclick="ChatPage.openImageLightbox(${UI.escJson(url)},${UI.escJson(a.file_name)},true)">
+                <video src="${url}#t=0.1" preload="metadata" muted></video><span class="chat-gallery-play">▶</span>
+            </div>`;
+        }
+        return `<div class="chat-gallery-tile" onclick="ChatPage.openImageLightbox(${UI.escJson(url)},${UI.escJson(a.file_name)})">
+            <img src="${url}" alt="${UI.esc(a.file_name)}" loading="lazy">
+        </div>`;
     },
 
     // Rebuilds only the messages container (never the composer), from the
@@ -584,7 +791,8 @@ const ChatPage = {
             ? (isGroupStart ? UI.avatarHTML(m.sender_id, m.sender_name, 'chat-avatar-sm chat-msg-avatar') : '<span class="chat-msg-avatar-spacer"></span>')
             : '';
         if (m.kind === 'sticker') {
-            return `<div class="chat-msg chat-msg-sticker-row ${mine ? 'mine' : ''}${groupCls}" id="chat-msg-${m.id}" oncontextmenu="ChatPage.showMessageMenu(event,${m.id})">
+            return `<div class="chat-msg chat-msg-sticker-row ${mine ? 'mine' : ''}${groupCls}${this._selectedIds.has(m.id) ? ' selected' : ''}" id="chat-msg-${m.id}" oncontextmenu="ChatPage.showMessageMenu(event,${m.id})" onclick="ChatPage.onMessageClick(event,${m.id})">
+                ${this.selectCheckboxHTML(m)}
                 ${avatarSlot}
                 <div class="chat-sticker-wrap">
                     <div class="chat-sticker">${UI.esc(m.body)}</div>
@@ -597,7 +805,8 @@ const ChatPage = {
         if (m.kind === 'voice') {
             const a = (m.attachments || [])[0];
             const url = a ? API.chat.attachmentDownloadURL(a.id) : '';
-            return `<div class="chat-msg ${mine ? 'mine' : ''}${groupCls}" id="chat-msg-${m.id}" oncontextmenu="ChatPage.showMessageMenu(event,${m.id})">
+            return `<div class="chat-msg ${mine ? 'mine' : ''}${groupCls}${this._selectedIds.has(m.id) ? ' selected' : ''}" id="chat-msg-${m.id}" oncontextmenu="ChatPage.showMessageMenu(event,${m.id})" onclick="ChatPage.onMessageClick(event,${m.id})">
+                ${this.selectCheckboxHTML(m)}
                 ${avatarSlot}
                 <div class="chat-msg-bubble chat-voice-bubble">
                     <span class="chat-voice-icon">🎙️</span>
@@ -616,13 +825,15 @@ const ChatPage = {
         </div>` : '';
         const forwardedBlock = m.forwarded_from_name ? `<div class="chat-forwarded-label">↪ ${I18N.t('chat.forwarded_from')} ${UI.esc(m.forwarded_from_name)}</div>` : '';
         const editedLabel = m.edited_at ? `<span class="chat-edited-label">${I18N.t('chat.edited_label')}</span>` : '';
-        return `<div class="chat-msg ${mine ? 'mine' : ''}${groupCls}" id="chat-msg-${m.id}">
+        return `<div class="chat-msg ${mine ? 'mine' : ''}${groupCls}${this._selectedIds.has(m.id) ? ' selected' : ''}" id="chat-msg-${m.id}" onclick="ChatPage.onMessageClick(event,${m.id})">
+            ${this.selectCheckboxHTML(m)}
             ${avatarSlot}
             <div class="chat-msg-bubble" oncontextmenu="ChatPage.showMessageMenu(event,${m.id})">
                 ${forwardedBlock}
                 ${senderLabel}
                 ${replyBlock}
                 ${this.messageBodyHTML(m)}
+                ${this.linkPreviewHTML(m)}
                 ${attachments}
                 <div class="chat-msg-time">${editedLabel} ${UI.formatDate(m.created_at)} ${this.statusTickHTML(m, mine)}</div>
                 ${this.reactionsBarHTML(m)}
@@ -655,14 +866,59 @@ const ChatPage = {
         });
     },
 
+    // Strips trailing punctuation (and HTML-entity-encoded punctuation, since
+    // this runs on already-escaped text) off a matched URL one token at a
+    // time — except a trailing ')' is left alone once the URL has at least
+    // as many '(' as ')', since plenty of real URLs legitimately end in a
+    // closing paren (Wikipedia article slugs like .../wiki/Foo_(bar), among
+    // others); blindly stripping every trailing ')' would truncate exactly
+    // those into a broken link. Mirrors extractFirstURL/trimTrailingPunctuation
+    // in internal/api/linkpreview.go, so a message's link preview always
+    // targets the same URL its rendered <a> actually points to.
     linkifyEscaped(escapedText) {
         return escapedText.replace(/(https?:\/\/[^\s<]+)/g, (url) => {
             let trail = '';
-            const mtrail = url.match(/([)\].,!?;:'"]+|&quot;|&#39;|&gt;|&lt;|&amp;)$/);
-            if (mtrail) { trail = mtrail[0]; url = url.slice(0, url.length - trail.length); }
+            for (;;) {
+                const entity = url.match(/(&quot;|&#39;|&gt;|&lt;|&amp;)$/);
+                if (entity) { trail = entity[0] + trail; url = url.slice(0, -entity[0].length); continue; }
+                const last = url.slice(-1);
+                if (!last) break;
+                if (last === ')') {
+                    const opens = (url.match(/\(/g) || []).length;
+                    const closes = (url.match(/\)/g) || []).length;
+                    if (opens >= closes) break;
+                    trail = last + trail; url = url.slice(0, -1); continue;
+                }
+                if ('].,!?;:\'"'.indexOf(last) === -1) break;
+                trail = last + trail; url = url.slice(0, -1);
+            }
             if (!url) return trail;
             return `<a href="${url}" target="_blank" rel="noopener noreferrer nofollow">${url}</a>${trail}`;
         });
+    },
+
+    // Link preview card — resolved asynchronously server-side (see
+    // internal/api/linkpreview.go) and arrives either already on the message
+    // (loaded from history) or a moment later via the message.link_preview
+    // WS event (see _bindSocketListeners). p.url comes from the server,
+    // already validated http(s) there, but is still escaped here like any
+    // other value going into an attribute.
+    linkPreviewHTML(m) {
+        const p = m.link_preview;
+        if (!p) return '';
+        const img = p.has_image ? `<div class="chat-link-preview-image"><img src="${API.chat.linkPreviewImageURL(m.id)}" alt="" loading="lazy"></div>` : '';
+        return `<a class="chat-link-preview" href="${UI.esc(p.url)}" target="_blank" rel="noopener noreferrer nofollow">
+            ${img}
+            <div class="chat-link-preview-body">
+                <div class="chat-link-preview-title">${UI.esc(p.title)}</div>
+                ${p.description ? `<div class="chat-link-preview-desc">${UI.esc(p.description)}</div>` : ''}
+                <div class="chat-link-preview-url">${UI.esc(this.hostFromURL(p.url))}</div>
+            </div>
+        </a>`;
+    },
+
+    hostFromURL(u) {
+        try { return new URL(u).hostname; } catch { return u; }
     },
 
     // The reaction chips shown under a message. Each chip is one emoji plus
@@ -751,8 +1007,11 @@ const ChatPage = {
         </a>`;
     },
 
-    openImageLightbox(url, name) {
-        UI.showModal(name || '', `<img src="${url}" alt="" class="chat-lightbox-image">`,
+    openImageLightbox(url, name, isVideo) {
+        const media = isVideo
+            ? `<video src="${url}" controls autoplay class="chat-lightbox-image"></video>`
+            : `<img src="${url}" alt="" class="chat-lightbox-image">`;
+        UI.showModal(name || '', media,
             `<a class="btn btn-ghost" href="${url}" download="${UI.esc(name || '')}">${I18N.t('files.action_download')}</a>
              <button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.close')}</button>`);
     },
@@ -1321,6 +1580,7 @@ const ChatPage = {
             items.push({ action: 'copy', label: I18N.t('chat.copy'), icon: '📋', handler: () => this.copyMessageText(m.body) });
         }
         items.push({ action: 'forward', label: I18N.t('chat.forward'), icon: '↪️', handler: () => this.showForwardModal(id) });
+        items.push({ action: 'select', label: I18N.t('chat.select_message'), icon: '☑️', handler: () => this.enterSelectMode(id) });
         const cv = this._activeConversation;
         let canPin = true;
         if (cv && cv.type === 'group') {
@@ -1389,8 +1649,10 @@ const ChatPage = {
 
     /* ── Forward ── */
 
-    showForwardModal(messageId) {
-        this._forwardMessageId = messageId;
+    // messageIdOrIds is a single message id (per-message "Forward" menu
+    // item) or an array of ids (bulk forward from multi-select).
+    showForwardModal(messageIdOrIds) {
+        this._forwardMessageIds = Array.isArray(messageIdOrIds) ? messageIdOrIds : [messageIdOrIds];
         this._forwardSelected = new Set();
         const list = this._conversations.map(cv => `
             <label class="chat-forward-item">
@@ -1416,10 +1678,15 @@ const ChatPage = {
         }
         const caption = document.getElementById('chat-forward-caption')?.value.trim() || '';
         try {
-            await API.chat.forward(this._forwardMessageId, Array.from(this._forwardSelected), caption);
+            if (this._forwardMessageIds.length > 1) {
+                await API.chat.forwardBulk(this._forwardMessageIds, Array.from(this._forwardSelected), caption);
+            } else {
+                await API.chat.forward(this._forwardMessageIds[0], Array.from(this._forwardSelected), caption);
+            }
             UI.closeModal();
             UI.toast(I18N.t('chat.forwarded'), 'success');
             this.loadConversations();
+            if (this._selectMode) this.exitSelectMode();
         } catch (e) { UI.toast(e.message, 'error'); }
     },
 
@@ -1705,6 +1972,18 @@ const ChatPage = {
                 if (m) { m.deleted_at = new Date().toISOString(); m.body = ''; m.attachments = []; m.reactions = []; this.replaceMessage(m); }
             }
         });
+        // Bulk delete-for-everyone from another tab/device, or from another
+        // participant — mirrors message.deleted's tombstoning, just for
+        // several messages at once.
+        ChatSocket.on('message.bulk_deleted', (data) => {
+            if (App.currentPage !== 'chat' || data.conversation_id !== this._activeId) return;
+            const ids = new Set(data.message_ids || []);
+            this._messages.forEach(m => {
+                if (!ids.has(m.id) || m.deleted_at) return;
+                m.deleted_at = new Date().toISOString(); m.body = ''; m.attachments = []; m.reactions = [];
+            });
+            this.renderMessages();
+        });
         ChatSocket.on('message.edited', (data) => {
             if (App.currentPage !== 'chat') return;
             if (data.conversation_id === this._activeId) {
@@ -1717,6 +1996,14 @@ const ChatPage = {
                     this.replaceMessage(data.message);
                 }
             }
+        });
+        // A link preview finished unfurling server-side, some moments after
+        // the message itself landed — patch it onto the already-rendered
+        // bubble.
+        ChatSocket.on('message.link_preview', (data) => {
+            if (App.currentPage !== 'chat' || data.conversation_id !== this._activeId) return;
+            const m = this._messages.find(x => x.id === data.message_id);
+            if (m) { m.link_preview = data.preview; this.replaceMessage(m); }
         });
         ChatSocket.on('message.reaction', (data) => {
             if (App.currentPage !== 'chat' || data.conversation_id !== this._activeId) return;

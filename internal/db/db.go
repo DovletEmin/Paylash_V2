@@ -354,6 +354,28 @@ func (d *DB) Migrate() error {
 			PRIMARY KEY (blocker_id, blocked_id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_blocked_users_blocked ON blocked_users(blocked_id)`,
+
+		// Link preview cache: unfurled Open Graph metadata for a URL, keyed by
+		// the URL itself so the same link shared in many messages (or many
+		// conversations) is only ever fetched once. image_key stores the
+		// downloaded preview image inside storage.ChatAttachmentsBucket rather
+		// than the remote image URL — same rule as every other image in this
+		// app (avatars, attachments): the client is never pointed at a raw
+		// third-party URL, both to avoid mixed-content/CSP issues and so
+		// rendering a preview doesn't leak every viewer's IP to the linked
+		// site on each render. See internal/api/linkpreview.go.
+		`CREATE TABLE IF NOT EXISTS link_previews (
+			url         TEXT PRIMARY KEY,
+			title       VARCHAR(300) NOT NULL DEFAULT '',
+			description VARCHAR(500) NOT NULL DEFAULT '',
+			image_key   VARCHAR(500) NOT NULL DEFAULT '',
+			fetched_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		// NULL until the async unfurl (see maybeUnfurlLink) resolves, or
+		// forever if the message has no URL or nothing came back worth
+		// showing. ON DELETE SET NULL: a cache row is never load-bearing for
+		// the message row that references it.
+		`ALTER TABLE messages ADD COLUMN IF NOT EXISTS link_preview_url TEXT REFERENCES link_previews(url) ON DELETE SET NULL`,
 	}
 
 	for _, m := range migrations {

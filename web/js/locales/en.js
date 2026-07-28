@@ -309,6 +309,16 @@ window.PAYLASH_LOCALE_EN = {
     'chat.voice_not_supported': "Voice messages aren't supported in this browser",
     'chat.mic_permission_denied': 'Microphone access was denied',
     'chat.forward_caption_placeholder': 'Add a caption (optional)…',
+    'chat.media_gallery': 'Shared media',
+    'chat.gallery_media': 'Media',
+    'chat.gallery_files': 'Files',
+    'chat.gallery_empty': 'Nothing shared here yet',
+    'chat.select_message': 'Select',
+    'chat.select_messages': 'Select messages',
+    'chat.selected_count': { other: '{count} selected' },
+    'chat.bulk_delete_me_confirm': { other: "Delete {count} messages for you? They'll disappear from your view only." },
+    'chat.bulk_delete_everyone_confirm': { other: 'Delete {count} messages for everyone? Only the ones you sent will actually be removed for everyone.' },
+    'chat.bulk_delete_partial': '{deleted} of {total} messages deleted — the rest weren’t yours to delete for everyone.',
 
     // shares page + share modal
     'shares.tab_with_me': 'Shared with me',

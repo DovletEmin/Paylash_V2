@@ -623,7 +623,8 @@ func (d *DB) CreateMessage(conversationID, senderID int, body, kind string, repl
 const messageViewCols = `m.id, m.conversation_id, m.sender_id, m.body, m.kind, m.edited_at, m.reply_to_id, m.forwarded_from_name, m.deleted_at, m.created_at,
 	COALESCE(u.display_name, u.username, ''), COALESCE(u.avatar_url, ''),
 	COALESCE(c.type, ''), other_read.min_read_at,
-	rm.id, COALESCE(ru.display_name, ru.username, ''), COALESCE(rm.body, ''), COALESCE(rm.kind, '')`
+	rm.id, COALESCE(ru.display_name, ru.username, ''), COALESCE(rm.body, ''), COALESCE(rm.kind, ''),
+	m.link_preview_url, COALESCE(lp.title, ''), COALESCE(lp.description, ''), COALESCE(lp.image_key, '')`
 
 const messageViewJoins = `FROM messages m
 	LEFT JOIN users u ON u.id = m.sender_id
@@ -634,7 +635,8 @@ const messageViewJoins = `FROM messages m
 		WHERE cp.conversation_id = m.conversation_id AND cp.user_id != m.sender_id
 	) other_read ON true
 	LEFT JOIN messages rm ON rm.id = m.reply_to_id
-	LEFT JOIN users ru ON ru.id = rm.sender_id`
+	LEFT JOIN users ru ON ru.id = rm.sender_id
+	LEFT JOIN link_previews lp ON lp.url = m.link_preview_url`
 
 // scanner is satisfied by both *sql.Row and *sql.Rows — lets GetMessageView
 // and ListMessages share one Scan-and-assemble routine for messageViewCols.
@@ -648,11 +650,14 @@ func scanMessageView(row scanner) (*models.MessageView, error) {
 	var otherRead sql.NullTime
 	var replyID sql.NullInt64
 	var replySender, replyBody, replyKind string
+	var linkURL sql.NullString
+	var lpTitle, lpDescription, lpImageKey string
 	if err := row.Scan(
 		&mv.ID, &mv.ConversationID, &mv.SenderID, &mv.Body, &mv.Kind, &mv.EditedAt, &mv.ReplyToID, &mv.ForwardedFromName, &mv.DeletedAt, &mv.CreatedAt,
 		&mv.SenderName, &mv.SenderAvatar,
 		&convType, &otherRead,
 		&replyID, &replySender, &replyBody, &replyKind,
+		&linkURL, &lpTitle, &lpDescription, &lpImageKey,
 	); err != nil {
 		return nil, err
 	}
@@ -665,6 +670,13 @@ func scanMessageView(row scanner) (*models.MessageView, error) {
 	}
 	if replyID.Valid {
 		mv.ReplyTo = &models.MessageReplyPreview{ID: int(replyID.Int64), SenderName: replySender, Body: replyBody, Kind: replyKind}
+	}
+	// A row only exists once the async fetch actually resolved something
+	// worth showing (see UpsertLinkPreview) — link_preview_url can be set
+	// while the lp join is still pending (title empty), which the client
+	// should treat the same as "no preview yet".
+	if linkURL.Valid && lpTitle != "" {
+		mv.LinkPreview = &models.LinkPreview{URL: linkURL.String, Title: lpTitle, Description: lpDescription, HasImage: lpImageKey != ""}
 	}
 	return mv, nil
 }
@@ -1070,6 +1082,108 @@ func (d *DB) ListReactionGroups(messageID int) ([]models.MessageReactionGroup, e
 	}
 	defer rows.Close()
 	return groupReactionRows(rows)
+}
+
+// ListConversationMedia backs the shared-media gallery ("Media" / "Files"
+// tabs in group/DM info): attachments belonging to conversationID, newest
+// first, keyset-paginated by attachment id exactly like ListMessages'
+// history scrolling. mediaOnly=true returns images/videos; false returns
+// everything else (documents, voice notes, plain audio). Only attachments on
+// a claimed (message_id set), non-deleted, not-hidden-for-requesterID
+// message are visible — the same rule ListMessages already enforces for
+// messages themselves.
+func (d *DB) ListConversationMedia(conversationID, requesterID int, mediaOnly bool, beforeID, limit int) ([]models.MessageAttachment, error) {
+	typeFilter := `(a.content_type LIKE 'image/%' OR a.content_type LIKE 'video/%')`
+	if !mediaOnly {
+		typeFilter = `NOT ` + typeFilter
+	}
+	base := `SELECT a.id, a.message_id, a.conversation_id, a.uploaded_by, a.file_name, a.size_bytes, a.content_type, a.created_at
+		FROM message_attachments a
+		JOIN messages m ON m.id = a.message_id
+		LEFT JOIN message_hidden_for hf ON hf.message_id = m.id AND hf.user_id = $2
+		WHERE a.conversation_id = $1 AND m.deleted_at IS NULL AND hf.message_id IS NULL AND ` + typeFilter
+
+	var rows *sql.Rows
+	var err error
+	if beforeID > 0 {
+		rows, err = d.Query(base+` AND a.id < $3 ORDER BY a.id DESC LIMIT $4`, conversationID, requesterID, beforeID, limit)
+	} else {
+		rows, err = d.Query(base+` ORDER BY a.id DESC LIMIT $3`, conversationID, requesterID, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []models.MessageAttachment
+	for rows.Next() {
+		var a models.MessageAttachment
+		if err := rows.Scan(&a.ID, &a.MessageID, &a.ConversationID, &a.UploadedBy, &a.FileName, &a.SizeBytes, &a.ContentType, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, a)
+	}
+	return list, rows.Err()
+}
+
+// GetLinkPreviewCache returns url's cached preview if it was fetched within
+// maxAge, or nil (with no error) on a cache miss or stale entry — the
+// caller (fetchLinkPreview) re-fetches from scratch in either case.
+func (d *DB) GetLinkPreviewCache(url string, maxAge time.Duration) (*models.LinkPreview, error) {
+	var title, description, imageKey string
+	var fetchedAt time.Time
+	err := d.QueryRow(
+		`SELECT title, description, image_key, fetched_at FROM link_previews WHERE url = $1`, url,
+	).Scan(&title, &description, &imageKey, &fetchedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if time.Since(fetchedAt) > maxAge {
+		return nil, nil
+	}
+	return &models.LinkPreview{URL: url, Title: title, Description: description, HasImage: imageKey != ""}, nil
+}
+
+// UpsertLinkPreview caches (or refreshes) one URL's unfurled metadata —
+// shared across every message that URL ever appears in.
+func (d *DB) UpsertLinkPreview(url, title, description, imageKey string) error {
+	_, err := d.Exec(
+		`INSERT INTO link_previews (url, title, description, image_key, fetched_at) VALUES ($1, $2, $3, $4, NOW())
+		 ON CONFLICT (url) DO UPDATE SET title = $2, description = $3, image_key = $4, fetched_at = NOW()`,
+		url, title, description, imageKey,
+	)
+	return err
+}
+
+// SetMessageLinkPreview attaches an already-cached url to messageID — called
+// once an async fetch (or a cache hit) resolves.
+func (d *DB) SetMessageLinkPreview(messageID int, url string) error {
+	_, err := d.Exec(`UPDATE messages SET link_preview_url = $1 WHERE id = $2`, url, messageID)
+	return err
+}
+
+// ClearMessageLinkPreview detaches whatever link preview messageID has —
+// used when an edit removes the URL that produced it.
+func (d *DB) ClearMessageLinkPreview(messageID int) error {
+	_, err := d.Exec(`UPDATE messages SET link_preview_url = NULL WHERE id = $1`, messageID)
+	return err
+}
+
+// GetLinkPreviewImageKey resolves the MinIO object key for a message's
+// cached link-preview image ("" if the message has no preview, or its
+// preview has no image) — backs the image-serving endpoint.
+func (d *DB) GetLinkPreviewImageKey(messageID int) (string, error) {
+	var key string
+	err := d.QueryRow(
+		`SELECT COALESCE(lp.image_key, '') FROM messages m LEFT JOIN link_previews lp ON lp.url = m.link_preview_url WHERE m.id = $1`,
+		messageID,
+	).Scan(&key)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return key, err
 }
 
 // listReactionGroupsForMessages batches ListReactionGroups across a page of

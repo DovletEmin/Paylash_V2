@@ -309,6 +309,16 @@ window.PAYLASH_LOCALE_TR = {
     'chat.voice_not_supported': 'Bu tarayıcıda sesli mesaj desteklenmiyor',
     'chat.mic_permission_denied': 'Mikrofon erişimi reddedildi',
     'chat.forward_caption_placeholder': 'Açıklama ekle (isteğe bağlı)…',
+    'chat.media_gallery': 'Ortak medya',
+    'chat.gallery_media': 'Medya',
+    'chat.gallery_files': 'Dosyalar',
+    'chat.gallery_empty': 'Burada henüz bir şey yok',
+    'chat.select_message': 'Seç',
+    'chat.select_messages': 'Mesajları seç',
+    'chat.selected_count': { other: '{count} seçildi' },
+    'chat.bulk_delete_me_confirm': { other: '{count} mesaj sizin görünümünüzden silinsin mi? Sadece sizin tarafınızdan kaybolur.' },
+    'chat.bulk_delete_everyone_confirm': { other: '{count} mesaj herkesten silinsin mi? Yalnızca sizin gönderdikleriniz gerçekten herkesten silinecek.' },
+    'chat.bulk_delete_partial': '{total} mesajdan {deleted} tanesi silindi — geri kalanı size ait olmadığından herkesten silinemedi.',
 
     // paylaşımlar sayfası + paylaşım penceresi
     'shares.tab_with_me': 'Benimle paylaşılanlar',

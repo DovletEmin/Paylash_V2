@@ -563,6 +563,11 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	// Web push reaches participants whose app is fully closed (no live socket)
 	// — fire-and-forget so it never delays the response or fails the send.
 	go h.pushChatMessage(convID, user.ID, msg)
+
+	// Link preview: best-effort, async — see maybeUnfurlLink.
+	if kind == "text" {
+		h.maybeUnfurlLink(convID, msg.ID, body)
+	}
 }
 
 // EditMessage updates a text message's body — sender-only, text-kind-only,
@@ -617,6 +622,18 @@ func (h *Handler) EditMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If the edited text no longer contains a URL, drop any existing preview
+	// synchronously (before EditMessage re-fetches the view below) so the
+	// broadcast this handler sends never shows a stale preview for a link
+	// that's no longer even in the message. A message that now points at a
+	// DIFFERENT url just gets refreshed asynchronously like a fresh send —
+	// the old preview shows briefly and then flips, same eventually-
+	// consistent UX a new message's preview already has.
+	newURL := extractFirstURL(body)
+	if newURL == "" {
+		_ = h.db.ClearMessageLinkPreview(msgID)
+	}
+
 	updated, err := h.db.EditMessage(msgID, body)
 	if err != nil || updated == nil {
 		writeError(w, http.StatusInternalServerError, "üýtgedip bolmady")
@@ -629,6 +646,10 @@ func (h *Handler) EditMessage(w http.ResponseWriter, r *http.Request) {
 		h.chatHub.broadcast(participantIDs(participants), map[string]any{
 			"type": "message.edited", "conversation_id": convID, "message": updated,
 		})
+	}
+
+	if newURL != "" {
+		go h.fetchLinkPreview(convID, msgID, newURL)
 	}
 }
 
@@ -719,6 +740,99 @@ func (h *Handler) ForwardMessage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+// ForwardMessagesBulk forwards several messages (in the given order) into
+// one or more target conversations in a single request — the multi-select
+// counterpart to ForwardMessage, which only ever handles one source
+// message. Same permission shape: the caller must be a participant of every
+// source message's own conversation and of every target conversation, and a
+// single optional caption rides along as its own follow-up message in each
+// target, sent once after all forwarded messages rather than once per
+// message.
+func (h *Handler) ForwardMessagesBulk(w http.ResponseWriter, r *http.Request) {
+	user := authutil.GetUser(r)
+	var req struct {
+		MessageIDs      []int  `json:"message_ids"`
+		ConversationIDs []int  `json:"conversation_ids"`
+		Caption         string `json:"caption"`
+	}
+	if err := readJSON(r, &req); err != nil || len(req.MessageIDs) == 0 || len(req.ConversationIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "nädogry maglumat")
+		return
+	}
+	if len(req.MessageIDs) > maxBulkMessageIDs {
+		writeError(w, http.StatusBadRequest, "gaty köp habar saýlandy")
+		return
+	}
+	if len(req.ConversationIDs) > 20 {
+		writeError(w, http.StatusBadRequest, "gaty köp sözleşme saýlandy")
+		return
+	}
+	caption := strings.TrimSpace(req.Caption)
+	if len(caption) > maxMessageLength {
+		writeError(w, http.StatusBadRequest, "teswir gaty uzyn")
+		return
+	}
+	for _, mid := range req.MessageIDs {
+		msg, err := h.db.GetMessage(mid)
+		if err != nil || msg == nil || msg.DeletedAt != nil {
+			writeError(w, http.StatusNotFound, "habar tapylmady")
+			return
+		}
+		if ok, err := h.db.IsParticipant(msg.ConversationID, user.ID); err != nil || !ok {
+			writeError(w, http.StatusForbidden, "rugsat ýok")
+			return
+		}
+	}
+	for _, cid := range req.ConversationIDs {
+		if ok, err := h.db.IsParticipant(cid, user.ID); err != nil || !ok {
+			writeError(w, http.StatusForbidden, "rugsat ýok")
+			return
+		}
+	}
+
+	userKey := strconv.Itoa(user.ID)
+	if h.messageLimiter.blocked(userKey) {
+		writeError(w, http.StatusTooManyRequests, "köp synanyşyk boldy, birazdan gaýtadan synanyşyň")
+		return
+	}
+	h.messageLimiter.record(userKey)
+
+	for _, mid := range req.MessageIDs {
+		forwarded, err := h.db.ForwardMessage(mid, user.ID, req.ConversationIDs)
+		if err != nil {
+			continue
+		}
+		for i, cid := range req.ConversationIDs {
+			if i >= len(forwarded) {
+				break
+			}
+			if participants, err := h.db.ListParticipants(cid); err == nil {
+				h.chatHub.broadcast(participantIDs(participants), map[string]any{
+					"type": "message.new", "conversation_id": cid, "message": forwarded[i],
+				})
+			}
+			go h.pushChatMessage(cid, user.ID, &forwarded[i])
+		}
+	}
+
+	if caption != "" {
+		for _, cid := range req.ConversationIDs {
+			capMsg, err := h.db.CreateMessage(cid, user.ID, caption, "text", nil, nil)
+			if err != nil {
+				continue
+			}
+			if participants, err := h.db.ListParticipants(cid); err == nil {
+				h.chatHub.broadcast(participantIDs(participants), map[string]any{
+					"type": "message.new", "conversation_id": cid, "message": capMsg,
+				})
+			}
+			go h.pushChatMessage(cid, user.ID, capMsg)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // DeleteMessage supports two modes via ?for=me|everyone (default
@@ -829,6 +943,125 @@ func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// maxBulkMessageIDs caps how many message ids one bulk delete/forward
+// request can touch — generous for a real multi-select (the UI lets someone
+// select an entire loaded page of history), a brake on a scripted client
+// trying to push the whole conversation through one request.
+const maxBulkMessageIDs = 200
+
+// BulkDeleteMessages deletes several messages from one conversation in a
+// single request — the multi-select counterpart to DeleteMessage, with the
+// same two ?for=me|everyone modes (one mode for the whole batch, matching
+// the single-message endpoint's own query-param shape) applied
+// independently per message: for=everyone silently skips any message the
+// caller didn't send rather than failing the whole batch, so selecting a
+// mixed batch (some your own, some not) still deletes everything it can.
+func (h *Handler) BulkDeleteMessages(w http.ResponseWriter, r *http.Request) {
+	convID, err := conversationIDFromPath(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry ID")
+		return
+	}
+	user, ok := requireParticipant(h, w, r, convID)
+	if !ok {
+		return
+	}
+	var req struct {
+		MessageIDs []int  `json:"message_ids"`
+		For        string `json:"for"`
+	}
+	if err := readJSON(r, &req); err != nil || len(req.MessageIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "nädogry maglumat")
+		return
+	}
+	if len(req.MessageIDs) > maxBulkMessageIDs {
+		writeError(w, http.StatusBadRequest, "gaty köp habar saýlandy")
+		return
+	}
+	forWhom := req.For
+	if forWhom == "" {
+		forWhom = "everyone"
+	}
+	if forWhom != "me" && forWhom != "everyone" {
+		writeError(w, http.StatusBadRequest, "nädogry parametr")
+		return
+	}
+
+	var deletedIDs []int
+	for _, msgID := range req.MessageIDs {
+		msg, err := h.db.GetMessage(msgID)
+		if err != nil || msg == nil || msg.ConversationID != convID || msg.DeletedAt != nil {
+			continue
+		}
+		if forWhom == "me" {
+			if err := h.db.HideMessageForUser(msgID, user.ID); err == nil {
+				deletedIDs = append(deletedIDs, msgID)
+			}
+			continue
+		}
+		if msg.SenderID == nil || *msg.SenderID != user.ID {
+			continue
+		}
+		if err := h.db.SoftDeleteMessage(msgID); err != nil {
+			continue
+		}
+		if attachments, err := h.db.ListMessageAttachments(msgID); err == nil {
+			for _, a := range attachments {
+				// Same delete-row-then-check-refcount ordering as DeleteMessage
+				// — forwarding copies attachment rows onto the SAME minio_key,
+				// so the underlying object is only removed once nothing else
+				// references it.
+				if err := h.db.DeleteChatAttachment(a.ID); err != nil {
+					log.Printf("bulk delete: chat attachment row %d: %v", a.ID, err)
+					continue
+				}
+				remaining, err := h.db.CountAttachmentsByMinioKey(a.MinioKey)
+				if err != nil {
+					log.Printf("bulk delete: count attachment refs %s: %v", a.MinioKey, err)
+					continue
+				}
+				if remaining == 0 {
+					if err := h.minio.Delete(r.Context(), storage.ChatAttachmentsBucket, a.MinioKey); err != nil {
+						log.Printf("bulk delete: chat attachment object %s: %v", a.MinioKey, err)
+					}
+				}
+			}
+		}
+		deletedIDs = append(deletedIDs, msgID)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"deleted_ids": deletedIDs})
+
+	if forWhom != "everyone" || len(deletedIDs) == 0 {
+		return
+	}
+	participants, err := h.db.ListParticipants(convID)
+	if err != nil {
+		return
+	}
+	h.chatHub.broadcast(participantIDs(participants), map[string]any{
+		"type": "message.bulk_deleted", "conversation_id": convID, "message_ids": deletedIDs,
+	})
+
+	// Mirror DeleteMessage's pinned-message cleanup: if the pinned message
+	// was among the ones just deleted, unpin it too.
+	conv, err := h.db.GetConversation(convID)
+	if err != nil || conv == nil || conv.PinnedMessageID == nil {
+		return
+	}
+	for _, id := range deletedIDs {
+		if id != *conv.PinnedMessageID {
+			continue
+		}
+		if cleared, err := h.db.ClearPinnedMessageIfEquals(convID, id); err == nil && cleared {
+			h.chatHub.broadcast(participantIDs(participants), map[string]any{
+				"type": "conversation.pinned", "conversation_id": convID, "message_id": nil,
+			})
+		}
+		break
+	}
 }
 
 // ToggleReaction adds or removes the caller's emoji reaction on a message.
@@ -982,6 +1215,49 @@ func (h *Handler) DownloadChatAttachment(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Type", att.ContentType)
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, att.FileName))
 	http.ServeContent(w, r, att.FileName, att.CreatedAt, obj)
+}
+
+// maxGalleryLimit caps how many attachments one gallery page can return —
+// generous for a scrolling grid, a brake on a scripted client trying to pull
+// an entire conversation's media in one request.
+const maxGalleryLimit = 120
+
+// ListConversationMedia backs the "Media"/"Files" tabs of a conversation's
+// shared-media gallery (see group/DM info) — keyset-paginated by attachment
+// id, same shape as ListMessages' history scrolling. ?type=files switches to
+// the non-image/video tab; anything else (including the default) is Media.
+func (h *Handler) ListConversationMedia(w http.ResponseWriter, r *http.Request) {
+	convID, err := conversationIDFromPath(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry ID")
+		return
+	}
+	user, ok := requireParticipant(h, w, r, convID)
+	if !ok {
+		return
+	}
+	mediaOnly := r.URL.Query().Get("type") != "files"
+	beforeID := 0
+	if v := r.URL.Query().Get("before_id"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			beforeID = n
+		}
+	}
+	limit := 60
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= maxGalleryLimit {
+			limit = n
+		}
+	}
+	list, err := h.db.ListConversationMedia(convID, user.ID, mediaOnly, beforeID, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk")
+		return
+	}
+	if list == nil {
+		list = []models.MessageAttachment{}
+	}
+	writeJSON(w, http.StatusOK, list)
 }
 
 func (h *Handler) MarkConversationRead(w http.ResponseWriter, r *http.Request) {
@@ -1250,6 +1526,39 @@ func (h *Handler) ServeGroupAvatar(w http.ResponseWriter, r *http.Request) {
 	defer obj.Close()
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	w.Header().Set("Content-Type", mimeFromExt(filepath.Ext(conv.AvatarURL)))
+	io.Copy(w, obj)
+}
+
+// ServeLinkPreviewImage streams a message's cached link-preview image (see
+// internal/api/linkpreview.go) — gated the same as any other chat content:
+// the requester must be a participant of the message's conversation.
+func (h *Handler) ServeLinkPreviewImage(w http.ResponseWriter, r *http.Request) {
+	msgID, err := strconv.Atoi(r.PathValue("messageId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry habar ID")
+		return
+	}
+	msg, err := h.db.GetMessage(msgID)
+	if err != nil || msg == nil {
+		writeError(w, http.StatusNotFound, "tapylmady")
+		return
+	}
+	if _, ok := requireParticipant(h, w, r, msg.ConversationID); !ok {
+		return
+	}
+	key, err := h.db.GetLinkPreviewImageKey(msgID)
+	if err != nil || key == "" {
+		writeError(w, http.StatusNotFound, "surat tapylmady")
+		return
+	}
+	obj, err := h.minio.Download(r.Context(), storage.ChatAttachmentsBucket, key)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "surat tapylmady")
+		return
+	}
+	defer obj.Close()
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Content-Type", mimeFromExt(filepath.Ext(key)))
 	io.Copy(w, obj)
 }
 

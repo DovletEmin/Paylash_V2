@@ -144,6 +144,10 @@ func (s *Server) routes(webFS embed.FS) {
 	s.mux.Handle("POST /api/chat/users/{id}/block", auth(http.HandlerFunc(h.BlockUser)))
 	s.mux.Handle("DELETE /api/chat/users/{id}/block", auth(http.HandlerFunc(h.UnblockUser)))
 	s.mux.Handle("GET /api/chat/blocked-users", auth(http.HandlerFunc(h.ListBlockedUsers)))
+	s.mux.Handle("GET /api/chat/conversations/{id}/media", auth(http.HandlerFunc(h.ListConversationMedia)))
+	s.mux.Handle("POST /api/chat/conversations/{id}/messages/bulk-delete", auth(http.HandlerFunc(h.BulkDeleteMessages)))
+	s.mux.Handle("POST /api/chat/messages/forward-bulk", auth(http.HandlerFunc(h.ForwardMessagesBulk)))
+	s.mux.Handle("GET /api/chat/messages/{messageId}/link-preview-image", auth(http.HandlerFunc(h.ServeLinkPreviewImage)))
 
 	// Trash (soft-delete)
 	s.mux.Handle("GET /api/trash", auth(http.HandlerFunc(h.ListTrash)))

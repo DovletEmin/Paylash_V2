@@ -411,6 +411,22 @@ type MessageView struct {
 	// broadcast, which every participant would receive. Backs group "read by
 	// N of M" receipts; for DMs the plain Status field is used instead.
 	ReadUserIDs []int `json:"read_user_ids,omitempty"`
+	// LinkPreview is the unfurled preview of the first URL in this message's
+	// body, if any was found and resolved yet. See LinkPreview.
+	LinkPreview *LinkPreview `json:"link_preview,omitempty"`
+}
+
+// LinkPreview is unfurled Open Graph metadata for the first URL found in a
+// text message, resolved asynchronously after send/edit (see
+// internal/api/linkpreview.go) — absent from MessageView until then, or
+// forever if the fetch found nothing worth showing. HasImage tells the
+// client whether to point an <img> at the message's link-preview-image
+// endpoint; the real image (if any) is never sent inline here.
+type LinkPreview struct {
+	URL         string `json:"url"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+	HasImage    bool   `json:"has_image"`
 }
 
 // MessageReactionGroup is one emoji and everyone who reacted with it on a

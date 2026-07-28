@@ -249,6 +249,19 @@ const API = {
         blockUser(userId) { return API._request('POST', `/api/chat/users/${userId}/block`); },
         unblockUser(userId) { return API._request('DELETE', `/api/chat/users/${userId}/block`); },
         listBlocked() { return API._request('GET', '/api/chat/blocked-users'); },
+        media(id, type, beforeId, limit) {
+            let url = `/api/chat/conversations/${id}/media?type=${type || 'media'}`;
+            if (beforeId) url += `&before_id=${beforeId}`;
+            if (limit) url += `&limit=${limit}`;
+            return API._request('GET', url);
+        },
+        bulkDelete(id, messageIds, forWhom) {
+            return API._request('POST', `/api/chat/conversations/${id}/messages/bulk-delete`, { message_ids: messageIds, for: forWhom || 'everyone' });
+        },
+        forwardBulk(messageIds, conversationIds, caption) {
+            return API._request('POST', '/api/chat/messages/forward-bulk', { message_ids: messageIds, conversation_ids: conversationIds, caption: caption || '' });
+        },
+        linkPreviewImageURL(messageId) { return `/api/chat/messages/${messageId}/link-preview-image`; },
         listMessages(id, beforeId, limit) {
             let url = `/api/chat/conversations/${id}/messages?limit=${limit || 50}`;
             if (beforeId) url += `&before_id=${beforeId}`;
