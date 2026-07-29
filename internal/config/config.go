@@ -2,7 +2,9 @@ package config
 
 import (
 	"os"
+	"paylash/internal/models"
 	"strconv"
+	"time"
 )
 
 type Config struct {
@@ -23,6 +25,11 @@ type Config struct {
 	CollaboraHealthURL string
 	BaseURL            string
 	AllowRegistration  bool
+	// SessionTTL is how long a normal login session lasts before it must be
+	// renewed — PAYLASH_SESSION_TTL_HOURS, in hours. Impersonation sessions
+	// stay a fixed, deliberately-shorter 2h regardless of this setting (see
+	// db.CreateImpersonationSession).
+	SessionTTL time.Duration
 }
 
 func Load() *Config {
@@ -47,6 +54,7 @@ func Load() *Config {
 		// an open registration endpoint on a LAN hands instant access to the
 		// company-wide "common" space to anyone who can reach the server.
 		AllowRegistration: getEnvBool("PAYLASH_ALLOW_REGISTRATION", true),
+		SessionTTL:        time.Duration(getEnvInt("PAYLASH_SESSION_TTL_HOURS", int(models.DefaultSessionTTL.Hours()))) * time.Hour,
 	}
 }
 

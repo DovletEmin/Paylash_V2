@@ -3,6 +3,8 @@ package main
 import (
 	"embed"
 	"log"
+	"log/slog"
+	"os"
 	"paylash/internal/config"
 	"paylash/internal/db"
 	"paylash/internal/janitor"
@@ -14,6 +16,14 @@ import (
 var webFS embed.FS
 
 func main() {
+	// Every access-log line (see server.LoggingMiddleware) goes through
+	// slog as structured JSON — one request_id-tagged object per line, easy
+	// to grep/parse/feed to a log aggregator. One-off startup/fatal
+	// messages below stay on the plain stdlib `log` package deliberately:
+	// they're human-read-once boot notices, not something worth
+	// structuring.
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+
 	cfg := config.Load()
 
 	// Connect to PostgreSQL

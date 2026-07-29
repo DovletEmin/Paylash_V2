@@ -24,10 +24,14 @@ const ImpersonatorKey contextKey = "impersonator"
 // Minimum username/password length, enforced identically wherever an
 // account gets a username or password: self-registration, admin-created
 // users, and CSV/XLSX bulk import — one shared rule instead of the same two
-// magic numbers (3 and 6) repeated at every call site.
+// magic numbers (3 and 8) repeated at every call site. Length over
+// complexity rules (no forced mixed-case/digit/symbol) follows current NIST
+// guidance (SP 800-63B) — arbitrary complexity requirements push people
+// toward predictable substitutions ("Password1!") without meaningfully
+// raising the search space a real attacker faces.
 const (
 	MinUsernameLen = 3
-	MinPasswordLen = 6
+	MinPasswordLen = 8
 )
 
 // ValidUsername reports whether username (after trimming whitespace) meets

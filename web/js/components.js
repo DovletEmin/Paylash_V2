@@ -128,6 +128,19 @@ const UI = {
             `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-danger" onclick="UI.${cbName}()">${confirmLabel}</button>`);
     },
 
+    // Disables btn for the duration of an async modal action fn() — the
+    // shared guard against a Save/Create/Rename button being double-
+    // submitted by an impatient double-click before the first request even
+    // resolves. Re-enables on failure (the modal stays open, so the button
+    // must work again); a success path typically closes the modal itself,
+    // which removes btn from the DOM and makes re-enabling moot.
+    async busyClick(btn, fn) {
+        if (!btn || btn.disabled) return;
+        btn.disabled = true;
+        try { await fn(); }
+        finally { if (document.body.contains(btn)) btn.disabled = false; }
+    },
+
     // Returns [x, y] to anchor a context menu at, from a click/contextmenu
     // event — falls back to the triggering element's own position when the
     // event was a keyboard-activated synthetic click (clientX/clientY are

@@ -256,6 +256,12 @@ const API = {
         blockUser(userId) { return API._request('POST', `/api/chat/users/${userId}/block`); },
         unblockUser(userId) { return API._request('DELETE', `/api/chat/users/${userId}/block`); },
         listBlocked() { return API._request('GET', '/api/chat/blocked-users'); },
+        reportMessage(conversationId, messageId, reason) {
+            return API._request('POST', `/api/chat/conversations/${conversationId}/messages/${messageId}/report`, { reason: reason || '' });
+        },
+        reportUser(conversationId, userId, reason) {
+            return API._request('POST', `/api/chat/conversations/${conversationId}/users/${userId}/report`, { reason: reason || '' });
+        },
         media(id, type, beforeId, limit) {
             let url = `/api/chat/conversations/${id}/media?type=${type || 'media'}`;
             if (beforeId) url += `&before_id=${beforeId}`;
@@ -269,9 +275,10 @@ const API = {
             return API._request('POST', '/api/chat/messages/forward-bulk', { message_ids: messageIds, conversation_ids: conversationIds, caption: caption || '' });
         },
         linkPreviewImageURL(messageId) { return `/api/chat/messages/${messageId}/link-preview-image`; },
-        listMessages(id, beforeId, limit) {
+        listMessages(id, beforeId, limit, afterId) {
             let url = `/api/chat/conversations/${id}/messages?limit=${limit || 50}`;
             if (beforeId) url += `&before_id=${beforeId}`;
+            if (afterId) url += `&after_id=${afterId}`;
             return API._request('GET', url);
         },
         send(id, body, attachmentIds, kind, replyToId) {
@@ -312,6 +319,11 @@ const API = {
         uploads: {
             list() { return API._request('GET', '/api/admin/uploads'); },
             abort(id) { return API._request('DELETE', `/api/admin/uploads/${id}`); },
+        },
+        chatReports: {
+            list(status) { return API._request('GET', `/api/admin/chat-reports?status=${status || 'open'}`); },
+            openCount() { return API._request('GET', '/api/admin/chat-reports/open-count'); },
+            resolve(id, action) { return API._request('POST', `/api/admin/chat-reports/${id}/resolve`, { action }); },
         },
         publicQuota: {
             get() { return API._request('GET', '/api/admin/public-quota'); },

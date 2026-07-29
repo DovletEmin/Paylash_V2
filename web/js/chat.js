@@ -33,7 +33,7 @@ const ChatPage = {
         faces: ['😀', '😂', '🥰', '😎', '😢', '😡', '😮', '🥳', '😴', '🤔'],
         gestures: ['👍', '👎', '👏', '🙌', '🤝', '🙏', '💪', '✌️', '👌', '🤞'],
         hearts: ['❤️', '💙', '💚', '💛', '💜', '🧡', '💔', '💯', '✨', '🔥'],
-        celebration: ['🎉', '🎊', '🎁', '🏆', '🥂', '🎈', '🌟', '⭐', '👏', '🍾'],
+        celebration: ['🎉', '🎊', '🎁', '🏆', '🥂', '🎈', '🌟', '⭐', '🍾'],
         studio: ['🏗️', '🏛️', '📐', '📏', '🧱', '🏠', '🖼️', '📁', '✏️', '🗺️'],
     },
 
@@ -91,6 +91,17 @@ const ChatPage = {
         if (this._activeId) await this.selectConversation(this._activeId);
     },
 
+    // Restores the open conversation from ?c= — called by App.initPage
+    // before render()/init() so refreshing mid-conversation, or a push
+    // notification's deep link (see App._handlePushHash), lands back on the
+    // same thread instead of the bare inbox. Absent param leaves whatever's
+    // already in memory untouched (harmless either way: on a real page load
+    // there's nothing there yet).
+    applyURLParams(params) {
+        const id = params ? parseInt(params.get('c'), 10) : NaN;
+        if (Number.isInteger(id) && id > 0) this._activeId = id;
+    },
+
     async _loadBlockedIds() {
         try {
             const list = await API.chat.listBlocked();
@@ -146,10 +157,28 @@ const ChatPage = {
         const [x, y] = UI.eventPos(ev);
         const items = [
             { action: 'pin', label: cv.pinned ? I18N.t('chat.unpin_chat') : I18N.t('chat.pin_chat'), icon: '📌', handler: () => this.setConvPrefs(id, { pinned: !cv.pinned }) },
-            { action: 'mute', label: cv.muted ? I18N.t('chat.unmute_chat') : I18N.t('chat.mute_chat'), icon: '🔕', handler: () => this.setConvPrefs(id, { muted: !cv.muted }) },
+            { action: 'mute', label: cv.muted ? I18N.t('chat.unmute_chat') : I18N.t('chat.mute_chat'), icon: '🔕', handler: () => cv.muted ? this.setConvPrefs(id, { muted: false }) : this.showMuteDurationModal(id) },
             { action: 'archive', label: cv.archived ? I18N.t('chat.unarchive_chat') : I18N.t('chat.archive_chat'), icon: '📥', handler: () => this.setConvPrefs(id, { archived: !cv.archived }) },
         ];
         UI.showContextMenu(x, y, items);
+    },
+
+    // Muting (not unmuting) offers a duration instead of instantly toggling
+    // — "forever" is still one tap away, but 1h/8h/1 week cover the much
+    // more common "quiet this down while I'm busy" case without the person
+    // having to remember to come back and unmute it.
+    showMuteDurationModal(id) {
+        const options = [
+            { minutes: 60, label: I18N.t('chat.mute_1h') },
+            { minutes: 480, label: I18N.t('chat.mute_8h') },
+            { minutes: 10080, label: I18N.t('chat.mute_1w') },
+            { minutes: 0, label: I18N.t('chat.mute_forever') },
+        ];
+        UI.showModal(I18N.t('chat.mute_chat'),
+            `<div class="chat-mute-options">${options.map(o =>
+                `<button type="button" class="btn btn-ghost chat-mute-option" onclick="ChatPage.setConvPrefs(${id},{muted:true,mute_minutes:${o.minutes}});UI.closeModal()">${UI.esc(o.label)}</button>`
+            ).join('')}</div>`,
+            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button>`);
     },
 
     // The "⋮" menu inside an open conversation's header — same mute/pin/
@@ -164,7 +193,7 @@ const ChatPage = {
         const [x, y] = UI.eventPos(ev);
         const items = [
             { action: 'pin', label: cv.pinned ? I18N.t('chat.unpin_chat') : I18N.t('chat.pin_chat'), icon: '📌', handler: () => this.setConvPrefs(this._activeId, { pinned: !cv.pinned }) },
-            { action: 'mute', label: cv.muted ? I18N.t('chat.unmute_chat') : I18N.t('chat.mute_chat'), icon: '🔕', handler: () => this.setConvPrefs(this._activeId, { muted: !cv.muted }) },
+            { action: 'mute', label: cv.muted ? I18N.t('chat.unmute_chat') : I18N.t('chat.mute_chat'), icon: '🔕', handler: () => cv.muted ? this.setConvPrefs(this._activeId, { muted: false }) : this.showMuteDurationModal(this._activeId) },
             { action: 'archive', label: cv.archived ? I18N.t('chat.unarchive_chat') : I18N.t('chat.archive_chat'), icon: '📥', handler: () => this.setConvPrefs(this._activeId, { archived: !cv.archived }) },
             { action: 'select', label: I18N.t('chat.select_messages'), icon: '☑️', handler: () => this.enterSelectMode() },
         ];
@@ -173,6 +202,10 @@ const ChatPage = {
             if (other) {
                 const blocked = this._blockedIds.has(other.user_id);
                 items.push({ divider: true });
+                items.push({
+                    action: 'report', label: I18N.t('chat.report_user'), icon: '🚩',
+                    handler: () => this.reportUser(other.user_id, other.full_name || other.username),
+                });
                 items.push({
                     action: 'block', label: blocked ? I18N.t('chat.unblock_user') : I18N.t('chat.block_user'), icon: '🚫', danger: !blocked,
                     handler: () => blocked ? this.unblockUser(other.user_id) : this.blockUser(other.user_id, other.full_name || other.username),
@@ -265,7 +298,10 @@ const ChatPage = {
         const avatar = `<span class="chat-avatar-wrap">${innerAvatar}${online ? '<span class="chat-presence-dot"></span>' : ''}</span>`;
         const preview = cv.last_message_body ? UI.esc(cv.last_message_body) : `<em>${I18N.t('chat.no_messages_yet')}</em>`;
         const badge = cv.unread_count > 0 ? `<span class="chat-unread-badge">${cv.unread_count > 99 ? '99+' : cv.unread_count}</span>` : '';
-        const flags = `${cv.pinned ? '<span class="chat-conv-flag" title="' + I18N.t('chat.pinned') + '">📌</span>' : ''}${cv.muted ? '<span class="chat-conv-flag" title="' + I18N.t('chat.muted') + '">🔕</span>' : ''}`;
+        const mutedTitle = cv.muted_until
+            ? I18N.t('chat.muted_until', { time: new Date(cv.muted_until).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) })
+            : I18N.t('chat.muted');
+        const flags = `${cv.pinned ? '<span class="chat-conv-flag" title="' + I18N.t('chat.pinned') + '">📌</span>' : ''}${cv.muted ? '<span class="chat-conv-flag" title="' + UI.esc(mutedTitle) + '">🔕</span>' : ''}`;
         return `<div class="chat-conv-item ${cv.id === this._activeId ? 'active' : ''}" onclick="ChatPage.selectConversation(${cv.id})" oncontextmenu="ChatPage.showConvListMenu(event,${cv.id})" role="button" tabindex="0" onkeydown="if(event.key==='Enter')ChatPage.selectConversation(${cv.id})">
             ${avatar}
             <div class="chat-conv-item-body">
@@ -375,7 +411,9 @@ const ChatPage = {
         // whichever thread happens to be open when the mic is released.
         if (this._recorder && this._recorder.state === 'recording') this._recorder.stop();
         this.closeMentionAutocomplete();
+        this.saveDraft(); // persist whatever's in the composer for the conversation we're LEAVING
         this._activeId = id;
+        if (App.currentPage === 'chat') App.updatePageURL({ c: id }, false);
         this._messages = [];
         this._oldestLoadedId = null;
         this._hasMoreHistory = true;
@@ -420,6 +458,11 @@ const ChatPage = {
         }
 
         this.renderThread();
+        const draft = localStorage.getItem('paylash_chat_draft_' + id);
+        if (draft) {
+            const ta = document.getElementById('chat-message-input');
+            if (ta) { ta.value = draft; this.autoGrowComposer(); }
+        }
         try { await API.chat.markRead(id); } catch {}
         const cv = this._conversations.find(c => c.id === id);
         if (cv) { cv.unread_count = 0; this.renderConversationList(); }
@@ -945,6 +988,7 @@ const ChatPage = {
         const isDirect = this._activeConversation && this._activeConversation.type === 'direct';
         if (isDirect) {
             if (m.status === 'read') return `<span class="chat-msg-status read" title="${I18N.t('chat.status_read')}">✓✓</span>`;
+            if (m.status === 'delivered') return `<span class="chat-msg-status delivered" title="${I18N.t('chat.status_delivered')}">✓✓</span>`;
             return `<span class="chat-msg-status sent" title="${I18N.t('chat.status_sent')}">✓</span>`;
         }
         // Group: "read by N of the other members", tappable to see exactly who.
@@ -1097,6 +1141,27 @@ const ChatPage = {
         this.autoGrowComposer();
         this.signalTyping();
         this.updateMentionAutocomplete();
+        this.saveDraft();
+    },
+
+    // Persists the composer's in-progress text under a per-conversation key
+    // so switching conversations (or closing the tab) never silently
+    // discards it — restored in selectConversation. Skipped while editing an
+    // existing message: that's not a draft of a NEW message, and saving it
+    // here would clobber whatever real draft was already sitting for this
+    // conversation before the edit started.
+    saveDraft() {
+        if (!this._activeId) return;
+        if (this._composerContext && this._composerContext.type === 'edit') return;
+        const ta = document.getElementById('chat-message-input');
+        const key = 'paylash_chat_draft_' + this._activeId;
+        const text = ta ? ta.value : '';
+        if (text) localStorage.setItem(key, text);
+        else localStorage.removeItem(key);
+    },
+
+    clearDraft(id) {
+        try { localStorage.removeItem('paylash_chat_draft_' + id); } catch { /* storage unavailable — nothing to clean up */ }
     },
 
     /* ── @mention autocomplete (group conversations only — a DM has exactly
@@ -1304,6 +1369,28 @@ const ChatPage = {
         this.renderMessages();
     },
 
+    // Fired after a WebSocket reconnect (see ChatSocket's '_reconnected'
+    // event) — without this, anything another participant sent while this
+    // tab's socket was down never appears in an already-open thread until
+    // the user manually navigates away and back. Fetches just the gap
+    // (after_id) rather than reloading the whole conversation; appendMessage
+    // is idempotent by id so this is safe even if the gap is empty or
+    // overlaps something already shown.
+    async resyncActiveConversation() {
+        if (!this._activeId || !this._messages.length) return;
+        const lastId = this._messages[this._messages.length - 1].id;
+        let batch;
+        try { batch = await API.chat.listMessages(this._activeId, null, 200, lastId); }
+        catch { return; }
+        if (!batch || !batch.length) return;
+        batch.forEach(m => this.appendMessage(m));
+        API.chat.markRead(this._activeId).catch(() => {});
+        this.loadConversations();
+        // A full page came back — there may be MORE beyond it. Reload the
+        // conversation from scratch rather than paging through the gap.
+        if (batch.length >= 200) this.selectConversation(this._activeId);
+    },
+
     onComposerKeydown(ev) {
         if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
             ev.preventDefault();
@@ -1483,6 +1570,7 @@ const ChatPage = {
         this._pendingAttachments = [];
         this._composerContext = null;
         if (ta) ta.value = '';
+        this.clearDraft(this._activeId);
         this.closeMentionAutocomplete();
         this.renderPendingAttachments();
         this.renderReplyBar();
@@ -1594,12 +1682,51 @@ const ChatPage = {
         if (mine && m.kind === 'text') {
             items.push({ action: 'edit', label: I18N.t('chat.edit'), icon: '✏️', handler: () => this.startEditMessage(id) });
         }
+        if (!mine) {
+            items.push({ action: 'report', label: I18N.t('chat.report_message'), icon: '🚩', handler: () => this.reportMessage(id) });
+        }
         items.push({ divider: true });
         items.push({ action: 'delete-me', label: I18N.t('chat.delete_for_me'), icon: '🗑', handler: () => this.deleteMessage(id, 'me') });
         if (mine) {
             items.push({ action: 'delete-everyone', label: I18N.t('chat.delete_for_everyone'), icon: '🗑', danger: true, handler: () => this.deleteMessage(id, 'everyone') });
         }
         UI.showContextMenu(x, y, items);
+    },
+
+    /* ── Reporting (participant → admin moderation review) ── */
+
+    reportMessage(id) {
+        const m = this._messages.find(x => x.id === id);
+        if (!m) return;
+        UI.showModal(I18N.t('chat.report_message'), `
+            <p class="text-muted" style="font-size:.85rem">${I18N.t('chat.report_hint')}</p>
+            <div class="form-group"><textarea id="chat-report-reason" class="form-control" rows="3" placeholder="${I18N.t('chat.report_reason_placeholder')}"></textarea></div>`,
+            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-danger" onclick="ChatPage.submitMessageReport(${id})">${I18N.t('chat.report_submit')}</button>`);
+    },
+
+    async submitMessageReport(id) {
+        const reason = (document.getElementById('chat-report-reason')?.value || '').trim();
+        try {
+            await API.chat.reportMessage(this._activeId, id, reason);
+            UI.closeModal();
+            UI.toast(I18N.t('chat.report_sent'), 'success');
+        } catch (e) { UI.toast(e.message, 'error'); }
+    },
+
+    reportUser(userId, name) {
+        UI.showModal(I18N.t('chat.report_user_title', { name: name || '' }), `
+            <p class="text-muted" style="font-size:.85rem">${I18N.t('chat.report_hint')}</p>
+            <div class="form-group"><textarea id="chat-report-reason" class="form-control" rows="3" placeholder="${I18N.t('chat.report_reason_placeholder')}"></textarea></div>`,
+            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-danger" onclick="ChatPage.submitUserReport(${userId})">${I18N.t('chat.report_submit')}</button>`);
+    },
+
+    async submitUserReport(userId) {
+        const reason = (document.getElementById('chat-report-reason')?.value || '').trim();
+        try {
+            await API.chat.reportUser(this._activeId, userId, reason);
+            UI.closeModal();
+            UI.toast(I18N.t('chat.report_sent'), 'success');
+        } catch (e) { UI.toast(e.message, 'error'); }
     },
 
     /* ── Reactions ── */
@@ -1858,6 +1985,7 @@ const ChatPage = {
             <span class="chat-member-name">${UI.esc(p.full_name || p.username)}</span>
             ${roleBadge}
             ${canToggleAdmin ? `<button class="btn btn-ghost btn-sm chat-role-toggle-btn" onclick="ChatPage.setMemberRole(${p.user_id},'${p.role === 'admin' ? 'member' : 'admin'}')">${p.role === 'admin' ? I18N.t('chat.demote_admin') : I18N.t('chat.promote_admin')}</button>` : ''}
+            ${p.user_id !== App.user.id ? `<button class="btn btn-ghost btn-sm" onclick="ChatPage.reportUser(${p.user_id},${UI.escJson(p.full_name || p.username)})" title="${I18N.t('chat.report_user')}" aria-label="${I18N.t('chat.report_user')}">🚩</button>` : ''}
             ${canRemove ? `<button class="chat-pending-remove" onclick="ChatPage.removeMember(${p.user_id})" aria-label="${I18N.t('common.remove')}">✕</button>` : ''}
         </div>`;
     },
@@ -1883,7 +2011,7 @@ const ChatPage = {
 
     async renameGroup() {
         const name = document.getElementById('chat-rename-input')?.value.trim();
-        if (!name) return;
+        if (!name) { UI.toast(I18N.t('chat.group_name_required'), 'error'); return; }
         try {
             await API.chat.rename(this._activeId, name);
             this._activeConversation.name = name;
@@ -1917,12 +2045,16 @@ const ChatPage = {
         } catch (e) { UI.toast(e.message, 'error'); }
     },
 
-    async removeMember(userId) {
-        try {
-            await API.chat.removeParticipant(this._activeId, userId);
-            this._participants = this._participants.filter(p => p.user_id !== userId);
-            this.showGroupInfoModal();
-        } catch (e) { UI.toast(e.message, 'error'); }
+    removeMember(userId) {
+        const p = this._participants.find(x => x.user_id === userId);
+        const name = p ? (p.full_name || p.username) : '';
+        UI.confirmAction(I18N.t('chat.remove_member_title'), I18N.t('chat.remove_member_confirm', { name }), I18N.t('common.remove'), async () => {
+            try {
+                await API.chat.removeParticipant(this._activeId, userId);
+                this._participants = this._participants.filter(x => x.user_id !== userId);
+                this.showGroupInfoModal();
+            } catch (e) { UI.toast(e.message, 'error'); }
+        });
     },
 
     leaveGroup() {
@@ -1931,6 +2063,7 @@ const ChatPage = {
                 await API.chat.removeParticipant(this._activeId, App.user.id);
                 this._activeId = null;
                 this._activeConversation = null;
+                if (App.currentPage === 'chat') App.updatePageURL({}, false);
                 this._updateMobileClass();
                 document.getElementById('chat-thread').innerHTML = `<div class="empty-state"><p>${I18N.t('chat.select_conversation')}</p></div>`;
                 await this.loadConversations();
@@ -1997,6 +2130,16 @@ const ChatPage = {
                 }
             }
         });
+        // The recipient's client just received this message live (see
+        // markDeliveredForOnline server-side) — flip our own sent tick to
+        // delivered without waiting for a reload/resync. Never downgrades an
+        // already-'read' tick (a slightly-late delivered event racing behind
+        // a fast read is possible, if unlikely).
+        ChatSocket.on('message.delivered', (data) => {
+            if (App.currentPage !== 'chat' || data.conversation_id !== this._activeId) return;
+            const m = this._messages.find(x => x.id === data.message_id);
+            if (m && m.status === 'sent') { m.status = 'delivered'; this.replaceMessage(m); }
+        });
         // A link preview finished unfurling server-side, some moments after
         // the message itself landed — patch it onto the already-rendered
         // bubble.
@@ -2059,5 +2202,6 @@ const ChatPage = {
         // to the active thread / inbox as needed.
         ChatSocket.on('typing', (data) => { if (App.currentPage === 'chat') this.handleTyping(data); });
         ChatSocket.on('presence', (data) => { if (App.currentPage === 'chat') this.handlePresence(data); });
+        ChatSocket.on('_reconnected', () => { if (App.currentPage === 'chat') this.resyncActiveConversation(); });
     },
 };

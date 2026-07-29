@@ -20,6 +20,16 @@ const (
 	maxMessageLength         = 4000
 	maxAttachmentsPerMessage = 10
 	maxChatAttachmentSize    = 50 << 20 // 50MB
+	// maxGroupParticipants is a soft guardrail, not a product constraint —
+	// nothing in this app's data model or UI assumes a smaller group, but an
+	// unbounded group size has no legitimate use case for a studio-sized
+	// team and is cheap insurance against a runaway script.
+	maxGroupParticipants = 200
+	// maxResyncMessages caps a single after_id resync page (see ListMessages)
+	// — if more than this arrived while a client was disconnected, it
+	// signals the client to fall back to a full reload of the conversation
+	// instead of paging through the gap.
+	maxResyncMessages = 200
 )
 
 // requireParticipant is the privacy boundary for every conversation-scoped
@@ -156,6 +166,17 @@ func (h *Handler) CreateConversation(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimSpace(req.Name)
 		if name == "" {
 			writeError(w, http.StatusBadRequest, "topara at gerek")
+			return
+		}
+		if len(req.ParticipantIDs) > maxGroupParticipants {
+			writeError(w, http.StatusBadRequest, "topar gaty uly (iň köp 200 agza)")
+			return
+		}
+		if ok, err := h.db.UsersExist(req.ParticipantIDs); err != nil {
+			writeError(w, http.StatusInternalServerError, "ýalňyşlyk")
+			return
+		} else if !ok {
+			writeError(w, http.StatusBadRequest, "nädogry gatnaşyjy saýlandy")
 			return
 		}
 		conv, err := h.db.CreateGroupConversation(name, user.ID, req.ProjectID, req.ParticipantIDs)
@@ -306,6 +327,22 @@ func (h *Handler) AddParticipants(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "nädogry maglumat")
 		return
 	}
+	if ok, err := h.db.UsersExist(req.UserIDs); err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk")
+		return
+	} else if !ok {
+		writeError(w, http.StatusBadRequest, "nädogry ulanyjy saýlandy")
+		return
+	}
+	existing, err := h.db.ListParticipants(convID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk")
+		return
+	}
+	if len(existing)+len(req.UserIDs) > maxGroupParticipants {
+		writeError(w, http.StatusBadRequest, "topar gaty uly (iň köp 200 agza)")
+		return
+	}
 	if err := h.db.AddParticipants(convID, req.UserIDs); err != nil {
 		writeError(w, http.StatusInternalServerError, "goşup bolmady")
 		return
@@ -419,6 +456,29 @@ func (h *Handler) ListMessages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+
+	// after_id resyncs a conversation after a WebSocket reconnect (see
+	// ChatSocket.onReconnect in chatSocket.js): "everything newer than the
+	// last message I have", oldest-first, instead of the normal
+	// newest-first backward page. Mutually exclusive with before_id — a
+	// resync request never also wants historical scrollback in the same
+	// call.
+	if v := r.URL.Query().Get("after_id"); v != "" {
+		if afterID, err := strconv.Atoi(v); err == nil && afterID > 0 {
+			list, err := h.db.ListMessagesAfter(convID, user.ID, afterID, maxResyncMessages)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "habarlary alyp bolmady")
+				return
+			}
+			if list == nil {
+				list = []models.MessageView{}
+			}
+			go h.markDeliveredFromList(list, user.ID)
+			writeJSON(w, http.StatusOK, list)
+			return
+		}
+	}
+
 	beforeID := 0
 	if v := r.URL.Query().Get("before_id"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
@@ -439,6 +499,7 @@ func (h *Handler) ListMessages(w http.ResponseWriter, r *http.Request) {
 	if list == nil {
 		list = []models.MessageView{}
 	}
+	go h.markDeliveredFromList(list, user.ID)
 	writeJSON(w, http.StatusOK, list)
 }
 
@@ -559,6 +620,10 @@ func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		h.chatHub.broadcast(participantIDs(participants), map[string]any{
 			"type": "message.new", "conversation_id": convID, "message": msg,
 		})
+		// Anyone with a live connection just received this over the socket —
+		// mark it delivered now rather than waiting for their next fetch
+		// (see scanMessageView's sent/delivered/read tick).
+		go h.markDeliveredForOnline(participants, user.ID, convID, msg.ID)
 	}
 	// Web push reaches participants whose app is fully closed (no live socket)
 	// — fire-and-forget so it never delays the response or fails the send.
@@ -1319,16 +1384,25 @@ func (h *Handler) UpdateConversationPrefs(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var req struct {
-		Muted    *bool `json:"muted"`
-		Pinned   *bool `json:"pinned"`
-		Archived *bool `json:"archived"`
+		Muted *bool `json:"muted"`
+		// MuteMinutes is only meaningful alongside Muted=true: 0/omitted
+		// mutes with no expiry (forever, until explicitly unmuted); a
+		// positive value mutes until now+that many minutes.
+		MuteMinutes *int  `json:"mute_minutes"`
+		Pinned      *bool `json:"pinned"`
+		Archived    *bool `json:"archived"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "nädogry maglumat")
 		return
 	}
 	if req.Muted != nil {
-		if err := h.db.SetConversationMuted(convID, user.ID, *req.Muted); err != nil {
+		var until *time.Time
+		if *req.Muted && req.MuteMinutes != nil && *req.MuteMinutes > 0 {
+			t := time.Now().Add(time.Duration(*req.MuteMinutes) * time.Minute)
+			until = &t
+		}
+		if err := h.db.SetConversationMuted(convID, user.ID, *req.Muted, until); err != nil {
 			writeError(w, http.StatusInternalServerError, "ýalňyşlyk")
 			return
 		}
@@ -1644,6 +1718,52 @@ func randomHexToken(n int) string {
 		panic("crypto/rand failed: " + err.Error())
 	}
 	return hex.EncodeToString(b)
+}
+
+// markDeliveredForOnline records msg as delivered for every participant
+// (other than the sender) who has a live WebSocket connection right now —
+// they just received it over the broadcast this accompanies — and, if at
+// least one of them was, tells the sender's OWN open tabs/devices so the
+// sent → delivered tick updates live instead of only on next reload/resync.
+// Offline participants are marked delivered lazily instead, the next time
+// they fetch (see markDeliveredFromList). Called via `go`, so failures are
+// logged, not surfaced.
+func (h *Handler) markDeliveredForOnline(participants []models.ParticipantView, senderID, conversationID, messageID int) {
+	delivered := false
+	for _, p := range participants {
+		if p.UserID == senderID || !h.chatHub.isOnline(p.UserID) {
+			continue
+		}
+		if err := h.db.MarkDelivered([]int{messageID}, p.UserID); err != nil {
+			log.Printf("mark message %d delivered for user %d: %v", messageID, p.UserID, err)
+			continue
+		}
+		delivered = true
+	}
+	if delivered {
+		h.chatHub.broadcast([]int{senderID}, map[string]any{
+			"type": "message.delivered", "conversation_id": conversationID, "message_id": messageID,
+		})
+	}
+}
+
+// markDeliveredFromList marks every message in list that requesterID didn't
+// send as delivered to them — the fallback for messages sent while they were
+// offline: fetching them (initial load or an after_id resync) is itself the
+// delivery event. Called via `go`, so failures are logged, not surfaced.
+func (h *Handler) markDeliveredFromList(list []models.MessageView, requesterID int) {
+	var ids []int
+	for _, m := range list {
+		if m.SenderID == nil || *m.SenderID != requesterID {
+			ids = append(ids, m.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	if err := h.db.MarkDelivered(ids, requesterID); err != nil {
+		log.Printf("mark %d messages delivered for user %d: %v", len(ids), requesterID, err)
+	}
 }
 
 // notifyConversationUpdated tells every current participant to refetch the

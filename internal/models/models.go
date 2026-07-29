@@ -149,6 +149,10 @@ type RegisterRequest struct {
 // leaving the quota field blank) — 1 GiB.
 const DefaultQuotaBytes int64 = 1 << 30
 
+// DefaultSessionTTL is how long a normal login session lasts before it must
+// be renewed if PAYLASH_SESSION_TTL_HOURS isn't set (see config.Load).
+const DefaultSessionTTL = 7 * 24 * time.Hour
+
 type LoginRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
@@ -350,10 +354,12 @@ type ConversationView struct {
 	OtherParticipant *ParticipantView `json:"other_participant,omitempty"`
 	// Muted/Pinned/Archived are the REQUESTER's own preferences for this
 	// conversation (from their conversation_participants row) — never
-	// another participant's.
-	Muted    bool `json:"muted"`
-	Pinned   bool `json:"pinned"`
-	Archived bool `json:"archived"`
+	// another participant's. Muted already factors in MutedUntil (false once
+	// it's in the past) so callers never need to compare the two themselves.
+	Muted      bool       `json:"muted"`
+	MutedUntil *time.Time `json:"muted_until,omitempty"`
+	Pinned     bool       `json:"pinned"`
+	Archived   bool       `json:"archived"`
 }
 
 type ParticipantView struct {
@@ -465,6 +471,31 @@ type MessageSearchResult struct {
 	SenderName        string    `json:"sender_name"`
 	Body              string    `json:"body"`
 	CreatedAt         time.Time `json:"created_at"`
+}
+
+// ChatReportView is a moderation report against a message and/or a user
+// within a conversation, as an admin reviews it. This is the ONLY shape in
+// which chat content ever reaches a system admin — MessageBodySnapshot is
+// exactly (and only) what was reported, captured at report time, not a
+// window into the rest of the conversation. See internal/api's
+// AdminListChatReports and requireParticipant's own comment on why chats
+// otherwise have zero standing admin access.
+type ChatReportView struct {
+	ID                  int        `json:"id"`
+	ReporterID          *int       `json:"reporter_id"`
+	ReporterName        string     `json:"reporter_name"`
+	ConversationID      int        `json:"conversation_id"`
+	ConversationType    string     `json:"conversation_type"`
+	ConversationLabel   string     `json:"conversation_label,omitempty"`
+	MessageID           *int       `json:"message_id,omitempty"`
+	ReportedUserID      *int       `json:"reported_user_id,omitempty"`
+	ReportedUserName    string     `json:"reported_user_name,omitempty"`
+	Reason              string     `json:"reason"`
+	MessageBodySnapshot string     `json:"message_body_snapshot,omitempty"`
+	Status              string     `json:"status"`
+	ResolvedByName      string     `json:"resolved_by_name,omitempty"`
+	ResolvedAt          *time.Time `json:"resolved_at,omitempty"`
+	CreatedAt           time.Time  `json:"created_at"`
 }
 
 // MessageAttachment is a file attached to a chat message. MinioKey is never

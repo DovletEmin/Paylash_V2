@@ -122,16 +122,22 @@ func (d *DB) ListUsers(limit, offset int) ([]models.User, error) {
 // A non-empty passwordHash means the admin (not the employee) is setting
 // the password, so must_change_password is set — same reasoning as
 // CreateUser's mustChangePassword parameter.
+//
+// An empty displayName means "leave it as-is", not "clear it" — mirroring
+// UpdateProfile's own semantics (internal/api/auth.go). The admin edit-user
+// form always pre-fills the name field with the current value, so this only
+// matters if it's ever submitted blank; treating blank as a no-op avoids
+// silently blanking a real display name back to the username fallback.
 func (d *DB) UpdateUser(id int, role string, quotaBytes int64, displayName string, passwordHash string) error {
 	if passwordHash != "" {
 		_, err := d.Exec(
-			`UPDATE users SET role=$1, quota_bytes=$2, display_name=$3, password_hash=$4, must_change_password=TRUE WHERE id=$5`,
+			`UPDATE users SET role=$1, quota_bytes=$2, display_name=CASE WHEN $3 <> '' THEN $3 ELSE display_name END, password_hash=$4, must_change_password=TRUE WHERE id=$5`,
 			role, quotaBytes, displayName, passwordHash, id,
 		)
 		return err
 	}
 	_, err := d.Exec(
-		`UPDATE users SET role=$1, quota_bytes=$2, display_name=$3 WHERE id=$4`,
+		`UPDATE users SET role=$1, quota_bytes=$2, display_name=CASE WHEN $3 <> '' THEN $3 ELSE display_name END WHERE id=$4`,
 		role, quotaBytes, displayName, id,
 	)
 	return err
@@ -259,4 +265,27 @@ func (d *DB) UserExists(username string) (bool, error) {
 	var exists bool
 	err := d.QueryRow(`SELECT EXISTS(SELECT 1 FROM users WHERE username = $1)`, username).Scan(&exists)
 	return exists, err
+}
+
+// UsersExist reports whether every id in ids refers to a real user — used to
+// turn an invalid participant id into a clean 400 before a group
+// conversation is created, instead of a raw FK-violation 500 from the
+// INSERT itself.
+func (d *DB) UsersExist(ids []int) (bool, error) {
+	unique := make(map[int]bool, len(ids))
+	for _, id := range ids {
+		unique[id] = true
+	}
+	if len(unique) == 0 {
+		return true, nil
+	}
+	uniqueIDs := make([]int, 0, len(unique))
+	for id := range unique {
+		uniqueIDs = append(uniqueIDs, id)
+	}
+	var count int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM users WHERE id = ANY($1)`, pq.Array(uniqueIDs)).Scan(&count); err != nil {
+		return false, err
+	}
+	return count == len(uniqueIDs), nil
 }

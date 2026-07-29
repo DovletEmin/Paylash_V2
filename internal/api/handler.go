@@ -75,8 +75,21 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
+// maxJSONBodyBytes caps every plain-JSON request body this app accepts —
+// forms, chat messages (already capped far lower at maxMessageLength),
+// bulk id lists. All of them are small; this only exists to stop a
+// malicious or broken client from streaming an unbounded body into
+// readJSON. Actual file bytes never go through this path — uploads use
+// multipart/form-data with their own limits (see UploadFile, uploads.go).
+const maxJSONBodyBytes = 2 << 20 // 2MB
+
 func readJSON(r *http.Request, v any) error {
 	defer r.Body.Close()
+	// w is nil here deliberately — readJSON has no http.ResponseWriter, and
+	// MaxBytesReader has accepted a nil ResponseWriter since Go 1.19 (it just
+	// skips closing the connection early on overflow; the caller still gets
+	// a clean error from Decode).
+	r.Body = http.MaxBytesReader(nil, r.Body, maxJSONBodyBytes)
 	return json.NewDecoder(r.Body).Decode(v)
 }
 

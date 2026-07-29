@@ -8,9 +8,38 @@ import (
 	"paylash/internal/authutil"
 	"paylash/internal/models"
 	"paylash/internal/webpush"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
+
+// mentionPattern mirrors ChatPage.mentionify's regex in chat.js exactly, so
+// "who got @mentioned" agrees between the highlighted text the sender sees
+// and who gets an elevated push server-side.
+var mentionPattern = regexp.MustCompile(`(?:^|[\s(])@([A-Za-z0-9_]+)`)
+
+// extractMentionedUserIDs returns the ids of every participant whose
+// username is @mentioned in body.
+func extractMentionedUserIDs(body string, participants []models.ParticipantView) map[int]bool {
+	if body == "" {
+		return nil
+	}
+	byUsername := make(map[string]int, len(participants))
+	for _, p := range participants {
+		byUsername[strings.ToLower(p.Username)] = p.UserID
+	}
+	var mentioned map[int]bool
+	for _, m := range mentionPattern.FindAllStringSubmatch(body, -1) {
+		if uid, ok := byUsername[strings.ToLower(m[1])]; ok {
+			if mentioned == nil {
+				mentioned = map[int]bool{}
+			}
+			mentioned[uid] = true
+		}
+	}
+	return mentioned
+}
 
 // pushSubscriber is the VAPID "sub" contact — an identifier for the app
 // operator that a push service can reach out to. It never receives real mail;
@@ -131,12 +160,45 @@ func (h *Handler) pushChatMessage(convID, senderID int, msg *models.MessageView)
 	if err != nil {
 		return
 	}
+	mentioned := extractMentionedUserIDs(msg.Body, participants)
 	for _, p := range participants {
-		if p.UserID == senderID || p.Muted || h.chatHub.isOnline(p.UserID) {
+		if p.UserID == senderID || h.chatHub.isOnline(p.UserID) {
+			continue
+		}
+		if mentioned[p.UserID] {
+			// A direct @mention cuts through immediately — sent right away
+			// instead of folded into the debounced digest, and never
+			// suppressed by a muted conversation, mirroring how Slack/
+			// Telegram treat an explicit mention as louder than the
+			// conversation's own notification setting.
+			h.sendMentionPush(p.UserID, msg)
+			continue
+		}
+		if p.Muted {
 			continue
 		}
 		h.pushBatcher.enqueue(p.UserID, convID, msg)
 	}
+}
+
+// sendMentionPush delivers an @mention push immediately, bypassing
+// pushBatcher's debounce — see pushChatMessage.
+func (h *Handler) sendMentionPush(recipientID int, msg *models.MessageView) {
+	recipient, err := h.db.GetUserByID(recipientID)
+	if err != nil || recipient == nil {
+		return
+	}
+	title, body := pushContentFor(recipient.ChatNotifyLevel, msg)
+	if recipient.ChatNotifyLevel != "hidden" {
+		title = "@ " + title
+	}
+	payload, err := json.Marshal(map[string]any{
+		"title": title, "body": body, "conversation_id": msg.ConversationID, "mention": true,
+	})
+	if err != nil {
+		return
+	}
+	h.sendPushToUser(recipientID, payload)
 }
 
 // pushDigestWindow is how long the batcher waits, per recipient, after the

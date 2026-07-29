@@ -115,6 +115,12 @@ func abortStaleUploads(database *db.DB, minioClient *storage.MinioClient) error 
 // trimOldVersions removes non-current MinIO object versions past the
 // retention window, so bucket versioning doesn't grow storage unbounded —
 // especially for large CAD/render files that get overwritten often.
+//
+// Locations are grouped by bucket and each bucket is listed exactly once
+// (ListAllVersions) rather than issuing one ListVersions call per file —
+// at this app's scale a bucket (a project, or one user's personal space)
+// holds far more files than there are buckets, so this turns what used to
+// be O(files) MinIO round trips into O(buckets).
 func trimOldVersions(database *db.DB, minioClient *storage.MinioClient) error {
 	ctx := context.Background()
 	cutoff := time.Now().Add(-versionRetention)
@@ -123,19 +129,27 @@ func trimOldVersions(database *db.DB, minioClient *storage.MinioClient) error {
 	if err != nil {
 		return err
 	}
-	trimmed := 0
+	byBucket := make(map[string]map[string]bool, len(locations))
 	for _, loc := range locations {
-		versions, err := minioClient.ListVersions(ctx, loc.Bucket, loc.Key)
+		if byBucket[loc.Bucket] == nil {
+			byBucket[loc.Bucket] = make(map[string]bool)
+		}
+		byBucket[loc.Bucket][loc.Key] = true
+	}
+
+	trimmed := 0
+	for bucket, keys := range byBucket {
+		versions, err := minioClient.ListAllVersions(ctx, bucket)
 		if err != nil {
-			log.Printf("janitor: list versions %s/%s: %v", loc.Bucket, loc.Key, err)
+			log.Printf("janitor: list versions in %s: %v", bucket, err)
 			continue
 		}
 		for _, v := range versions {
-			if v.IsLatest || v.LastModified.After(cutoff) {
+			if !keys[v.Key] || v.IsLatest || v.LastModified.After(cutoff) {
 				continue
 			}
-			if err := minioClient.RemoveVersion(ctx, loc.Bucket, loc.Key, v.VersionID); err != nil {
-				log.Printf("janitor: remove version %s of %s/%s: %v", v.VersionID, loc.Bucket, loc.Key, err)
+			if err := minioClient.RemoveVersion(ctx, bucket, v.Key, v.VersionID); err != nil {
+				log.Printf("janitor: remove version %s of %s/%s: %v", v.VersionID, bucket, v.Key, err)
 				continue
 			}
 			trimmed++

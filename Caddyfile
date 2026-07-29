@@ -19,7 +19,18 @@
 		# onclick="..." handlers and inline style="..." throughout (no build step,
 		# no framework) — a real script-src without it would need rewriting every
 		# handler to addEventListener first, which is its own separate project.
-		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self'; connect-src 'self'; worker-src 'self'; frame-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'"
+		#
+		# connect-src also allows PAYLASH_MINIO_PUBLIC_ENDPOINT: large-file
+		# uploads PUT part bytes straight from the browser to MinIO on that
+		# host:port (web/js/upload.js, internal/api/uploads.go), a different
+		# origin than this site since it's a different port — without this,
+		# every such fetch() is silently blocked by the browser and every
+		# upload past LARGE_FILE_THRESHOLD (50MB) fails with "Failed to
+		# fetch". Both schemes are listed since PAYLASH_MINIO_USE_SSL can be
+		# either; when the endpoint var is unset (resumable upload disabled)
+		# these two entries become "http://" / "https://" with no host, which
+		# the CSP grammar treats as invalid and simply drops — harmless.
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self'; connect-src 'self' http://{$PAYLASH_MINIO_PUBLIC_ENDPOINT} https://{$PAYLASH_MINIO_PUBLIC_ENDPOINT}; worker-src 'self'; frame-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'"
 	}
 
 	# Collabora — static assets, WOPI discovery, WebSocket/API.

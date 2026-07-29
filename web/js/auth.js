@@ -84,7 +84,7 @@ const AuthPage = {
             const username = document.getElementById('reg-username').value.trim();
             const password = document.getElementById('reg-password').value;
             if (username.length < 3) { UI.toast(I18N.t('auth.username_too_short'), 'error'); return; }
-            if (password.length < 6) { UI.toast(I18N.t('auth.password_too_short'), 'error'); return; }
+            if (password.length < 8) { UI.toast(I18N.t('auth.password_too_short'), 'error'); return; }
             btn.disabled = true; btn.textContent = I18N.t('auth.register_loading');
             try {
                 await API.auth.register(username, password, fullName);

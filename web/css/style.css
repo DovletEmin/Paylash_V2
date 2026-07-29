@@ -497,6 +497,17 @@ select.form-control,select.form-input{appearance:none;cursor:pointer;background-
 .admin-loading{display:flex;align-items:center;justify-content:center;padding:48px}
 .admin-search .form-control{width:220px;padding:6px 10px;font-size:.82rem}
 
+/* ─── Chat moderation reports ─── */
+.report-list{display:flex;flex-direction:column;gap:10px}
+.report-card{border:1px solid var(--border);border-radius:var(--r-md);padding:12px 14px;background:var(--surface-2)}
+.report-card-head{display:flex;align-items:center;justify-content:space-between;font-size:.85rem;font-weight:600;gap:12px}
+.report-card-snapshot{margin-top:6px;padding:8px 10px;border-radius:var(--r-sm);background:var(--surface);font-size:.85rem;white-space:pre-wrap;word-break:break-word}
+.report-card-reason{margin-top:6px;font-size:.82rem;color:var(--text-2);font-style:italic}
+.report-card-status{margin-top:10px;display:flex;gap:8px;align-items:center}
+.chip{display:inline-flex;align-items:center;padding:2px 9px;border-radius:var(--r-full);font-size:.75rem;font-weight:600;background:var(--surface-3,var(--surface));color:var(--text-2)}
+.chip.resolved{background:rgba(52,199,89,.15);color:#34c759}
+.chip.dismissed{background:rgba(142,142,147,.15);color:var(--text-3)}
+
 /* ─── Tables ─── */
 .admin-table{width:100%;border-collapse:collapse;font-size:.82rem}
 .admin-table th{text-align:left;padding:8px 10px;font-weight:500;color:var(--text-3);border-bottom:1px solid var(--border);font-size:.75rem;text-transform:uppercase;letter-spacing:.04em}
@@ -785,7 +796,10 @@ img.share-user-avatar-lg{box-shadow:0 0 0 3px var(--surface),0 0 0 5px var(--acc
 .chat-edited-label{font-style:italic}
 .chat-msg-status{font-size:.72rem;letter-spacing:-1px}
 .chat-msg-status.read{color:#8ecbff}
+.chat-msg-status.delivered{color:rgba(255,255,255,.55)}
 .chat-msg-status.pending{letter-spacing:0;opacity:.8}
+.chat-mute-options{display:flex;flex-direction:column;gap:4px}
+.chat-mute-option{width:100%;text-align:left;justify-content:flex-start}
 /* Group read receipt: a tappable "read by N" chip. */
 .chat-group-receipt{
   background:none;border:none;cursor:pointer;padding:0;font:inherit;letter-spacing:0;

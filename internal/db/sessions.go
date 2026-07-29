@@ -8,12 +8,12 @@ import (
 	"time"
 )
 
-func (d *DB) CreateSession(userID int) (*models.Session, error) {
+func (d *DB) CreateSession(userID int, ttl time.Duration) (*models.Session, error) {
 	token := generateToken(32)
 	s := &models.Session{
 		ID:        token,
 		UserID:    userID,
-		ExpiresAt: time.Now().Add(7 * 24 * time.Hour),
+		ExpiresAt: time.Now().Add(ttl),
 	}
 	_, err := d.Exec(
 		`INSERT INTO sessions (id, user_id, expires_at) VALUES ($1, $2, $3)`,

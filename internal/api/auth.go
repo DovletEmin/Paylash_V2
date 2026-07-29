@@ -31,7 +31,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !authutil.ValidPassword(req.Password) {
-		writeError(w, http.StatusBadRequest, "parol azyndan 6 simwol bolmaly")
+		writeError(w, http.StatusBadRequest, "parol azyndan 8 simwol bolmaly")
 		return
 	}
 
@@ -90,7 +90,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := h.db.CreateSession(user.ID)
+	session, err := h.db.CreateSession(user.ID, h.cfg.SessionTTL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "sessiýa döredip bolmady")
 		return
@@ -210,7 +210,7 @@ func (h *Handler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.NewPassword != "" {
 		if !authutil.ValidPassword(req.NewPassword) {
-			writeError(w, http.StatusBadRequest, "t\u00e4ze parol a\u017cyndan 6 simwol bolmaly")
+			writeError(w, http.StatusBadRequest, "t\u00e4ze parol a\u017cyndan 8 simwol bolmaly")
 			return
 		}
 		full, err := h.db.GetUserByID(user.ID)

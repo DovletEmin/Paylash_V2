@@ -19,7 +19,17 @@ const ChatSocket = {
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         const ws = new WebSocket(`${proto}//${location.host}/api/chat/ws`);
         this._ws = ws;
-        ws.onopen = () => { this._reconnectAttempts = 0; };
+        ws.onopen = () => {
+            // _reconnectAttempts is only ever > 0 after _scheduleReconnect ran,
+            // i.e. this connection followed a drop, not the app's very first
+            // connect — that's the signal ChatPage needs to resync whatever
+            // conversation is open (see its '_reconnected' listener) instead of
+            // silently trusting a thread that may have missed messages sent
+            // while this socket was down.
+            const wasReconnect = this._reconnectAttempts > 0;
+            this._reconnectAttempts = 0;
+            if (wasReconnect) this._emit('_reconnected', {});
+        };
         ws.onmessage = (ev) => {
             let data;
             try { data = JSON.parse(ev.data); } catch { return; }
@@ -40,6 +50,22 @@ const ChatSocket = {
         this._reconnectAttempts++;
         const delay = Math.min(1000 * 2 ** this._reconnectAttempts, 30000);
         this._reconnectTimer = setTimeout(() => this.connect(), delay);
+    },
+
+    // Called on 'visibilitychange'/'online' (see the listeners below) — a
+    // laptop waking from sleep or a Wi-Fi blip can leave the socket dead
+    // without the browser having fired onclose yet (that only happens once
+    // the OS/TCP stack notices, which can lag well behind the exponential
+    // backoff timer already ticking). Reconnecting immediately here, instead
+    // of waiting out whatever delay _scheduleReconnect last picked, is what
+    // makes the resync in ChatPage's '_reconnected' listener feel prompt
+    // rather than showing a stale thread for up to 30s after the tab comes
+    // back.
+    reconnectIfStale() {
+        if (this._manuallyClosed) return;
+        if (this._ws && this._ws.readyState === WebSocket.OPEN) return;
+        if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
+        this.connect();
     },
 
     // Sends a small control frame UP the socket (currently only the "typing"
@@ -149,3 +175,8 @@ const ChatSocket = {
         setTimeout(dismiss, 5000);
     },
 };
+
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') ChatSocket.reconnectIfStale();
+});
+window.addEventListener('online', () => ChatSocket.reconnectIfStale());

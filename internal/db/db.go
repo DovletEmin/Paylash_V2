@@ -390,6 +390,50 @@ func (d *DB) Migrate() error {
 		// explicitly inserts FALSE for those. SeedAdmin's raw INSERT also
 		// omits it deliberately, so the bootstrap admin never sees it either.
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_completed BOOLEAN NOT NULL DEFAULT TRUE`,
+
+		// Timed mute: NULL means "muted has no expiry" (forever, once muted =
+		// TRUE — exactly what every pre-existing muted row already means, so
+		// this needs no backfill) — a non-null value in the past means
+		// "effectively unmuted", checked lazily wherever muted is read rather
+		// than by a background job clearing it. See SetConversationMuted.
+		`ALTER TABLE conversation_participants ADD COLUMN IF NOT EXISTS muted_until TIMESTAMPTZ`,
+
+		// Chat moderation: a report against a message OR a user (exactly one
+		// of the two ids set), raised by any participant who can see it.
+		// status starts 'open'; an admin resolves or dismisses it (see
+		// AdminListChatReports/AdminResolveChatReport) — this is the ONLY
+		// path that ever lets a system admin see reported message content;
+		// there is no standing admin access to chat otherwise (see
+		// requireParticipant's comment in internal/api/chat.go).
+		`CREATE TABLE IF NOT EXISTS chat_reports (
+			id               SERIAL PRIMARY KEY,
+			reporter_id      INT REFERENCES users(id) ON DELETE SET NULL,
+			conversation_id  INT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+			message_id       INT REFERENCES messages(id) ON DELETE SET NULL,
+			reported_user_id INT REFERENCES users(id) ON DELETE SET NULL,
+			reason           VARCHAR(500) NOT NULL DEFAULT '',
+			-- Snapshotted at report time so a later edit/delete of the
+			-- message can't erase what was actually reported.
+			message_body_snapshot TEXT NOT NULL DEFAULT '',
+			status           VARCHAR(20) NOT NULL DEFAULT 'open',
+			resolved_by      INT REFERENCES users(id) ON DELETE SET NULL,
+			resolved_at      TIMESTAMPTZ,
+			created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_chat_reports_status ON chat_reports(status, created_at DESC)`,
+
+		// Per-recipient delivery tracking for the sent → delivered → read
+		// message-status tick (direct conversations only — see
+		// scanMessageView). A row means the message has actually reached
+		// user_id's client, whether live (broadcast to an open WebSocket) or
+		// on next fetch (ListMessages/ListMessagesAfter) if they were
+		// offline when it was sent — see markDelivered's call sites.
+		`CREATE TABLE IF NOT EXISTS message_deliveries (
+			message_id   INT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+			user_id      INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			delivered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			PRIMARY KEY (message_id, user_id)
+		)`,
 	}
 
 	for _, m := range migrations {

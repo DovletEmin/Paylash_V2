@@ -324,7 +324,7 @@ func (h *Handler) AdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 	var hash string
 	if req.Password != "" {
 		if !authutil.ValidPassword(req.Password) {
-			writeError(w, http.StatusBadRequest, "parol azyndan 6 simwol bolmaly")
+			writeError(w, http.StatusBadRequest, "parol azyndan 8 simwol bolmaly")
 			return
 		}
 		h2, err := authutil.HashPassword(req.Password)
@@ -418,7 +418,7 @@ func (h *Handler) ExitImpersonation(w http.ResponseWriter, r *http.Request) {
 	}
 	target, _ := h.db.GetUserByID(session.UserID)
 
-	newSession, err := h.db.CreateSession(admin.ID)
+	newSession, err := h.db.CreateSession(admin.ID, h.cfg.SessionTTL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "sessiýa döredip bolmady")
 		return
@@ -572,7 +572,7 @@ func (h *Handler) AdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !authutil.ValidPassword(req.Password) {
-		writeError(w, http.StatusBadRequest, "parol azyndan 6 simwol bolmaly")
+		writeError(w, http.StatusBadRequest, "parol azyndan 8 simwol bolmaly")
 		return
 	}
 	exists, err := h.db.UserExists(req.Username)
@@ -778,7 +778,7 @@ func (h *Handler) AdminImportUsers(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if !authutil.ValidPassword(password) {
-			results = append(results, importResult{Username: username, Error: "parol azyndan 6 simwol"})
+			results = append(results, importResult{Username: username, Error: "parol azyndan 8 simwol"})
 			continue
 		}
 

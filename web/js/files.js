@@ -598,10 +598,64 @@ const FilesPage = {
         this.currentProjectName = s === 'project' ? (projectName || '') : '';
         this.currentProjectPermission = s === 'project' ? (permission || 'view') : null;
         this.currentFolder = null;
-        App.renderPage('files');
+        // Full navigate (not just updatePageURL) — switching scope changes
+        // the sidebar's active-item highlight and the storage-usage bar too,
+        // both part of the page shell App.renderPage rebuilds.
+        App.navigate('files', false, this.urlParams());
     },
     setView(m) { this.viewMode = m; this.renderFiles(); },
-    goToFolder(id) { this.currentFolder = id; this.loadFiles(); },
+    // push=true: opening a folder is a real "location change" (like clicking
+    // into a directory in a file explorer) — Back should step back OUT of
+    // it, the same expectation goToFolder(parentId)/breadcrumb clicks
+    // already rely on. loadFiles() does the actual in-page update; this only
+    // keeps the URL (and so refresh/Back) in sync with it.
+    goToFolder(id) {
+        this.currentFolder = id;
+        this.loadFiles();
+        App.updatePageURL(this.urlParams(), true);
+    },
+
+    // Reduces current scope/project/folder to a plain {key: value} object
+    // for the URL query string — omits anything at its default so a plain
+    // "/files" (personal, root) stays the clean, shareable common case.
+    urlParams() {
+        const p = {};
+        if (this.currentScope !== 'personal') p.scope = this.currentScope;
+        if (this.currentScope === 'project' && this.currentProjectId) p.project = this.currentProjectId;
+        if (this.currentFolder) p.folder = this.currentFolder;
+        return p;
+    },
+
+    // Restores scope/project/folder from the URL's query params — called by
+    // App.initPage before render()/init() so a refresh or a Back/Forward
+    // navigation lands on the same view the URL describes, not whatever was
+    // last held in memory. A project id that no longer resolves (stale link,
+    // access since revoked) falls back to personal scope rather than
+    // rendering a project view with no name/permission to show.
+    applyURLParams(params) {
+        const scope = (params && params.get('scope')) || 'personal';
+        if (scope === 'project') {
+            const pid = parseInt(params.get('project'), 10);
+            const proj = (App.projects || []).find(p => p.id === pid);
+            if (proj) {
+                this.currentScope = 'project';
+                this.currentProjectId = proj.id;
+                this.currentProjectName = proj.name;
+                this.currentProjectPermission = proj.permission;
+            } else {
+                this.currentScope = 'personal';
+                this.currentProjectId = null;
+            }
+        } else if (scope === 'common') {
+            this.currentScope = 'common';
+            this.currentProjectId = null;
+        } else {
+            this.currentScope = 'personal';
+            this.currentProjectId = null;
+        }
+        const folder = params ? parseInt(params.get('folder'), 10) : NaN;
+        this.currentFolder = Number.isInteger(folder) && folder > 0 ? folder : null;
+    },
 
     /* -- Sort -- */
 
@@ -876,21 +930,23 @@ const FilesPage = {
 
     renameFile(item) {
         UI.showModal(I18N.t('files.rename_file_title'), `<div class="form-group"><label>${I18N.t('common.new_name_label')}</label><input type="text" id="rename-input" value="${UI.esc(item.name)}" class="form-control"></div>`,
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="FilesPage.doRenameFile(${item.id})">${I18N.t('common.rename')}</button>`);
+            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="UI.busyClick(this,()=>FilesPage.doRenameFile(${item.id}))">${I18N.t('common.rename')}</button>`);
         setTimeout(() => { const i = document.getElementById('rename-input'); if (i) { i.focus(); i.select(); } }, 100);
     },
     async doRenameFile(id) {
-        const n = document.getElementById('rename-input').value.trim(); if (!n) return;
+        const n = document.getElementById('rename-input').value.trim();
+        if (!n) { UI.toast(I18N.t('files.name_required'), 'error'); return; }
         try { await API.files.rename(id, n); UI.closeModal(); UI.toast(I18N.t('files.rename_done'), 'success'); this.loadFiles(); } catch (e) { UI.toast(e.message, 'error'); }
     },
 
     renameFolder(item) {
         UI.showModal(I18N.t('files.rename_folder_title'), `<div class="form-group"><label>${I18N.t('common.new_name_label')}</label><input type="text" id="rename-input" value="${UI.esc(item.name)}" class="form-control"></div>`,
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="FilesPage.doRenameFolder(${item.id})">${I18N.t('common.rename')}</button>`);
+            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="UI.busyClick(this,()=>FilesPage.doRenameFolder(${item.id}))">${I18N.t('common.rename')}</button>`);
         setTimeout(() => { const i = document.getElementById('rename-input'); if (i) { i.focus(); i.select(); } }, 100);
     },
     async doRenameFolder(id) {
-        const n = document.getElementById('rename-input').value.trim(); if (!n) return;
+        const n = document.getElementById('rename-input').value.trim();
+        if (!n) { UI.toast(I18N.t('files.name_required'), 'error'); return; }
         try { await API.folders.rename(id, n); UI.closeModal(); UI.toast(I18N.t('files.rename_done'), 'success'); this.loadFiles(); } catch (e) { UI.toast(e.message, 'error'); }
     },
 
@@ -930,25 +986,32 @@ const FilesPage = {
 
     deleteFile(item) {
         UI.confirmAction(I18N.t('files.delete_file_title'), I18N.t('files.delete_file_body', { name: UI.esc(item.name) }), I18N.t('common.delete'), async () => {
-            try { await API.files.delete(item.id); UI.toast(I18N.t('files.delete_file_done'), 'success'); this.loadFiles(); App.loadStorageUsage(); }
-            catch (e) { UI.toast(e.message, 'error'); }
+            try {
+                await API.files.delete(item.id);
+                UI.toast(I18N.t('files.delete_file_done'), 'success', { label: I18N.t('common.undo'), onClick: () => FilesPage.undoBulkDelete([item]) });
+                this.loadFiles(); App.loadStorageUsage();
+            } catch (e) { UI.toast(e.message, 'error'); }
         });
     },
 
     deleteFolder(item) {
         UI.confirmAction(I18N.t('files.delete_folder_title'), I18N.t('files.delete_folder_body', { name: UI.esc(item.name) }), I18N.t('common.delete'), async () => {
-            try { await API.folders.delete(item.id); UI.toast(I18N.t('files.delete_folder_done'), 'success'); this.loadFiles(); }
-            catch (e) { UI.toast(e.message, 'error'); }
+            try {
+                await API.folders.delete(item.id);
+                UI.toast(I18N.t('files.delete_folder_done'), 'success', { label: I18N.t('common.undo'), onClick: () => FilesPage.undoBulkDelete([{ ...item, isFolder: true }]) });
+                this.loadFiles();
+            } catch (e) { UI.toast(e.message, 'error'); }
         });
     },
 
     showNewFolderModal() {
         UI.showModal(I18N.t('files.new_folder_title'), `<div class="form-group"><label>${I18N.t('files.new_folder_name_label')}</label><input type="text" id="new-folder-name" class="form-control" placeholder="${I18N.t('files.new_folder_name_placeholder')}"></div>`,
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="FilesPage.doCreateFolder()">${I18N.t('common.create')}</button>`);
+            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="UI.busyClick(this,()=>FilesPage.doCreateFolder())">${I18N.t('common.create')}</button>`);
         setTimeout(() => { const i = document.getElementById('new-folder-name'); if (i) i.focus(); }, 100);
     },
     async doCreateFolder() {
-        const n = document.getElementById('new-folder-name').value.trim(); if (!n) return;
+        const n = document.getElementById('new-folder-name').value.trim();
+        if (!n) { UI.toast(I18N.t('files.name_required'), 'error'); return; }
         try { await API.folders.create(n, this.currentScope, this.currentFolder, this.currentProjectId); UI.closeModal(); UI.toast(I18N.t('files.folder_created'), 'success'); this.loadFiles(); } catch (e) { UI.toast(e.message, 'error'); }
     },
 
@@ -984,7 +1047,7 @@ const FilesPage = {
         UI.showModal(I18N.t('files.new_file_title'),
             `<div class="form-group"><label>${I18N.t('files.new_file_name_label')}</label><input type="text" id="new-file-name" class="form-control" placeholder="${UI.esc(defaultName)}" value="${UI.esc(defaultName)}"></div>
              <div class="new-file-type-badge"><span class="file-type-label">${type.toUpperCase()}</span></div>`,
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="FilesPage.doCreateNewFile('${type}')">${I18N.t('common.create')}</button>`);
+            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="UI.busyClick(this,()=>FilesPage.doCreateNewFile('${type}'))">${I18N.t('common.create')}</button>`);
         setTimeout(() => { const i = document.getElementById('new-file-name'); if (i) { i.focus(); i.select(); } }, 100);
     },
 

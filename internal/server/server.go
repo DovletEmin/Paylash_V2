@@ -28,6 +28,7 @@ type Server struct {
 	// reachability probe in handleHealthz — a short timeout so a
 	// slow/hung Collabora never makes /healthz itself hang.
 	healthHTTPClient *http.Client
+	metrics          *metrics
 }
 
 func New(cfg *config.Config, database *db.DB, minioClient *storage.MinioClient, webFS embed.FS) *Server {
@@ -37,6 +38,7 @@ func New(cfg *config.Config, database *db.DB, minioClient *storage.MinioClient, 
 		minio:            minioClient,
 		mux:              http.NewServeMux(),
 		healthHTTPClient: &http.Client{Timeout: 3 * time.Second},
+		metrics:          newMetrics(),
 	}
 	s.routes(webFS)
 	return s
@@ -51,6 +53,13 @@ func (s *Server) routes(webFS embed.FS) {
 	// proxy the process is up AND can actually reach its database, not just
 	// that the HTTP listener is bound.
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
+
+	// Metrics — no auth, same reasoning as /healthz: a Prometheus scraper on
+	// the LAN doesn't carry a session cookie, and this app already trusts
+	// the LAN by design (see the MinIO CORS wildcard comment in
+	// docker-compose.yml). Nothing served here is per-user or sensitive —
+	// route-level request counts/latency and a connection count.
+	s.mux.HandleFunc("GET /metrics", s.metrics.handler(h))
 
 	// Public routes
 	s.mux.HandleFunc("GET /api/public/config", h.PublicConfig)
@@ -159,6 +168,8 @@ func (s *Server) routes(webFS embed.FS) {
 	s.mux.Handle("POST /api/chat/conversations/{id}/messages/bulk-delete", auth(http.HandlerFunc(h.BulkDeleteMessages)))
 	s.mux.Handle("POST /api/chat/messages/forward-bulk", auth(http.HandlerFunc(h.ForwardMessagesBulk)))
 	s.mux.Handle("GET /api/chat/messages/{messageId}/link-preview-image", auth(http.HandlerFunc(h.ServeLinkPreviewImage)))
+	s.mux.Handle("POST /api/chat/conversations/{id}/messages/{messageId}/report", auth(http.HandlerFunc(h.ReportMessage)))
+	s.mux.Handle("POST /api/chat/conversations/{id}/users/{userId}/report", auth(http.HandlerFunc(h.ReportUser)))
 
 	// Trash (soft-delete)
 	s.mux.Handle("GET /api/trash", auth(http.HandlerFunc(h.ListTrash)))
@@ -201,6 +212,9 @@ func (s *Server) routes(webFS embed.FS) {
 	s.mux.Handle("PATCH /api/admin/public-quota", auth(AdminMiddleware(http.HandlerFunc(h.AdminSetPublicQuota))))
 	s.mux.Handle("GET /api/admin/uploads", auth(AdminMiddleware(http.HandlerFunc(h.AdminListUploads))))
 	s.mux.Handle("DELETE /api/admin/uploads/{id}", auth(AdminMiddleware(http.HandlerFunc(h.AdminAbortUpload))))
+	s.mux.Handle("GET /api/admin/chat-reports", auth(AdminMiddleware(http.HandlerFunc(h.AdminListChatReports))))
+	s.mux.Handle("GET /api/admin/chat-reports/open-count", auth(AdminMiddleware(http.HandlerFunc(h.AdminOpenChatReportCount))))
+	s.mux.Handle("POST /api/admin/chat-reports/{id}/resolve", auth(AdminMiddleware(http.HandlerFunc(h.AdminResolveChatReport))))
 
 	// WOPI endpoints (accessed by Collabora, token-based auth)
 	s.mux.HandleFunc("GET /wopi/files/{id}", wopiH.CheckFileInfo)
@@ -304,7 +318,20 @@ func (s *Server) Start() error {
 	// The frontend and API are always served same-origin (embedded SPA +
 	// API on this same binary, fronted by Caddy under one hostname) — no
 	// cross-origin CORS headers are needed, so none are sent.
-	httpSrv := &http.Server{Addr: addr, Handler: LoggingMiddleware(s.mux)}
+	//
+	// ReadHeaderTimeout/IdleTimeout guard against slow-loris-style connection
+	// exhaustion without touching in-flight request bodies. Deliberately NOT
+	// setting ReadTimeout/WriteTimeout: those cap the WHOLE request/response
+	// duration, which would break this app's actual large-transfer paths —
+	// 100GB+ resumable uploads, multi-GB file downloads, whole-space zip
+	// export, and long-lived WOPI/WebSocket connections — that legitimately
+	// run far longer than any header-only timeout should.
+	httpSrv := &http.Server{
+		Addr:              addr,
+		Handler:           LoggingMiddleware(s.metrics, s.mux),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 
 	serveErr := make(chan error, 1)
 	go func() {

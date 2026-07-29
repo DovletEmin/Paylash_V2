@@ -55,7 +55,11 @@ const I18N = {
             location.reload();
             return;
         }
-        App.renderPage(App.currentPage);
+        // route() (not renderPage(App.currentPage) directly) — it re-reads
+        // the current URL's query string, so whatever folder/tab/
+        // conversation was open survives the language switch instead of
+        // being silently reset to that page's default view.
+        App.route();
     },
 
     // Looks up key in the active locale, falling back to English, then the

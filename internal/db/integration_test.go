@@ -78,7 +78,7 @@ func TestIntegrationSessionLifecycle(t *testing.T) {
 	database := connectTestDB(t)
 	user := createTestUser(t, database, "user")
 
-	session, err := database.CreateSession(user.ID)
+	session, err := database.CreateSession(user.ID, models.DefaultSessionTTL)
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}

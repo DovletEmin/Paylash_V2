@@ -46,9 +46,6 @@ const PreviewPage = {
     _findSiblings() {
         const lists = [];
         if (typeof FilesPage !== 'undefined' && Array.isArray(FilesPage.files)) lists.push(FilesPage.files);
-        if (typeof AdminPage !== 'undefined' && AdminPage._adminBrowser && Array.isArray(AdminPage._adminBrowser.files)) {
-            lists.push(AdminPage._adminBrowser.files);
-        }
         for (const list of lists) {
             if (list.some(f => f.id === this.currentFileId)) {
                 return list.filter(f => UI.mediaType(f.name) === 'image');

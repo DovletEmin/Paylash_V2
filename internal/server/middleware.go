@@ -2,8 +2,11 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"log"
+	"log/slog"
 	"net/http"
 	"paylash/internal/authutil"
 	"paylash/internal/db"
@@ -79,12 +82,93 @@ func AdminMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func LoggingMiddleware(next http.Handler) http.Handler {
+// requestIDContextKey is unexported so only this package can mint/read it —
+// callers elsewhere get it through RequestIDFromContext.
+type requestIDContextKey struct{}
+
+// RequestIDFromContext returns the correlation id LoggingMiddleware attached
+// to this request's context, or "" outside of a real request (e.g. a test
+// that never went through the middleware chain). Handlers can fold this into
+// their own log.Printf/slog lines so a single request's server-side
+// footprint — access log line, any error logs a handler wrote, and the
+// X-Request-Id the client can see in devtools — all share one id.
+func RequestIDFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(requestIDContextKey{}).(string)
+	return id
+}
+
+func newRequestID() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "unknown"
+	}
+	return hex.EncodeToString(b)
+}
+
+// statusRecorder captures the status code a handler wrote — plain
+// http.ResponseWriter has no way to read that back afterward.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+// LoggingMiddleware logs one structured line per request (method, route
+// PATTERN — not the raw URL, see metrics.observe — status, duration, remote
+// IP, request id) and records the same request into m for /metrics. The
+// request id is also echoed back as the X-Request-Id response header, so a
+// user-reported issue ("it broke around 14:32") can be correlated to an
+// exact server-side log line via the browser's network tab.
+func LoggingMiddleware(m *metrics, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		next.ServeHTTP(w, r)
-		log.Printf("%s %s %s", r.Method, r.URL.Path, time.Since(start).Round(time.Millisecond))
+		reqID := newRequestID()
+		w.Header().Set("X-Request-Id", reqID)
+		r = r.WithContext(context.WithValue(r.Context(), requestIDContextKey{}, reqID))
+
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		dur := time.Since(start)
+
+		pattern := r.Pattern
+		if pattern == "" {
+			pattern = r.URL.Path
+		}
+		m.observe(r.Method, pattern, rec.status, dur)
+
+		level := slog.LevelInfo
+		if rec.status >= 500 {
+			level = slog.LevelError
+		} else if rec.status >= 400 {
+			level = slog.LevelWarn
+		}
+		slog.LogAttrs(r.Context(), level, "http_request",
+			slog.String("request_id", reqID),
+			slog.String("method", r.Method),
+			slog.String("route", pattern),
+			slog.Int("status", rec.status),
+			slog.Int64("duration_ms", dur.Milliseconds()),
+			slog.String("remote_ip", clientIPForLog(r)),
+		)
 	})
+}
+
+// clientIPForLog mirrors internal/api's clientIP (unexported there, and this
+// package has no reason to import api just for it) — prefers
+// X-Forwarded-For, set by Caddy's reverse_proxy in front of this app, since
+// r.RemoteAddr behind a reverse proxy is just the proxy's own address.
+func clientIPForLog(r *http.Request) string {
+	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+		if i := strings.IndexByte(fwd, ','); i >= 0 {
+			return strings.TrimSpace(fwd[:i])
+		}
+		return strings.TrimSpace(fwd)
+	}
+	return r.RemoteAddr
 }
 
 func SeedAdmin(database *db.DB) error {

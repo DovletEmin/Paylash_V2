@@ -119,6 +119,24 @@ func (hub *chatHub) isOnline(userID int) bool {
 	return len(hub.conns[userID]) > 0
 }
 
+// count returns the total number of live connections across every user —
+// backs the paylash_ws_connections gauge in /metrics.
+func (hub *chatHub) count() int {
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	n := 0
+	for _, conns := range hub.conns {
+		n += len(conns)
+	}
+	return n
+}
+
+// LiveConnectionCount exposes chatHub.count() to internal/server's /metrics
+// handler, which has no other reason to depend on this package's internals.
+func (h *Handler) LiveConnectionCount() int {
+	return h.chatHub.count()
+}
+
 // broadcast fans an event out to every one of userIDs' active connections
 // (multiple tabs/devices per user) — a non-blocking send, so one stuck
 // connection can never delay delivery to anyone else.

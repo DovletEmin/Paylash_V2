@@ -8,6 +8,10 @@ services:
       - "443:443"
     environment:
       PAYLASH_DOMAIN: "${PAYLASH_DOMAIN}"
+      # Needed so the CSP's connect-src can allow the browser's direct-to-MinIO
+      # large-file upload PUTs — see the comment on Content-Security-Policy in
+      # Caddyfile for why.
+      PAYLASH_MINIO_PUBLIC_ENDPOINT: "${PAYLASH_MINIO_PUBLIC_ENDPOINT}"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

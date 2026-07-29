@@ -196,7 +196,7 @@ const SharesPage = {
             <div id="share-pending-list"></div>
             ${visibilityHTML}
             ${existingSection}`,
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="SharesPage.saveShare()">${I18N.t('common.save')}</button>`);
+            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="UI.busyClick(this,()=>SharesPage.saveShare())">${I18N.t('common.save')}</button>`);
 
         this._currentFiles = files;
         this._pendingRecipients = [];
@@ -351,7 +351,7 @@ const SharesPage = {
                         <option value="view" ${s.permission === 'view' ? 'selected' : ''}>👁 ${I18N.t('shares.perm_view_option')}</option>
                         <option value="edit" ${s.permission === 'edit' ? 'selected' : ''}>✏️ ${I18N.t('shares.perm_edit_option')}</option>
                     </select>
-                    <button class="btn btn-icon btn-sm btn-danger" onclick="SharesPage.removeShare(${fileId},${s.shared_with})" title="${I18N.t('shares.remove_title')}" aria-label="${I18N.t('shares.remove_title')}">✕</button>
+                    <button class="btn btn-icon btn-sm btn-danger" onclick="SharesPage.removeShare(${fileId},${s.shared_with},${UI.escJson(s.full_name || s.username)})" title="${I18N.t('shares.remove_title')}" aria-label="${I18N.t('shares.remove_title')}">✕</button>
                 </div>`).join('');
         } catch { el.innerHTML = ''; }
     },
@@ -363,8 +363,10 @@ const SharesPage = {
         } catch (e) { UI.toast(e.message, 'error'); }
     },
 
-    async removeShare(fileId, userId) {
-        try { await API.sharing.deleteShare(fileId, userId); UI.toast(I18N.t('shares.share_removed'), 'success'); this.loadExistingShares(fileId); }
-        catch (e) { UI.toast(e.message, 'error'); }
+    removeShare(fileId, userId, name) {
+        UI.confirmAction(I18N.t('shares.remove_title'), I18N.t('shares.remove_confirm_body', { name: name || '' }), I18N.t('common.remove'), async () => {
+            try { await API.sharing.deleteShare(fileId, userId); UI.toast(I18N.t('shares.share_removed'), 'success'); this.loadExistingShares(fileId); }
+            catch (e) { UI.toast(e.message, 'error'); }
+        });
     }
 };

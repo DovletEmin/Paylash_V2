@@ -32,10 +32,10 @@ func TestValidPassword(t *testing.T) {
 		want     bool
 	}{
 		{"empty", "", false},
-		{"too short", "abcde", false},
-		{"minimum length", "abcdef", true},
+		{"too short", "abcdefg", false},
+		{"minimum length", "abcdefgh", true},
 		{"comfortably long", "correct horse battery staple", true},
-		{"whitespace is significant, not trimmed", "  ab  ", true}, // 6 raw chars, even though only 2 are non-space
+		{"whitespace is significant, not trimmed", "  abcd  ", true}, // 8 raw chars, even though only 4 are non-space
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

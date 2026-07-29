@@ -158,7 +158,8 @@ func (d *DB) ListConversationsForUser(userID int, archived bool) ([]models.Conve
 		       COALESCE(unread.cnt, 0) AS unread_count,
 		       lm.body, lm.created_at,
 		       other.user_id, other.username, other.display_name, other.avatar_url,
-		       cp.muted, cp.pinned_at IS NOT NULL, cp.archived_at IS NOT NULL
+		       cp.muted AND (cp.muted_until IS NULL OR cp.muted_until > NOW()), cp.muted_until,
+		       cp.pinned_at IS NOT NULL, cp.archived_at IS NOT NULL
 		FROM conversations c
 		JOIN conversation_participants cp ON cp.conversation_id = c.id AND cp.user_id = $1
 		LEFT JOIN LATERAL (
@@ -192,13 +193,18 @@ func (d *DB) ListConversationsForUser(userID int, archived bool) ([]models.Conve
 		var lastAt sql.NullTime
 		var otherID sql.NullInt64
 		var otherUsername, otherDisplayName, otherAvatar sql.NullString
+		var mutedUntil sql.NullTime
 		if err := rows.Scan(
 			&cv.ID, &cv.Type, &cv.Name, &cv.ProjectID, &cv.CreatedBy, &cv.LastMessageAt, &cv.CreatedAt,
 			&cv.UnreadCount, &lastBody, &lastAt,
 			&otherID, &otherUsername, &otherDisplayName, &otherAvatar,
-			&cv.Muted, &cv.Pinned, &cv.Archived,
+			&cv.Muted, &mutedUntil, &cv.Pinned, &cv.Archived,
 		); err != nil {
 			return nil, err
+		}
+		if mutedUntil.Valid {
+			t := mutedUntil.Time
+			cv.MutedUntil = &t
 		}
 		if lastBody.Valid {
 			cv.LastMessageBody = lastBody.String
@@ -352,7 +358,8 @@ func (d *DB) RemoveParticipant(conversationID, userID int) error {
 
 func (d *DB) ListParticipants(conversationID int) ([]models.ParticipantView, error) {
 	rows, err := d.Query(
-		`SELECT u.id, u.username, COALESCE(u.display_name, u.username, ''), u.avatar_url, cp.last_read_at, u.last_seen_at, cp.role, cp.muted
+		`SELECT u.id, u.username, COALESCE(u.display_name, u.username, ''), u.avatar_url, cp.last_read_at, u.last_seen_at, cp.role,
+		        cp.muted AND (cp.muted_until IS NULL OR cp.muted_until > NOW())
 		 FROM conversation_participants cp
 		 JOIN users u ON u.id = cp.user_id
 		 WHERE cp.conversation_id = $1
@@ -407,10 +414,17 @@ func (d *DB) SetParticipantRole(conversationID, userID int, role string) error {
 // participant's view of it. Pinned/archived use a timestamp (non-null =
 // active) so ListConversationsForUser can sort pinned conversations by how
 // recently they were pinned.
-func (d *DB) SetConversationMuted(conversationID, userID int, muted bool) error {
+//
+// until is the mute's expiry (nil = muted forever, until unmuted) — always
+// reset to nil when muted is false, so a stale expiry can never resurface
+// once someone has explicitly unmuted a conversation.
+func (d *DB) SetConversationMuted(conversationID, userID int, muted bool, until *time.Time) error {
+	if !muted {
+		until = nil
+	}
 	_, err := d.Exec(
-		`UPDATE conversation_participants SET muted = $1 WHERE conversation_id = $2 AND user_id = $3`,
-		muted, conversationID, userID,
+		`UPDATE conversation_participants SET muted = $1, muted_until = $2 WHERE conversation_id = $3 AND user_id = $4`,
+		muted, until, conversationID, userID,
 	)
 	return err
 }
@@ -449,7 +463,8 @@ func (d *DB) SetConversationArchived(conversationID, userID int, archived bool) 
 // re-fetched on every message.
 func (d *DB) ListMutedConversationIDs(userID int) ([]int, error) {
 	rows, err := d.Query(
-		`SELECT conversation_id FROM conversation_participants WHERE user_id = $1 AND muted = TRUE`,
+		`SELECT conversation_id FROM conversation_participants
+		 WHERE user_id = $1 AND muted = TRUE AND (muted_until IS NULL OR muted_until > NOW())`,
 		userID,
 	)
 	if err != nil {
@@ -542,6 +557,24 @@ func (d *DB) ListConversationContactIDs(userID int) ([]int, error) {
 	return ids, rows.Err()
 }
 
+// MarkDelivered records that userID's client has now received the given
+// messages — either live (broadcast to an open WebSocket) or by fetching
+// them (initial load or the after_id resync). Idempotent (ON CONFLICT DO
+// NOTHING): a message delivered twice (e.g. live AND then re-fetched) keeps
+// its FIRST delivered_at rather than getting bumped forward.
+func (d *DB) MarkDelivered(messageIDs []int, userID int) error {
+	if len(messageIDs) == 0 {
+		return nil
+	}
+	_, err := d.Exec(
+		`INSERT INTO message_deliveries (message_id, user_id)
+		 SELECT unnest($1::int[]), $2
+		 ON CONFLICT (message_id, user_id) DO NOTHING`,
+		pq.Array(messageIDs), userID,
+	)
+	return err
+}
+
 func (d *DB) MarkConversationRead(conversationID, userID int) error {
 	_, err := d.Exec(
 		`UPDATE conversation_participants SET last_read_at = NOW() WHERE conversation_id = $1 AND user_id = $2`,
@@ -617,12 +650,14 @@ func (d *DB) CreateMessage(conversationID, senderID int, body, kind string, repl
 // ListMessages so the two queries can't drift out of sync with each other.
 // other_read.min_read_at is the earliest last_read_at among every OTHER
 // participant — meaningful as a "read" cutoff for direct conversations
-// (exactly one other participant); group conversations always fall back to
-// a plain "sent" status (see scanMessageView), so what this resolves to for
-// a group is never actually used.
+// (exactly one other participant); other_delivered.min_delivered_at is the
+// same idea for the "delivered" tick, backed by message_deliveries (see
+// markDelivered). group conversations always fall back to a plain "sent"
+// status (see scanMessageView), so what these resolve to for a group is
+// never actually used.
 const messageViewCols = `m.id, m.conversation_id, m.sender_id, m.body, m.kind, m.edited_at, m.reply_to_id, m.forwarded_from_name, m.deleted_at, m.created_at,
 	COALESCE(u.display_name, u.username, ''), COALESCE(u.avatar_url, ''),
-	COALESCE(c.type, ''), other_read.min_read_at,
+	COALESCE(c.type, ''), other_read.min_read_at, other_delivered.min_delivered_at,
 	rm.id, COALESCE(ru.display_name, ru.username, ''), COALESCE(rm.body, ''), COALESCE(rm.kind, ''),
 	m.link_preview_url, COALESCE(lp.title, ''), COALESCE(lp.description, ''), COALESCE(lp.image_key, '')`
 
@@ -634,6 +669,11 @@ const messageViewJoins = `FROM messages m
 		FROM conversation_participants cp
 		WHERE cp.conversation_id = m.conversation_id AND cp.user_id != m.sender_id
 	) other_read ON true
+	LEFT JOIN LATERAL (
+		SELECT MIN(md.delivered_at) AS min_delivered_at
+		FROM message_deliveries md
+		WHERE md.message_id = m.id AND md.user_id != m.sender_id
+	) other_delivered ON true
 	LEFT JOIN messages rm ON rm.id = m.reply_to_id
 	LEFT JOIN users ru ON ru.id = rm.sender_id
 	LEFT JOIN link_previews lp ON lp.url = m.link_preview_url`
@@ -647,7 +687,7 @@ type scanner interface {
 func scanMessageView(row scanner) (*models.MessageView, error) {
 	mv := &models.MessageView{}
 	var convType string
-	var otherRead sql.NullTime
+	var otherRead, otherDelivered sql.NullTime
 	var replyID sql.NullInt64
 	var replySender, replyBody, replyKind string
 	var linkURL sql.NullString
@@ -655,16 +695,19 @@ func scanMessageView(row scanner) (*models.MessageView, error) {
 	if err := row.Scan(
 		&mv.ID, &mv.ConversationID, &mv.SenderID, &mv.Body, &mv.Kind, &mv.EditedAt, &mv.ReplyToID, &mv.ForwardedFromName, &mv.DeletedAt, &mv.CreatedAt,
 		&mv.SenderName, &mv.SenderAvatar,
-		&convType, &otherRead,
+		&convType, &otherRead, &otherDelivered,
 		&replyID, &replySender, &replyBody, &replyKind,
 		&linkURL, &lpTitle, &lpDescription, &lpImageKey,
 	); err != nil {
 		return nil, err
 	}
 	if mv.SenderID != nil {
-		if convType == "direct" && otherRead.Valid && !mv.CreatedAt.After(otherRead.Time) {
+		switch {
+		case convType == "direct" && otherRead.Valid && !mv.CreatedAt.After(otherRead.Time):
 			mv.Status = "read"
-		} else {
+		case convType == "direct" && otherDelivered.Valid:
+			mv.Status = "delivered"
+		default:
 			mv.Status = "sent"
 		}
 	}
@@ -736,8 +779,6 @@ func (d *DB) ListMessages(conversationID, requesterID, beforeID, limit int) ([]m
 	}
 	defer rows.Close()
 
-	var ids []int
-	byID := map[int]*models.MessageView{}
 	var list []models.MessageView
 	for rows.Next() {
 		mv, err := scanMessageView(rows)
@@ -745,80 +786,126 @@ func (d *DB) ListMessages(conversationID, requesterID, beforeID, limit int) ([]m
 			return nil, err
 		}
 		list = append(list, *mv)
-		ids = append(ids, mv.ID)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	return d.hydrateMessageViews(list, requesterID)
+}
+
+// ListMessagesAfter returns messages newer than afterID, oldest first — the
+// forward-gap-fill counterpart to ListMessages' backward-scrolling
+// pagination. Used to resync a conversation after a WebSocket reconnect
+// (see ChatSocket.onReconnect in chatSocket.js) without re-fetching the
+// whole visible page. Capped at limit: if MORE than that arrived while
+// disconnected, the client detects a full page and falls back to reloading
+// the conversation from scratch instead of looping this forever.
+func (d *DB) ListMessagesAfter(conversationID, requesterID, afterID, limit int) ([]models.MessageView, error) {
+	rows, err := d.Query(
+		`SELECT `+messageViewCols+` `+messageViewJoins+`
+		 LEFT JOIN message_hidden_for hf ON hf.message_id = m.id AND hf.user_id = $4
+		 WHERE m.conversation_id = $1 AND m.id > $2 AND hf.message_id IS NULL
+		 ORDER BY m.created_at ASC, m.id ASC LIMIT $3`,
+		conversationID, afterID, limit, requesterID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []models.MessageView
+	for rows.Next() {
+		mv, err := scanMessageView(rows)
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, *mv)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return d.hydrateMessageViews(list, requesterID)
+}
+
+// hydrateMessageViews batches in attachments, reactions, and (for the
+// requester's own messages) group read receipts across a whole page of
+// messages — one query per concern instead of N. Shared by ListMessages and
+// ListMessagesAfter so the two pagination directions can't drift out of
+// sync with each other.
+func (d *DB) hydrateMessageViews(list []models.MessageView, requesterID int) ([]models.MessageView, error) {
+	if len(list) == 0 {
+		return list, nil
+	}
+	ids := make([]int, len(list))
+	byID := make(map[int]*models.MessageView, len(list))
 	for i := range list {
+		ids[i] = list[i].ID
 		byID[list[i].ID] = &list[i]
 	}
 
 	// One extra query for every attachment belonging to any message in this
 	// page, rather than N — cheap at this app's scale and avoids a
 	// per-message round trip.
-	if len(ids) > 0 {
-		attRows, err := d.Query(
-			`SELECT id, message_id, conversation_id, uploaded_by, file_name, size_bytes, content_type, created_at
-			 FROM message_attachments WHERE message_id = ANY($1)`, pq.Array(ids),
-		)
-		if err != nil {
+	attRows, err := d.Query(
+		`SELECT id, message_id, conversation_id, uploaded_by, file_name, size_bytes, content_type, created_at
+		 FROM message_attachments WHERE message_id = ANY($1)`, pq.Array(ids),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer attRows.Close()
+	for attRows.Next() {
+		var a models.MessageAttachment
+		if err := attRows.Scan(&a.ID, &a.MessageID, &a.ConversationID, &a.UploadedBy, &a.FileName, &a.SizeBytes, &a.ContentType, &a.CreatedAt); err != nil {
 			return nil, err
 		}
-		defer attRows.Close()
-		for attRows.Next() {
-			var a models.MessageAttachment
-			if err := attRows.Scan(&a.ID, &a.MessageID, &a.ConversationID, &a.UploadedBy, &a.FileName, &a.SizeBytes, &a.ContentType, &a.CreatedAt); err != nil {
-				return nil, err
-			}
-			if a.MessageID != nil {
-				if mv, ok := byID[*a.MessageID]; ok {
-					mv.Attachments = append(mv.Attachments, a)
-				}
+		if a.MessageID != nil {
+			if mv, ok := byID[*a.MessageID]; ok {
+				mv.Attachments = append(mv.Attachments, a)
 			}
 		}
-		if err := attRows.Err(); err != nil {
-			return nil, err
-		}
+	}
+	if err := attRows.Err(); err != nil {
+		return nil, err
+	}
 
-		// Same batched pattern for reactions: one query for the whole page.
-		reactByMsg, err := d.listReactionGroupsForMessages(ids)
-		if err != nil {
-			return nil, err
+	// Same batched pattern for reactions: one query for the whole page.
+	reactByMsg, err := d.listReactionGroupsForMessages(ids)
+	if err != nil {
+		return nil, err
+	}
+	for msgID, groups := range reactByMsg {
+		if mv, ok := byID[msgID]; ok {
+			mv.Reactions = groups
 		}
-		for msgID, groups := range reactByMsg {
-			if mv, ok := byID[msgID]; ok {
-				mv.Reactions = groups
-			}
-		}
+	}
 
-		// Group read receipts: which other participants have read each of the
-		// REQUESTER'S OWN messages. Scoped to sender_id = requester so a member
-		// never sees who read someone else's message.
-		readRows, err := d.Query(
-			`SELECT m.id, cp.user_id
-			 FROM messages m
-			 JOIN conversation_participants cp ON cp.conversation_id = m.conversation_id
-			   AND cp.user_id <> m.sender_id AND cp.last_read_at >= m.created_at
-			 WHERE m.id = ANY($1) AND m.sender_id = $2`,
-			pq.Array(ids), requesterID,
-		)
-		if err != nil {
+	// Group read receipts: which other participants have read each of the
+	// REQUESTER'S OWN messages. Scoped to sender_id = requester so a member
+	// never sees who read someone else's message.
+	readRows, err := d.Query(
+		`SELECT m.id, cp.user_id
+		 FROM messages m
+		 JOIN conversation_participants cp ON cp.conversation_id = m.conversation_id
+		   AND cp.user_id <> m.sender_id AND cp.last_read_at >= m.created_at
+		 WHERE m.id = ANY($1) AND m.sender_id = $2`,
+		pq.Array(ids), requesterID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer readRows.Close()
+	for readRows.Next() {
+		var msgID, uid int
+		if err := readRows.Scan(&msgID, &uid); err != nil {
 			return nil, err
 		}
-		defer readRows.Close()
-		for readRows.Next() {
-			var msgID, uid int
-			if err := readRows.Scan(&msgID, &uid); err != nil {
-				return nil, err
-			}
-			if mv, ok := byID[msgID]; ok {
-				mv.ReadUserIDs = append(mv.ReadUserIDs, uid)
-			}
+		if mv, ok := byID[msgID]; ok {
+			mv.ReadUserIDs = append(mv.ReadUserIDs, uid)
 		}
-		if err := readRows.Err(); err != nil {
-			return nil, err
-		}
+	}
+	if err := readRows.Err(); err != nil {
+		return nil, err
 	}
 	return list, nil
 }

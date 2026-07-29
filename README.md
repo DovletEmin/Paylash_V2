@@ -20,10 +20,9 @@ For the full design rationale (data model, access model, API reference), see [PL
 - Admin panel: projects, employees, quotas, bulk CSV/XLSX import, audit log, active-upload
   visibility
 - Real-time chat: reactions, typing indicators, presence (online / last seen), group read
-  receipts, message search, stickers, edit/reply/forward
-- Two-factor authentication (TOTP) with recovery codes — recommended for admins
+  receipts, message search, stickers, edit/reply/forward, message reporting/moderation
 - One-click export of any space (personal / common / project) as a zip
-- Login rate-limiting, forced password change on first login for admin-created accounts
+- Forced password change on first login for admin-created accounts
 
 ### Web push notifications (optional)
 

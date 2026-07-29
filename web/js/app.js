@@ -27,9 +27,8 @@ const App = {
     _handlePushHash() {
         const chatMatch = location.hash.match(/^#chat\/(\d+)/);
         if (chatMatch && this.user) {
-            if (typeof ChatPage !== 'undefined') ChatPage._activeId = parseInt(chatMatch[1], 10);
             history.replaceState(null, '', '/');
-            this.navigate('chat');
+            this.navigate('chat', false, { c: chatMatch[1] });
             return;
         }
         if (location.hash === '#shared' && this.user) {
@@ -63,7 +62,7 @@ const App = {
     async saveForcedPassword() {
         const oldPw = document.getElementById('force-old-pw').value;
         const newPw = document.getElementById('force-new-pw').value;
-        if (!oldPw || newPw.length < 6) { UI.toast(I18N.t('app.old_new_required'), 'error'); return; }
+        if (!oldPw || newPw.length < 8) { UI.toast(I18N.t('app.old_new_required'), 'error'); return; }
         try {
             const updated = await API.auth.updateProfile(this.user.full_name, oldPw, newPw);
             this.user = updated;
@@ -74,7 +73,9 @@ const App = {
             // usage never actually loaded behind the modal. Re-render now
             // that the block is lifted so the shell shows real content
             // instead of whatever error state those failed calls left behind.
-            this.renderPage(this.currentPage);
+            // route() (not a plain re-render) so any folder/tab/conversation
+            // already reflected in the URL survives this refresh too.
+            this.route();
             this.maybeShowOnboarding();
         } catch (e) { UI.toast(e.message, 'error'); }
     },
@@ -286,30 +287,76 @@ const App = {
         });
     },
 
+    // Regular employees see only projects they're a member of (ListMyProjects).
+    // Admins additionally see every OTHER project too — the backend already
+    // grants admins full edit access to any project regardless of membership
+    // (see canEditScopeWith server-side), so surfacing them here means an
+    // admin browses/manages project files through the exact same Files page
+    // and its full toolset (multi-select, move, share, versions, sort,
+    // filter, search) everyone else uses, rather than a separate, more
+    // limited "admin file browser" — see the project's audit notes on why
+    // that duplicate implementation was retired in favor of this.
     async loadProjects() {
         try { this.projects = await API.projects.list(); } catch { this.projects = []; }
+        if (this.user && this.user.role === 'admin') {
+            try {
+                const all = await API.admin.projects.list();
+                const known = new Set(this.projects.map(p => p.id));
+                for (const p of all) {
+                    if (!known.has(p.id)) this.projects.push({ id: p.id, name: p.name, permission: 'edit' });
+                }
+                this.projects.sort((a, b) => a.name.localeCompare(b.name));
+            } catch { /* best-effort — worst case an admin only sees their own memberships this load */ }
+        }
     },
 
-    navigate(page, replace) {
-        const url = '/' + (page === 'files' ? '' : page);
+    // params (a plain object of query-string key/values) becomes the new
+    // URL's query string — how a page's own sub-state (files: folder/scope/
+    // project; chat: open conversation; admin: active tab) survives a
+    // refresh or a browser back/forward instead of always resetting to that
+    // page's default view. See updatePageURL for changing just the query
+    // string of the CURRENT page without a full route()/re-render.
+    navigate(page, replace, params) {
+        let url = '/' + (page === 'files' ? '' : page);
+        const qs = params ? new URLSearchParams(params).toString() : '';
+        if (qs) url += '?' + qs;
         if (replace) history.replaceState({ page }, '', url);
         else history.pushState({ page }, '', url);
         this.route();
     },
 
+    // Updates the query string for whatever page is ALREADY showing, without
+    // tearing down and re-rendering the page shell — used for in-page state
+    // changes (opening a folder, switching admin tab, opening a chat
+    // conversation) that already update themselves via a lighter, targeted
+    // DOM patch. push=true adds a new history entry (so browser Back
+    // retraces the step, appropriate for hierarchical drill-down like file
+    // folders); push=false (the default) replaces the current entry
+    // (appropriate for tab-like switches — chat conversation, admin tab —
+    // where retracing every switch via Back would be more annoying than
+    // useful, matching how Telegram Web/Slack's own URL handling behaves).
+    updatePageURL(params, push) {
+        let url = '/' + (this.currentPage === 'files' ? '' : this.currentPage);
+        const qs = params ? new URLSearchParams(params).toString() : '';
+        if (qs) url += '?' + qs;
+        const method = push ? 'pushState' : 'replaceState';
+        history[method]({ page: this.currentPage }, '', url);
+    },
+
     route() {
         const path = location.pathname.replace(/^\/+/, '') || '';
         const page = path.split('/')[0] || 'files';
+        const params = new URLSearchParams(location.search);
 
         if (!this.user && !['login', 'register'].includes(page)) { this.navigate('login', true); return; }
         if (this.user && ['login', 'register'].includes(page)) { this.navigate('files', true); return; }
         if (page === 'register' && !this.config.allow_registration) { this.navigate('login', true); return; }
         if (page === 'admin' && this.user && this.user.role !== 'admin') { this.navigate('files', true); return; }
 
-        this.renderPage(page);
+        this.renderPage(page, params);
     },
 
-    async renderPage(page) {
+    async renderPage(page, params) {
         this.currentPage = page;
         const app = document.getElementById('app');
 
@@ -333,7 +380,7 @@ const App = {
 
         await this.loadProjects();
         app.innerHTML = this.renderShell(page);
-        this.initPage(page);
+        this.initPage(page, params);
         this.loadStorageUsage();
         this.renderNotifBadge(this._lastNotifCount);
         this.renderChatBadge(this._lastChatUnread);
@@ -353,14 +400,14 @@ const App = {
                     <a class="nav-item ${page === 'files' ? 'active' : ''}" onclick="App.navigate('files')">
                         ${UI.icons.folder} <span>${I18N.t('app.nav_files')}</span>
                     </a>
-                    <a class="nav-item nav-sub ${page === 'files' && FilesPage.currentScope === 'personal' ? 'active' : ''}" onclick="FilesPage.setScope('personal');App.navigate('files')">
+                    <a class="nav-item nav-sub ${page === 'files' && FilesPage.currentScope === 'personal' ? 'active' : ''}" onclick="FilesPage.setScope('personal')">
                         <span>🔒</span> <span>${I18N.t('app.nav_personal')}</span>
                     </a>
-                    <a class="nav-item nav-sub ${page === 'files' && FilesPage.currentScope === 'common' ? 'active' : ''}" onclick="FilesPage.setScope('common');App.navigate('files')">
+                    <a class="nav-item nav-sub ${page === 'files' && FilesPage.currentScope === 'common' ? 'active' : ''}" onclick="FilesPage.setScope('common')">
                         <span>🌐</span> <span>${I18N.t('app.nav_common')}</span>
                     </a>
                     ${this.projects.map(p => `
-                    <a class="nav-item nav-sub ${page === 'files' && FilesPage.currentScope === 'project' && FilesPage.currentProjectId === p.id ? 'active' : ''}" onclick="FilesPage.setScope('project',${p.id},${UI.escJson(p.name)},${UI.escJson(p.permission)});App.navigate('files')">
+                    <a class="nav-item nav-sub ${page === 'files' && FilesPage.currentScope === 'project' && FilesPage.currentProjectId === p.id ? 'active' : ''}" onclick="FilesPage.setScope('project',${p.id},${UI.escJson(p.name)},${UI.escJson(p.permission)})">
                         <span>${p.permission === 'view' ? '👁' : '📁'}</span> <span>${UI.esc(p.name)}</span>
                     </a>`).join('')}
                     <a class="nav-item ${page === 'shared' ? 'active' : ''}" onclick="App.navigate('shared')">
@@ -417,15 +464,21 @@ const App = {
         return { files: I18N.t('app.nav_files'), shared: I18N.t('app.nav_shared'), trash: I18N.t('app.nav_trash'), admin: I18N.t('app.nav_admin_section') }[p] || 'Paýlaş';
     },
 
-    initPage(page) {
+    initPage(page, params) {
         const c = document.getElementById('page-content');
         if (!c) return;
         switch (page) {
-            case 'files':  c.innerHTML = FilesPage.render(); FilesPage.init(); break;
+            case 'files':
+                if (typeof FilesPage !== 'undefined') FilesPage.applyURLParams(params);
+                c.innerHTML = FilesPage.render(); FilesPage.init(); break;
             case 'shared': c.innerHTML = SharesPage.renderSharedWithMe(); SharesPage.initSharedWithMe(); break;
-            case 'chat':   c.innerHTML = ChatPage.render(); ChatPage.init(); break;
+            case 'chat':
+                if (typeof ChatPage !== 'undefined') ChatPage.applyURLParams(params);
+                c.innerHTML = ChatPage.render(); ChatPage.init(); break;
             case 'trash':  c.innerHTML = TrashPage.render(); TrashPage.init(); break;
-            case 'admin':  c.innerHTML = AdminPage.render(); AdminPage.init(); break;
+            case 'admin':
+                if (typeof AdminPage !== 'undefined') AdminPage.applyURLParams(params);
+                c.innerHTML = AdminPage.render(); AdminPage.init(); break;
             default:       c.innerHTML = `<div class="empty-state"><p>${I18N.t('app.page_not_found')}</p></div>`;
         }
     },
@@ -571,7 +624,7 @@ const App = {
             this.user = updated;
             UI.toast(I18N.t('app.avatar_changed'), 'success');
             UI.closeModal();
-            this.renderPage(this.currentPage);
+            this.route();
         } catch (e) { UI.toast(e.message, 'error'); }
     },
 
@@ -590,7 +643,7 @@ const App = {
             this.user = updated;
             UI.closeModal();
             UI.toast(I18N.t('app.profile_updated'), 'success');
-            this.renderPage(this.currentPage);
+            this.route();
         } catch (e) { UI.toast(e.message, 'error'); }
     }
 };

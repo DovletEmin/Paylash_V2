@@ -139,6 +139,11 @@ func (m *MinioClient) Delete(ctx context.Context, bucket, key string) error {
 // and then the bucket itself. It's meant for buckets that are wholly owned
 // by a single project or user (project-{id}, personal-{id}) — never call it
 // on a shared bucket like common-files. A missing bucket is not an error.
+//
+// Objects are removed via the bulk RemoveObjects API (minio-go batches the
+// stream into groups of 1000 internally) rather than one RemoveObject call
+// per object/version — a project or personal bucket with thousands of
+// files/versions previously meant thousands of sequential round trips here.
 func (m *MinioClient) RemoveBucketAndAllObjects(ctx context.Context, bucket string) error {
 	exists, err := m.client.BucketExists(ctx, bucket)
 	if err != nil {
@@ -147,14 +152,31 @@ func (m *MinioClient) RemoveBucketAndAllObjects(ctx context.Context, bucket stri
 	if !exists {
 		return nil
 	}
-	for obj := range m.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{Recursive: true, WithVersions: true}) {
-		if obj.Err != nil {
-			return fmt.Errorf("list objects in %s: %w", bucket, obj.Err)
+
+	objectsCh := make(chan minio.ObjectInfo)
+	listErrCh := make(chan error, 1)
+	go func() {
+		defer close(objectsCh)
+		for obj := range m.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{Recursive: true, WithVersions: true}) {
+			if obj.Err != nil {
+				listErrCh <- obj.Err
+				return
+			}
+			objectsCh <- obj
 		}
-		if err := m.client.RemoveObject(ctx, bucket, obj.Key, minio.RemoveObjectOptions{VersionID: obj.VersionID}); err != nil {
-			return fmt.Errorf("remove object %s/%s (version %s): %w", bucket, obj.Key, obj.VersionID, err)
+	}()
+
+	for rErr := range m.client.RemoveObjects(ctx, bucket, objectsCh, minio.RemoveObjectsOptions{}) {
+		if rErr.Err != nil {
+			return fmt.Errorf("remove object %s/%s (version %s): %w", bucket, rErr.ObjectName, rErr.VersionID, rErr.Err)
 		}
 	}
+	select {
+	case err := <-listErrCh:
+		return fmt.Errorf("list objects in %s: %w", bucket, err)
+	default:
+	}
+
 	if err := m.client.RemoveBucket(ctx, bucket); err != nil {
 		return fmt.Errorf("remove bucket %s: %w", bucket, err)
 	}
@@ -188,6 +210,41 @@ func (m *MinioClient) ListVersions(ctx context.Context, bucket, key string) ([]O
 		})
 	}
 	sort.Slice(versions, func(i, j int) bool { return versions[i].LastModified.After(versions[j].LastModified) })
+	return versions, nil
+}
+
+// KeyedObjectVersion is one version of one object, for callers scanning an
+// entire bucket at once (see ListAllVersions) rather than a single known key.
+type KeyedObjectVersion struct {
+	Key string
+	ObjectVersion
+}
+
+// ListAllVersions returns every non-latest, non-delete-marker version of
+// every object in bucket in ONE recursive listing — the batched counterpart
+// to calling ListVersions once per key. Used by the janitor's version-
+// retention sweep, which used to issue one ListObjects call per file in the
+// whole system; grouping by bucket first (see trimOldVersions) and listing
+// each bucket exactly once here cuts that down to one call per bucket.
+func (m *MinioClient) ListAllVersions(ctx context.Context, bucket string) ([]KeyedObjectVersion, error) {
+	var versions []KeyedObjectVersion
+	for obj := range m.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{Recursive: true, WithVersions: true}) {
+		if obj.Err != nil {
+			return nil, fmt.Errorf("list versions in %s: %w", bucket, obj.Err)
+		}
+		if obj.IsDeleteMarker {
+			continue
+		}
+		versions = append(versions, KeyedObjectVersion{
+			Key: obj.Key,
+			ObjectVersion: ObjectVersion{
+				VersionID:    obj.VersionID,
+				Size:         obj.Size,
+				LastModified: obj.LastModified,
+				IsLatest:     obj.IsLatest,
+			},
+		})
+	}
 	return versions, nil
 }
 
