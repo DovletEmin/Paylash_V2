@@ -54,11 +54,13 @@ services:
       # only (not the LAN) so it's still reachable for troubleshooting via
       # SSH tunnel / on the host itself, without handing every device on
       # the studio's network a path around the app's permission model.
-      - "127.0.0.1:9001:9001"
+      - "127.0.0.1:19001:9001"
       # S3 API port, published so browsers can PUT large-file upload parts
       # directly to MinIO (see PAYLASH_MINIO_PUBLIC_ENDPOINT below) — the app
       # server itself keeps talking to MinIO over the internal Docker network.
-      - "9000:9000"
+      # Remapped to 19000 on this host: another project's stack (sary-minio)
+      # already holds the standard 9000/9001 here. Local-only, not committed.
+      - "19000:9000"
     volumes:
       - minio_data:/data
     healthcheck:
@@ -84,6 +86,10 @@ services:
     build: .
     container_name: paylash-app
     restart: unless-stopped
+    # Direct host access for local testing, bypassing Caddy/the domain —
+    # local-only, not committed (production access is via Caddy on 80/443).
+    ports:
+      - "18080:8080"
     environment:
       PAYLASH_PORT: "${PAYLASH_PORT}"
       PAYLASH_DB_URL: "${PAYLASH_DB_URL}"

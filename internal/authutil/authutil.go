@@ -12,6 +12,15 @@ type contextKey string
 
 const UserKey contextKey = "user"
 
+// ImpersonatorKey holds the ADMIN's *models.User when the current request
+// is running on an impersonation session (see AuthMiddleware /
+// internal/api/admin.go's Impersonate) — nil in the context for every
+// ordinary session. GetUser still returns the impersonated TARGET (so
+// every normal permission/ownership check treats the request as theirs);
+// this is only for the audit log and the "you're viewing as X" banner to
+// find the real actor.
+const ImpersonatorKey contextKey = "impersonator"
+
 // Minimum username/password length, enforced identically wherever an
 // account gets a username or password: self-registration, admin-created
 // users, and CSV/XLSX bulk import — one shared rule instead of the same two
@@ -47,6 +56,15 @@ func CheckPassword(password, hash string) bool {
 
 func GetUser(r *http.Request) *models.User {
 	if u, ok := r.Context().Value(UserKey).(*models.User); ok {
+		return u
+	}
+	return nil
+}
+
+// GetImpersonator returns the admin behind the current impersonation
+// session, or nil if this is an ordinary (non-impersonated) session.
+func GetImpersonator(r *http.Request) *models.User {
+	if u, ok := r.Context().Value(ImpersonatorKey).(*models.User); ok {
 		return u
 	}
 	return nil

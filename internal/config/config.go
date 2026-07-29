@@ -14,8 +14,15 @@ type Config struct {
 	MinioUseSSL         bool
 	MinioPublicEndpoint string
 	CollaboraURL        string
-	BaseURL             string
-	AllowRegistration   bool
+	// CollaboraHealthURL is Collabora's INTERNAL (Docker-network) discovery
+	// endpoint, used only by /healthz. CollaboraURL above is deliberately
+	// NOT reused for this: it's the public-facing address routed through
+	// Caddy (which itself depends on this app being healthy — checking
+	// through Caddy from here would be circular), and may use a
+	// Caddy-issued internal TLS cert this process has no reason to trust.
+	CollaboraHealthURL string
+	BaseURL            string
+	AllowRegistration  bool
 }
 
 func Load() *Config {
@@ -32,6 +39,7 @@ func Load() *Config {
 		// disables that upload path — see internal/api/uploads.go.
 		MinioPublicEndpoint: getEnv("PAYLASH_MINIO_PUBLIC_ENDPOINT", ""),
 		CollaboraURL:        getEnv("PAYLASH_COLLABORA_URL", "http://localhost:9980"),
+		CollaboraHealthURL:  getEnv("PAYLASH_COLLABORA_HEALTH_URL", "http://paylash-collabora:9980/hosting/discovery"),
 		BaseURL:             getEnv("PAYLASH_BASE_URL", "http://localhost:8080"),
 		// Self-registration is on by default (matches prior behavior, where
 		// it wasn't configurable at all). Studios that rely solely on

@@ -39,6 +39,7 @@ const AuthPage = {
                 await App.checkAuth();
                 App.navigate('files');
                 App.checkForcedPasswordChange();
+                App.maybeShowOnboarding();
             } catch (err) {
                 UI.toast(err.message || I18N.t('auth.login_error'), 'error');
             } finally { btn.disabled = false; btn.textContent = I18N.t('auth.login_button'); }
@@ -91,6 +92,7 @@ const AuthPage = {
                 await App.checkAuth();
                 UI.toast(I18N.t('auth.register_success'), 'success');
                 App.navigate('files');
+                App.maybeShowOnboarding();
             } catch (err) {
                 UI.toast(err.message || I18N.t('auth.register_error'), 'error');
             } finally { btn.disabled = false; btn.textContent = I18N.t('auth.register_button'); }

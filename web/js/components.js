@@ -21,14 +21,27 @@ const EXT_COLLABORA_EDIT = ['doc','docx','odt','xls','xlsx','ods','ppt','pptx','
 const EXT_COLLABORA_VIEW = [...EXT_COLLABORA_EDIT, 'pdf'];
 
 const UI = {
-    toast(msg, type = 'info') {
+    // `action`, when given, is {label, onClick} — renders a button inside
+    // the toast (e.g. "Undo" after a bulk delete/move) and holds the toast
+    // on screen longer (ACTION_TOAST_MS) so there's actually time to click
+    // it before it self-dismisses.
+    ACTION_TOAST_MS: 8000,
+    toast(msg, type = 'info', action) {
         const c = document.getElementById('toast-container');
         const icons = { success: '✓', error: '✕', info: 'ℹ' };
         const el = document.createElement('div');
         el.className = `toast toast-${type}`;
-        el.innerHTML = `<span class="toast-icon">${icons[type] || 'ℹ'}</span><span>${this.esc(msg)}</span>`;
+        el.innerHTML = `<span class="toast-icon">${icons[type] || 'ℹ'}</span><span class="toast-msg">${this.esc(msg)}</span>${action ? `<button class="toast-action">${this.esc(action.label)}</button>` : ''}`;
         c.appendChild(el);
-        setTimeout(() => { el.classList.add('toast-removing'); setTimeout(() => el.remove(), 250); }, 3500);
+        const remove = () => { el.classList.add('toast-removing'); setTimeout(() => el.remove(), 250); };
+        const timer = setTimeout(remove, action ? this.ACTION_TOAST_MS : 3500);
+        if (action) {
+            el.querySelector('.toast-action').addEventListener('click', () => {
+                clearTimeout(timer);
+                remove();
+                action.onClick();
+            });
+        }
     },
 
     // title/hideClose describe the *last* modal shown — read by the

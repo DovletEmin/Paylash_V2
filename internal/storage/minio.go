@@ -55,6 +55,16 @@ func NewMinioClient(endpoint, accessKey, secretKey string, useSSL bool, publicEn
 	return mc, nil
 }
 
+// Healthy performs one lightweight, read-only S3 call (no bucket needs to
+// be known in advance, nothing is created or modified) — used by the
+// server's /healthz to actually verify MinIO is reachable and the
+// configured credentials work, rather than just assuming so because the
+// process started without error.
+func (m *MinioClient) Healthy(ctx context.Context) error {
+	_, err := m.client.ListBuckets(ctx)
+	return err
+}
+
 func (m *MinioClient) EnsureBucket(ctx context.Context, name string) error {
 	exists, err := m.client.BucketExists(ctx, name)
 	if err != nil {

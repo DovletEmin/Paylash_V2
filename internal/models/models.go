@@ -20,7 +20,11 @@ type User struct {
 	// privacy options.
 	ChatNotifyLevel string    `json:"chat_notify_level"`
 	ChatNotifySound bool      `json:"chat_notify_sound"`
-	CreatedAt       time.Time `json:"created_at"`
+	// OnboardingCompleted gates the first-login welcome tour — false only
+	// for accounts CreateUser inserted after the tour shipped; every
+	// pre-existing account was backfilled TRUE by the migration itself.
+	OnboardingCompleted bool      `json:"onboarding_completed"`
+	CreatedAt           time.Time `json:"created_at"`
 }
 
 // Project is an admin-created folder with an explicit member list (ACL).
@@ -125,6 +129,11 @@ type Session struct {
 	UserID    int       `json:"user_id"`
 	ExpiresAt time.Time `json:"expires_at"`
 	CreatedAt time.Time `json:"created_at"`
+	// ImpersonatorID is set only on a session created by an admin's "log in
+	// as" action (see internal/api/admin.go's Impersonate/ExitImpersonation)
+	// — it names the ADMIN, while UserID above is the impersonated target.
+	// nil for every ordinary session.
+	ImpersonatorID *int `json:"-"`
 }
 
 // API request/response types
@@ -190,6 +199,14 @@ type FolderCrumb struct {
 type StorageUsage struct {
 	UsedBytes  int64 `json:"used_bytes"`
 	QuotaBytes int64 `json:"quota_bytes"`
+}
+
+// StorageTrendPoint is one day's CUMULATIVE totals (not a daily delta) —
+// ready to plot directly as a running-total chart on the admin dashboard.
+type StorageTrendPoint struct {
+	Date       string `json:"date"`
+	FileCount  int    `json:"file_count"`
+	TotalBytes int64  `json:"total_bytes"`
 }
 
 type AdminDashboard struct {

@@ -116,6 +116,13 @@ input,select,textarea{font-family:var(--font);outline:none}
 
 /* ─── Main Content ─── */
 .main-content{flex:1;margin-left:240px;min-height:100vh;display:flex;flex-direction:column}
+.impersonation-banner{
+  display:flex;align-items:center;justify-content:center;gap:14px;flex-wrap:wrap;
+  padding:8px 16px;background:var(--accent);color:#fff;font-size:.82rem;font-weight:500;
+  position:sticky;top:0;z-index:51;
+}
+.impersonation-banner .btn{background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.35)}
+.impersonation-banner .btn:hover{background:rgba(255,255,255,.3)}
 .topbar{
   height:52px;border-bottom:1px solid var(--border);display:flex;align-items:center;
   padding:0 24px;gap:16px;background:var(--surface);position:sticky;top:0;z-index:50;
@@ -266,6 +273,7 @@ select.form-control,select.form-input{appearance:none;cursor:pointer;background-
 .files-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap}
 .files-toolbar-left{display:flex;align-items:center;gap:8px;min-height:20px}
 .files-toolbar-right{display:flex;align-items:center;gap:6px}
+.files-toolbar-select{width:auto;padding:6px 28px 6px 10px;font-size:.78rem;flex-shrink:0}
 .select-all-check{display:flex;align-items:center;cursor:pointer}
 
 /* ─── Bulk selection action bar ─── */
@@ -395,6 +403,19 @@ select.form-control,select.form-input{appearance:none;cursor:pointer;background-
 .modal-close:hover{background:var(--surface-2);color:var(--text)}
 .modal-footer{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}
 
+/* ─── Onboarding tour ─── */
+.onboarding-body{text-align:center;padding:8px 0 4px}
+.onboarding-icon{
+  width:64px;height:64px;margin:0 auto 16px;border-radius:50%;
+  background:var(--primary-bg);color:var(--primary);
+  display:flex;align-items:center;justify-content:center;font-size:1.8rem;
+}
+.onboarding-icon svg{width:30px;height:30px}
+.onboarding-body p{color:var(--text-2);font-size:.88rem;line-height:1.5}
+.onboarding-dots{display:flex;justify-content:center;gap:6px;margin-top:18px}
+.onboarding-dot{width:6px;height:6px;border-radius:50%;background:var(--border-2)}
+.onboarding-dot.active{background:var(--primary);width:16px;border-radius:3px}
+
 /* ─── Context Menu ─── */
 .context-menu{
   position:fixed;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
@@ -422,6 +443,12 @@ select.form-control,select.form-input{appearance:none;cursor:pointer;background-
 .toast-error{border-left:3px solid var(--danger)}
 .toast-info{border-left:3px solid var(--primary)}
 .toast-icon{font-size:.9rem;flex-shrink:0}
+.toast-msg{flex:1}
+.toast-action{
+  flex-shrink:0;background:none;border:none;color:var(--primary);font-size:.82rem;
+  font-weight:600;cursor:pointer;padding:2px 4px;border-radius:4px;
+}
+.toast-action:hover{background:var(--surface-2);text-decoration:underline}
 .toast-removing{animation:slideOut .25s ease forwards}
 
 /* ─── Empty State ─── */
@@ -441,6 +468,13 @@ select.form-control,select.form-input{appearance:none;cursor:pointer;background-
 }
 .stat-card-value{font-size:1.6rem;font-weight:700;letter-spacing:-.02em}
 .stat-card-label{font-size:.72rem;color:var(--text-3);margin-top:2px;text-transform:uppercase;letter-spacing:.04em}
+
+.trend-chart-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:14px;margin-bottom:24px}
+.trend-chart{width:100%;height:140px;display:block}
+.trend-chart-line{fill:none;stroke:var(--primary);stroke-width:2.5;vector-effect:non-scaling-stroke}
+.trend-chart-area{fill:var(--primary-bg);stroke:none}
+.trend-chart-labels{display:flex;justify-content:space-between;gap:10px;margin-top:8px;font-size:.74rem;color:var(--text-3);flex-wrap:wrap}
+.trend-chart-now{font-weight:600;color:var(--text-2)}
 
 /* ─── Admin ─── */
 .admin-page{display:flex;gap:0;min-height:calc(100vh - 52px)}
@@ -1138,4 +1172,17 @@ html.light .context-menu{box-shadow:0 8px 32px rgba(0,0,0,.1)}
   .lang-btn{padding:4px 6px;font-size:.62rem}
   .files-actions{flex-wrap:wrap}
   .auth-lang-switcher{top:12px;right:12px}
+  /* List view's 4 fixed-width columns (1fr 90px 120px 36px) leave the name
+     column too little room on a phone — drop the Date column (least
+     essential of the three metadata columns) and let Name reclaim that
+     space, same instinct as any responsive table hiding lower-priority
+     columns first. */
+  .file-list-header,.file-list-row{grid-template-columns:1fr 70px 36px;gap:8px;padding:8px}
+  .file-list-date,.file-list-header>div:nth-child(3){display:none}
+  /* The search box + 2 selects + 3 icon buttons in files-toolbar-right
+     never fit one row at phone width — wrap it onto as many lines as it
+     needs instead of overflowing the page horizontally. */
+  .files-toolbar-right{flex-wrap:wrap;row-gap:8px}
+  .search-box,.search-box input{width:100%!important}
+  .files-toolbar-select{font-size:.76rem;padding:5px 24px 5px 8px}
 }

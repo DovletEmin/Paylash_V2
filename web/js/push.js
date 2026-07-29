@@ -17,11 +17,21 @@ const Push = {
             return; // registration blocked (e.g. insecure context) — give up silently
         }
         navigator.serviceWorker.addEventListener('message', (e) => {
-            if (e.data && e.data.type === 'push-navigate') {
+            if (!e.data || e.data.type !== 'push-navigate') return;
+            if (e.data.conversation_id) {
                 if (typeof App !== 'undefined') App.navigate('chat');
-                if (typeof ChatPage !== 'undefined' && e.data.conversation_id) {
-                    ChatPage.selectConversation(e.data.conversation_id);
-                }
+                if (typeof ChatPage !== 'undefined') ChatPage.selectConversation(e.data.conversation_id);
+            } else if (e.data.url && typeof App !== 'undefined') {
+                // e.data.url is a full path+hash (e.g. "/#shared", usable
+                // directly by the service worker's clients.openWindow for a
+                // cold start) — location.hash wants just the fragment, or
+                // assigning the leading "/" along with it produces "#/#shared"
+                // instead of "#shared".
+                const i = e.data.url.indexOf('#');
+                location.hash = i >= 0 ? e.data.url.slice(i) : e.data.url;
+                // Reuse the same hash-routing _handlePushHash already does
+                // for a cold-started app, rather than duplicating it here.
+                App._handlePushHash();
             }
         });
         this.subscribeIfPermitted();

@@ -403,20 +403,74 @@ func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
 	}
 	defer obj.Close()
 
-	// Determine if inline or attachment
-	disposition := "attachment"
-	ct := f.MimeType
-	if strings.HasPrefix(ct, "image/") || strings.HasPrefix(ct, "audio/") || strings.HasPrefix(ct, "video/") ||
-		ct == "application/pdf" || strings.HasPrefix(ct, "text/") {
-		disposition = "inline"
+	// The inline/attachment decision (and, when inline, the Content-Type
+	// header itself) is derived from the file's ACTUAL bytes, never from
+	// f.MimeType — that value is whatever Content-Type the uploading
+	// browser claimed, entirely attacker-controlled. Caddy sends
+	// X-Content-Type-Options: nosniff (see Caddyfile), which makes browsers
+	// trust a declared Content-Type completely instead of inspecting the
+	// bytes themselves; combined with Content-Disposition: inline, a file
+	// uploaded with a spoofed "Content-Type: text/html" would render and
+	// execute as HTML on this app's own origin, with the viewer's session —
+	// a same-origin stored-XSS path reachable by anyone with view access to
+	// the file. Sniffing here closes both that direct-lie case and the
+	// subtler "genuinely an image, but declared text/html" polyglot case,
+	// since the header sent for an inline response is the sniffed type too,
+	// never the stored one. See inlineSafeContentType.
+	sniffBuf := make([]byte, 512)
+	n, err := io.ReadFull(obj, sniffBuf)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		writeError(w, http.StatusInternalServerError, "faýly alyp bolmady")
+		return
+	}
+	sniffedType := http.DetectContentType(sniffBuf[:n])
+	if _, err := obj.Seek(0, io.SeekStart); err != nil {
+		writeError(w, http.StatusInternalServerError, "faýly alyp bolmady")
+		return
 	}
 
-	w.Header().Set("Content-Type", ct)
+	disposition := "attachment"
+	contentType := f.MimeType
+	if inlineSafeContentType(sniffedType) {
+		disposition = "inline"
+		contentType = sniffedType
+	}
+
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`%s; filename="%s"`, disposition, f.Name))
 	// obj is an io.ReadSeeker backed by MinIO — ServeContent seeks/streams
 	// directly against it (Range requests included) instead of us buffering
 	// the whole object in the process' memory first.
 	http.ServeContent(w, r, f.Name, f.UpdatedAt, obj)
+}
+
+// inlineSafeContentType reports whether ct (always the SNIFFED type from
+// http.DetectContentType, never a client-supplied one — see DownloadFile) is
+// safe to serve with Content-Disposition: inline. Images/audio/video/PDF
+// render without ever executing embedded script. image/svg+xml is
+// deliberately excluded even though it's an "image" — an SVG can carry a
+// <script> element that executes when the browser renders it directly
+// (unlike when it's loaded as an <img src>, which is always safe regardless
+// of this function, since that's a subresource fetch that ignores
+// Content-Disposition entirely). text/* is excluded too: nothing in this
+// app's own UI needs it (the in-app text preview in web/js/preview.js
+// already renders text safely via fetch()+escape, independent of this
+// header), and every browser distinguishes text/plain from text/html
+// strictly by this same header, which is exactly the value under attack.
+func inlineSafeContentType(ct string) bool {
+	ct, _, _ = strings.Cut(ct, ";") // DetectContentType can append "; charset=..."
+	switch {
+	case strings.HasPrefix(ct, "image/") && ct != "image/svg+xml":
+		return true
+	case strings.HasPrefix(ct, "audio/"):
+		return true
+	case strings.HasPrefix(ct, "video/"):
+		return true
+	case ct == "application/pdf":
+		return true
+	default:
+		return false
+	}
 }
 
 // isThumbnailableImage reports whether name is a format the stdlib image
@@ -653,7 +707,8 @@ func (h *Handler) SearchFiles(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, []models.File{})
 		return
 	}
-	files, err := h.db.SearchFiles(user.ID, user.Role == "admin", q)
+	limit, offset := parsePagination(r, 50, 200)
+	files, err := h.db.SearchFiles(user.ID, user.Role == "admin", q, limit, offset)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "gözleg ýalňyşlygy")
 		return

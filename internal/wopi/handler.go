@@ -21,6 +21,23 @@ func NewHandler(database *db.DB, minioClient *storage.MinioClient, cfg *config.C
 	return &Handler{db: database, minio: minioClient, cfg: cfg}
 }
 
+// derivePostMessageOrigin returns the origin Collabora's postMessage bridge
+// is allowed to talk to — must be the browser-facing app origin, not
+// cfg.BaseURL (that's the internal Docker hostname used for the WOPI
+// callback URL, never seen by a browser). Derived from the request itself
+// (which arrives via Caddy with the original Host/X-Forwarded-Proto
+// preserved) rather than a config value, so it's correct for whatever
+// domain Caddy is actually fronting.
+func derivePostMessageOrigin(r *http.Request) string {
+	scheme := "https"
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		scheme = proto
+	} else if r.TLS == nil {
+		scheme = "http"
+	}
+	return scheme + "://" + r.Host
+}
+
 func (h *Handler) CheckFileInfo(w http.ResponseWriter, r *http.Request) {
 	fileID, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil {
@@ -48,20 +65,7 @@ func (h *Handler) CheckFileInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	canWrite := wopiToken.Permission == "edit"
-
-	// The origin Collabora's postMessage bridge is allowed to talk to — must
-	// be the browser-facing app origin, not h.cfg.BaseURL (that's the
-	// internal Docker hostname used for the WOPI callback URL, never seen by
-	// a browser). Derived from the request itself (which arrives via Caddy
-	// with the original Host/X-Forwarded-Proto preserved) instead of a new
-	// config value, so it's correct for whatever domain Caddy is fronting.
-	scheme := "https"
-	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
-		scheme = proto
-	} else if r.TLS == nil {
-		scheme = "http"
-	}
-	postMessageOrigin := scheme + "://" + r.Host
+	postMessageOrigin := derivePostMessageOrigin(r)
 
 	info := map[string]any{
 		"BaseFileName":            f.Name,

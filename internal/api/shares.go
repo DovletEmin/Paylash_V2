@@ -80,6 +80,9 @@ func (h *Handler) ShareFile(w http.ResponseWriter, r *http.Request) {
 	h.logAction(r, "share.create", "file", fileID, f.Name, map[string]any{
 		"shared_with": req.UserID, "permission": req.Permission, "is_public": req.IsPublic,
 	})
+	if req.UserID != nil && *req.UserID != user.ID {
+		go h.pushShareNotification(*req.UserID, displayNameOrUsername(user), f.Name)
+	}
 	writeJSON(w, http.StatusCreated, share)
 }
 

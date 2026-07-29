@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log"
@@ -23,14 +24,19 @@ type Server struct {
 	db    *db.DB
 	minio *storage.MinioClient
 	mux   *http.ServeMux
+	// healthHTTPClient is reused (not built per-request) for the Collabora
+	// reachability probe in handleHealthz — a short timeout so a
+	// slow/hung Collabora never makes /healthz itself hang.
+	healthHTTPClient *http.Client
 }
 
 func New(cfg *config.Config, database *db.DB, minioClient *storage.MinioClient, webFS embed.FS) *Server {
 	s := &Server{
-		cfg:   cfg,
-		db:    database,
-		minio: minioClient,
-		mux:   http.NewServeMux(),
+		cfg:              cfg,
+		db:               database,
+		minio:            minioClient,
+		mux:              http.NewServeMux(),
+		healthHTTPClient: &http.Client{Timeout: 3 * time.Second},
 	}
 	s.routes(webFS)
 	return s
@@ -57,6 +63,11 @@ func (s *Server) routes(webFS embed.FS) {
 	s.mux.Handle("PATCH /api/auth/profile", auth(http.HandlerFunc(h.UpdateProfile)))
 	s.mux.Handle("POST /api/auth/avatar", auth(http.HandlerFunc(h.UploadAvatar)))
 	s.mux.Handle("POST /api/auth/logout-others", auth(http.HandlerFunc(h.LogoutOthers)))
+	s.mux.Handle("POST /api/auth/complete-onboarding", auth(http.HandlerFunc(h.CompleteOnboarding)))
+	// Session-scoped (not role-gated): while impersonating, the "current
+	// user" for AdminMiddleware purposes is the (non-admin) target, so this
+	// must stay reachable on plain auth() — see ExitImpersonation.
+	s.mux.Handle("POST /api/auth/exit-impersonation", auth(http.HandlerFunc(h.ExitImpersonation)))
 	s.mux.Handle("GET /api/avatar/{id}", auth(http.HandlerFunc(h.ServeAvatar)))
 	s.mux.Handle("POST /api/push/subscribe", auth(http.HandlerFunc(h.PushSubscribe)))
 	s.mux.Handle("POST /api/push/unsubscribe", auth(http.HandlerFunc(h.PushUnsubscribe)))
@@ -165,6 +176,7 @@ func (s *Server) routes(webFS embed.FS) {
 
 	// Admin routes
 	s.mux.Handle("GET /api/admin/dashboard", auth(AdminMiddleware(http.HandlerFunc(h.AdminDashboard))))
+	s.mux.Handle("GET /api/admin/storage-trend", auth(AdminMiddleware(http.HandlerFunc(h.AdminStorageTrend))))
 	s.mux.Handle("GET /api/admin/audit-log", auth(AdminMiddleware(http.HandlerFunc(h.AdminAuditLog))))
 	s.mux.Handle("GET /api/admin/audit-log/export", auth(AdminMiddleware(http.HandlerFunc(h.AdminExportAuditLog))))
 	s.mux.Handle("GET /api/admin/projects", auth(AdminMiddleware(http.HandlerFunc(h.AdminListProjects))))
@@ -179,8 +191,10 @@ func (s *Server) routes(webFS embed.FS) {
 	s.mux.Handle("POST /api/admin/users", auth(AdminMiddleware(http.HandlerFunc(h.AdminCreateUser))))
 	s.mux.Handle("PATCH /api/admin/users/{id}", auth(AdminMiddleware(http.HandlerFunc(h.AdminUpdateUser))))
 	s.mux.Handle("DELETE /api/admin/users/{id}", auth(AdminMiddleware(http.HandlerFunc(h.AdminDeleteUser))))
+	s.mux.Handle("POST /api/admin/users/{id}/impersonate", auth(AdminMiddleware(http.HandlerFunc(h.Impersonate))))
 	s.mux.Handle("DELETE /api/admin/users/all", auth(AdminMiddleware(http.HandlerFunc(h.AdminDeleteAllUsers))))
 	s.mux.Handle("POST /api/admin/users/bulk-quota", auth(AdminMiddleware(http.HandlerFunc(h.AdminBulkUserQuota))))
+	s.mux.Handle("POST /api/admin/users/bulk-delete", auth(AdminMiddleware(http.HandlerFunc(h.AdminBulkDeleteUsers))))
 	s.mux.Handle("POST /api/admin/projects/bulk-quota", auth(AdminMiddleware(http.HandlerFunc(h.AdminBulkProjectQuota))))
 	s.mux.Handle("POST /api/admin/users/import", auth(AdminMiddleware(http.HandlerFunc(h.AdminImportUsers))))
 	s.mux.Handle("GET /api/admin/public-quota", auth(AdminMiddleware(http.HandlerFunc(h.AdminGetPublicQuota))))
@@ -213,15 +227,70 @@ func (s *Server) routes(webFS embed.FS) {
 	})
 }
 
+// handleHealthz checks every dependency this app actually has, not just
+// Postgres — a container that reports healthy while MinIO is unreachable
+// previously meant docker-compose's service_healthy gate (and any external
+// monitoring hitting this same endpoint) had no way to notice that uploads
+// and downloads were completely broken. Database and MinIO are on the
+// critical path for nearly everything this app does, so either one being
+// down flips the overall status to 503 (and so, transitively, Docker's
+// healthcheck). Collabora is narrower in scope — only office-document
+// editing needs it — and is also notoriously slow to boot, so its failure
+// is reported in the body without flipping the overall status: a stack
+// that's still starting Collabora shouldn't block Caddy (which itself
+// depends on this container being "healthy") from coming up for every
+// OTHER feature in the meantime.
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	components := map[string]string{}
+	healthy := true
+
 	if err := s.db.PingContext(r.Context()); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write([]byte(`{"status":"error"}`))
-		return
+		components["database"] = "error"
+		healthy = false
+	} else {
+		components["database"] = "ok"
 	}
+
+	if err := s.minio.Healthy(r.Context()); err != nil {
+		components["minio"] = "error"
+		healthy = false
+	} else {
+		components["minio"] = "ok"
+	}
+
+	if s.collaboraHealthy(r.Context()) {
+		components["collabora"] = "ok"
+	} else {
+		components["collabora"] = "error"
+	}
+
+	status := "ok"
+	code := http.StatusOK
+	if !healthy {
+		status = "error"
+		code = http.StatusServiceUnavailable
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"status":"ok"}`))
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]any{"status": status, "components": components})
+}
+
+// collaboraHealthy hits Collabora's own discovery endpoint on the internal
+// Docker network — a 200 response (any body) means the service is up and
+// answering. A missing/invalid CollaboraHealthURL degrades to "unhealthy"
+// rather than panicking or hanging.
+func (s *Server) collaboraHealthy(ctx context.Context) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.cfg.CollaboraHealthURL, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := s.healthHTTPClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
 }
 
 // Start blocks until the process receives SIGINT/SIGTERM, then gives

@@ -8,3 +8,11 @@
 .env
 .claude/
 desktop/
+
+# Local database/object-storage backups (see scripts/backup.ps1) — contains
+# real user data (password hashes, files), never belongs in git.
+/backups/
+
+# Runtime logs from scripts/autostart.ps1 / backup.ps1 — machine-local, not
+# project state.
+scripts/*.log

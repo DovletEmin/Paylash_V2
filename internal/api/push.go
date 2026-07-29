@@ -221,7 +221,16 @@ func (h *Handler) sendPushDigest(recipientID int, p *pendingPush) {
 	if err != nil {
 		return
 	}
-	subs, err := h.db.ListPushSubscriptions(recipientID)
+	h.sendPushToUser(recipientID, payload)
+}
+
+// sendPushToUser delivers payload to every push subscription userID has
+// registered, pruning any the push service reports as gone (404/410).
+// Shared by the chat digest path above and every other feature that wants
+// to push a native notification — see pushShareNotification/
+// pushCommentNotification.
+func (h *Handler) sendPushToUser(userID int, payload []byte) {
+	subs, err := h.db.ListPushSubscriptions(userID)
 	if err != nil {
 		return
 	}
@@ -229,7 +238,7 @@ func (h *Handler) sendPushDigest(recipientID int, p *pendingPush) {
 		sub := &webpush.Subscription{Endpoint: s.Endpoint, P256dh: s.P256dh, Auth: s.Auth}
 		status, err := webpush.Send(h.pushClient, h.vapid, pushSubscriber, sub, payload, 3600)
 		if err != nil {
-			log.Printf("web push to user %d: %v", recipientID, err)
+			log.Printf("web push to user %d: %v", userID, err)
 			continue
 		}
 		if status == http.StatusNotFound || status == http.StatusGone {
@@ -237,6 +246,75 @@ func (h *Handler) sendPushDigest(recipientID int, p *pendingPush) {
 				log.Printf("prune dead push subscription: %v", err)
 			}
 		}
+	}
+}
+
+// pushShareNotification tells recipientID that fileName was just shared
+// with them — fire-and-forget, called via `go` by ShareFile. Unlike chat's
+// push, there's no live-connection signal to skip on here (file shares have
+// no WebSocket): the in-app unread-count poll and this push are just two
+// independent channels for the same event, so a push always fires as long
+// as the recipient has a registered subscription at all.
+func (h *Handler) pushShareNotification(recipientID int, sharerName, fileName string) {
+	if h.vapid == nil {
+		return
+	}
+	payload, err := json.Marshal(map[string]any{
+		"title": sharerName,
+		"body":  fmt.Sprintf("Paýlaşdy: %s", fileName),
+		"url":   "/#shared",
+	})
+	if err != nil {
+		return
+	}
+	h.sendPushToUser(recipientID, payload)
+}
+
+// pushCommentMaxPreview caps how much of a comment's body rides along in
+// the push notification itself — long enough for context, short enough to
+// fit a native OS notification without the OS truncating it first.
+const pushCommentMaxPreview = 120
+
+// pushCommentNotification tells the file's owner and every other distinct
+// commenter on the same file (the file's own "who's watching this thread"
+// set — no separate follow/subscribe model to manage) that a new comment
+// landed, except the person who just posted it. Fire-and-forget, called via
+// `go` by CreateFileComment.
+func (h *Handler) pushCommentNotification(fileID, commenterID int, commenterName, commentBody string) {
+	if h.vapid == nil {
+		return
+	}
+	f, err := h.db.GetFile(fileID)
+	if err != nil || f == nil {
+		return
+	}
+	recipients := map[int]bool{}
+	if f.OwnerID != commenterID {
+		recipients[f.OwnerID] = true
+	}
+	if comments, err := h.db.ListComments(fileID); err == nil {
+		for _, c := range comments {
+			if c.UserID != commenterID {
+				recipients[c.UserID] = true
+			}
+		}
+	}
+	if len(recipients) == 0 {
+		return
+	}
+	preview := commentBody
+	if r := []rune(preview); len(r) > pushCommentMaxPreview {
+		preview = string(r[:pushCommentMaxPreview]) + "…"
+	}
+	payload, err := json.Marshal(map[string]any{
+		"title": fmt.Sprintf("%s — %s", commenterName, f.Name),
+		"body":  preview,
+	})
+	if err != nil {
+		return
+	}
+	for uid := range recipients {
+		h.sendPushToUser(uid, payload)
 	}
 }
 

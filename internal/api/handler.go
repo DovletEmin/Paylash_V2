@@ -7,9 +7,11 @@ import (
 	"paylash/internal/authutil"
 	"paylash/internal/config"
 	"paylash/internal/db"
+	"paylash/internal/models"
 	"paylash/internal/storage"
 	"paylash/internal/webpush"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -101,18 +103,91 @@ func parsePagination(r *http.Request, defaultLimit, maxLimit int) (limit, offset
 // logAction records an admin-oversight-worthy event on behalf of the
 // request's authenticated user. Best-effort: a logging failure is logged
 // itself but never blocks or fails the action it describes.
+//
+// During an admin impersonation session (see authutil.GetImpersonator),
+// the ADMIN is recorded as the actor — not the impersonated user GetUser
+// resolves to for every normal permission check — with the target user's
+// name folded into details, so the audit log always shows who was really
+// responsible rather than silently attributing the action to whoever was
+// being impersonated at the time.
 func (h *Handler) logAction(r *http.Request, action, targetType string, targetID int, targetName string, details map[string]any) {
 	user := authutil.GetUser(r)
 	if user == nil {
 		return
 	}
-	actorID := user.ID
-	actorName := user.DisplayName
-	if actorName == "" {
-		actorName = user.Username
+	actor := user
+	if impersonator := authutil.GetImpersonator(r); impersonator != nil {
+		actor = impersonator
+		if details == nil {
+			details = map[string]any{}
+		}
+		details["impersonating"] = user.Username
+		details["impersonating_id"] = user.ID
 	}
+	actorID := actor.ID
+	actorName := displayNameOrUsername(actor)
 	id := targetID
 	if err := h.db.LogAction(&actorID, actorName, action, targetType, &id, targetName, details); err != nil {
+		log.Printf("audit log: %v", err)
+	}
+}
+
+// setSessionCookie writes session as the browser's "session" cookie — the
+// one piece shared by Login, Impersonate, and ExitImpersonation, all of
+// which mint a session and need the browser to start using it immediately.
+func setSessionCookie(w http.ResponseWriter, r *http.Request, session *models.Session) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session",
+		Value:    session.ID,
+		Path:     "/",
+		Expires:  session.ExpiresAt,
+		HttpOnly: true,
+		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// displayNameOrUsername is the actor-name fallback used everywhere an audit
+// entry needs a human-readable name for a user — their chosen display name,
+// or their username when they haven't set one.
+func displayNameOrUsername(u *models.User) string {
+	if u.DisplayName != "" {
+		return u.DisplayName
+	}
+	return u.Username
+}
+
+// clientIP extracts the caller's address for an audit-log entry — prefers
+// X-Forwarded-For (set automatically by Caddy's reverse_proxy in front of
+// this app) since r.RemoteAddr behind a reverse proxy is just the proxy's
+// own address, not the real client's.
+func clientIP(r *http.Request) string {
+	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+		// A comma-separated chain (proxy1, proxy2, ...) — the first entry is
+		// the original client.
+		if i := strings.IndexByte(fwd, ','); i >= 0 {
+			return strings.TrimSpace(fwd[:i])
+		}
+		return strings.TrimSpace(fwd)
+	}
+	return r.RemoteAddr
+}
+
+// logAuthAction is logAction's counterpart for the auth endpoints
+// (register/login/logout) — those run before AuthMiddleware ever puts a
+// user in the request context (login/register have no session yet; a
+// failed login never gets one at all), so unlike logAction this takes the
+// actor and target explicitly rather than reading them off the request.
+// actorID is nil for a login attempt that never actually authenticated as
+// anyone (unknown username, or a real account with the wrong password) —
+// attributing a failed attempt AS the account it targeted would misleadingly
+// suggest that account performed it.
+func (h *Handler) logAuthAction(r *http.Request, actorID *int, actorName, action string, targetID *int, targetName string, details map[string]any) {
+	if details == nil {
+		details = map[string]any{}
+	}
+	details["ip"] = clientIP(r)
+	if err := h.db.LogAction(actorID, actorName, action, "user", targetID, targetName, details); err != nil {
 		log.Printf("audit log: %v", err)
 	}
 }

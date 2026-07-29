@@ -12,6 +12,23 @@ const FilesPage = {
     filesLimit: 50,
     filesOffset: 0,
     hasMoreFiles: false,
+    // Non-null while showing search results instead of a folder listing —
+    // loadMoreFiles() checks this to paginate the right endpoint.
+    _searchQuery: null,
+    // Sort is sent to the server (see loadFiles/loadMoreFiles) rather than
+    // applied client-side: LIMIT/OFFSET pagination windows have to be
+    // computed by the database in the SAME order being displayed, or
+    // "load more" would reveal items out of the order the user is sorting
+    // by. Search results keep their own server-side ordering regardless
+    // (see onSortChange) — extending search to sort too was out of scope
+    // for this pass.
+    sortField: 'name',
+    sortOrder: 'asc',
+    // Type filter, unlike sort, is purely client-side (see renderFiles) —
+    // it only ever hides rows from what's already been fetched, so it
+    // can't desync from the server's pagination windowing the way sort
+    // would.
+    typeFilter: 'all',
     // Selection keys are "file:123" / "folder:45" — prefixed so a file and a
     // folder that happen to share a numeric id can't collide in the Set.
     selected: new Set(),
@@ -40,6 +57,12 @@ const FilesPage = {
                         <span class="search-icon">${UI.icons.search}</span>
                         <input type="text" id="file-search" placeholder="${I18N.t('files.search_placeholder')}" oninput="FilesPage.onSearch(this.value)">
                     </div>
+                    <select class="form-control files-toolbar-select" title="${I18N.t('files.sort_label')}" aria-label="${I18N.t('files.sort_label')}" onchange="FilesPage.onSortChange(this.value)">
+                        ${this.sortOptionsHTML()}
+                    </select>
+                    <select class="form-control files-toolbar-select" title="${I18N.t('files.filter_label')}" aria-label="${I18N.t('files.filter_label')}" onchange="FilesPage.onTypeFilterChange(this.value)">
+                        ${this.typeFilterOptionsHTML()}
+                    </select>
                     <button class="btn btn-icon btn-ghost ${this.viewMode === 'grid' ? 'active' : ''}" onclick="FilesPage.setView('grid')" title="${I18N.t('files.view_grid')}" aria-label="${I18N.t('files.view_grid')}">${UI.icons.grid}</button>
                     <button class="btn btn-icon btn-ghost ${this.viewMode === 'list' ? 'active' : ''}" onclick="FilesPage.setView('list')" title="${I18N.t('files.view_list')}" aria-label="${I18N.t('files.view_list')}">${UI.icons.list}</button>
                     <button class="btn btn-icon btn-ghost" onclick="FilesPage.exportScope()" title="${I18N.t('files.export_scope')}" aria-label="${I18N.t('files.export_scope')}">${UI.icons.download}</button>
@@ -81,16 +104,48 @@ const FilesPage = {
         </div>`;
     },
 
-    async init() { await this.loadFiles(); this.initDragDrop(); },
+    async init() { this._bindKeyNav(); await this.loadFiles(); this.initDragDrop(); },
+
+    _keyNavBound: false,
+    // Page-level bulk-select shortcuts: Delete/Backspace deletes the
+    // current selection, Ctrl/Cmd+A selects everything in view, Escape
+    // clears it — none of this existed before, selection was mouse-only.
+    // Bound once (same pattern as PreviewPage._bindKeyNav) and guarded on
+    // the active page, any focused input/textarea/select (so typing in the
+    // search box keeps its normal browser Ctrl+A), and an open modal or
+    // context menu (those already own Escape/keyboard input themselves).
+    _bindKeyNav() {
+        if (this._keyNavBound) return;
+        this._keyNavBound = true;
+        document.addEventListener('keydown', ev => {
+            if (App.currentPage !== 'files') return;
+            const tag = (ev.target.tagName || '').toLowerCase();
+            if (tag === 'input' || tag === 'textarea' || tag === 'select' || ev.target.isContentEditable) return;
+            if (document.getElementById('modal-overlay')?.classList.contains('visible')) return;
+            if (!document.getElementById('context-menu')?.classList.contains('hidden')) return;
+
+            if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'a') {
+                ev.preventDefault();
+                this.toggleSelectAll(true);
+            } else if (ev.key === 'Delete' || ev.key === 'Backspace') {
+                if (!this.selected.size || !this.canManage()) return;
+                ev.preventDefault();
+                this.bulkDelete();
+            } else if (ev.key === 'Escape') {
+                if (this.selected.size) { ev.preventDefault(); this.clearSelection(); }
+            }
+        });
+    },
 
     async loadFiles() {
         const c = document.getElementById('files-content');
         if (!c) return;
         c.innerHTML = UI.skeletonCards(6);
         this.filesOffset = 0;
+        this._searchQuery = null;
         this.clearSelection();
         try {
-            const p = { scope: this.currentScope, limit: this.filesLimit, offset: 0 };
+            const p = { scope: this.currentScope, limit: this.filesLimit, offset: 0, sort: this.sortField, order: this.sortOrder };
             if (this.currentFolder) p.folder_id = this.currentFolder;
             if (this.currentScope === 'project' && this.currentProjectId) p.project_id = this.currentProjectId;
             const data = await API.files.list(p);
@@ -106,15 +161,30 @@ const FilesPage = {
     },
 
     async loadMoreFiles() {
+        if (this._searchQuery) { await this.loadMoreSearch(); return; }
         const btn = document.getElementById('files-load-more');
         if (btn) { btn.disabled = true; btn.textContent = I18N.t('common.loading'); }
         try {
             this.filesOffset += this.filesLimit;
-            const p = { scope: this.currentScope, limit: this.filesLimit, offset: this.filesOffset };
+            const p = { scope: this.currentScope, limit: this.filesLimit, offset: this.filesOffset, sort: this.sortField, order: this.sortOrder };
             if (this.currentFolder) p.folder_id = this.currentFolder;
             if (this.currentScope === 'project' && this.currentProjectId) p.project_id = this.currentProjectId;
             const data = await API.files.list(p);
             const more = data.files || [];
+            this.files = this.files.concat(more);
+            this.hasMoreFiles = more.length === this.filesLimit;
+            this.renderFiles();
+        } catch (err) {
+            UI.toast(err.message, 'error');
+        }
+    },
+
+    async loadMoreSearch() {
+        const btn = document.getElementById('files-load-more');
+        if (btn) { btn.disabled = true; btn.textContent = I18N.t('common.loading'); }
+        try {
+            this.filesOffset += this.filesLimit;
+            const more = (await API.files.search(this._searchQuery, this.filesLimit, this.filesOffset)) || [];
             this.files = this.files.concat(more);
             this.hasMoreFiles = more.length === this.filesLimit;
             this.renderFiles();
@@ -150,9 +220,15 @@ const FilesPage = {
     renderFiles() {
         const c = document.getElementById('files-content');
         if (!c) return;
-        const items = [...this.folders.map(f => ({ ...f, isFolder: true })), ...this.files];
+        // Folders always stay visible regardless of the type filter — it's a
+        // navigation aid, not "content" to hide, same as Drive/Dropbox.
+        const filteredFiles = this.typeFilter === 'all'
+            ? this.files
+            : this.files.filter(f => this.fileCategory(f) === this.typeFilter);
+        const items = [...this.folders.map(f => ({ ...f, isFolder: true })), ...filteredFiles];
         if (!items.length) {
-            c.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📂</div><p>${I18N.t('files.empty_title')}</p><p class="text-muted">${I18N.t('files.empty_subtitle')}</p></div>`;
+            const filtered = this.typeFilter !== 'all' && this.files.length > 0;
+            c.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📂</div><p>${filtered ? I18N.t('files.filter_no_matches') : I18N.t('files.empty_title')}</p><p class="text-muted">${filtered ? '' : I18N.t('files.empty_subtitle')}</p></div>`;
             return;
         }
         if (this.viewMode === 'grid') {
@@ -311,14 +387,32 @@ const FilesPage = {
         const val = document.getElementById('move-target').value;
         const targetId = val ? parseInt(val) : null;
         const items = this.selectedItems();
+        // Snapshot each item's pre-move parent (folder_id for files,
+        // parent_id for folders) so a successful move can be undone —
+        // captured before the move happens, since afterward the items'
+        // own records no longer reflect where they came from.
+        const origins = items.map(item => ({ id: item.id, isFolder: item.isFolder, name: item.name, parentId: (item.isFolder ? item.parent_id : item.folder_id) ?? null }));
         const failures = await UI.runPooled(items, this.BULK_CONCURRENCY, async item => {
             if (item.isFolder) await API.folders.move(item.id, targetId);
             else await API.files.move(item.id, targetId);
         });
         UI.closeModal();
+        const succeeded = origins.filter(o => !failures.some(f => f.item.id === o.id && f.item.isFolder === o.isFolder));
         if (failures.length) UI.toast(I18N.t('shares.some_errors', { errors: failures.map(f => `${f.item.name}: ${f.error.message}`).join('; ') }), 'error');
-        else UI.toast(I18N.t('files.move_done'), 'success');
+        else if (succeeded.length) {
+            UI.toast(I18N.t('files.move_done'), 'success', { label: I18N.t('common.undo'), onClick: () => FilesPage.undoBulkMove(succeeded) });
+        }
         this.clearSelection();
+        this.loadFiles();
+    },
+
+    async undoBulkMove(origins) {
+        const failures = await UI.runPooled(origins, this.BULK_CONCURRENCY, async o => {
+            if (o.isFolder) await API.folders.move(o.id, o.parentId);
+            else await API.files.move(o.id, o.parentId);
+        });
+        if (failures.length) UI.toast(I18N.t('shares.some_errors', { errors: failures.map(f => `${f.item.name}: ${f.error.message}`).join('; ') }), 'error');
+        else UI.toast(I18N.t('files.undo_move_done'), 'success');
         this.loadFiles();
     },
 
@@ -332,12 +426,29 @@ const FilesPage = {
                     if (item.isFolder) await API.folders.delete(item.id);
                     else await API.files.delete(item.id);
                 });
+                const succeeded = items.filter(item => !failures.some(f => f.item.id === item.id && f.item.isFolder === item.isFolder));
                 if (failures.length) UI.toast(I18N.t('shares.some_errors', { errors: failures.map(f => `${f.item.name}: ${f.error.message}`).join('; ') }), 'error');
-                else UI.toast(I18N.t('files.bulk_delete_done'), 'success');
+                else if (succeeded.length) {
+                    UI.toast(I18N.t('files.bulk_delete_done'), 'success', { label: I18N.t('common.undo'), onClick: () => FilesPage.undoBulkDelete(succeeded) });
+                }
                 this.clearSelection();
                 this.loadFiles();
                 App.loadStorageUsage();
             });
+    },
+
+    // Deleting soft-trashes (see SoftDeleteFile/SoftDeleteFolderTree), so
+    // undo is just restoring each item straight back out of Trash rather
+    // than tracking any extra state beyond the ids already captured above.
+    async undoBulkDelete(items) {
+        const failures = await UI.runPooled(items, this.BULK_CONCURRENCY, async item => {
+            if (item.isFolder) await API.trash.restoreFolder(item.id);
+            else await API.trash.restoreFile(item.id);
+        });
+        if (failures.length) UI.toast(I18N.t('shares.some_errors', { errors: failures.map(f => `${f.item.name}: ${f.error.message}`).join('; ') }), 'error');
+        else UI.toast(I18N.t('files.undo_delete_done'), 'success');
+        this.loadFiles();
+        App.loadStorageUsage();
     },
 
     gridCard(item) {
@@ -492,15 +603,89 @@ const FilesPage = {
     setView(m) { this.viewMode = m; this.renderFiles(); },
     goToFolder(id) { this.currentFolder = id; this.loadFiles(); },
 
+    /* -- Sort -- */
+
+    SORT_OPTIONS: [
+        ['name-asc', 'files.sort_name_asc'],
+        ['name-desc', 'files.sort_name_desc'],
+        ['date-desc', 'files.sort_date_desc'],
+        ['date-asc', 'files.sort_date_asc'],
+        ['size-desc', 'files.sort_size_desc'],
+        ['size-asc', 'files.sort_size_asc'],
+    ],
+
+    sortOptionsHTML() {
+        const current = `${this.sortField}-${this.sortOrder}`;
+        return this.SORT_OPTIONS.map(([value, key]) =>
+            `<option value="${value}" ${value === current ? 'selected' : ''}>${I18N.t(key)}</option>`).join('');
+    },
+
+    // Sort is sent to the server on every reload — see the sortField/
+    // sortOrder comment above for why this can't just re-sort the already-
+    // loaded array client-side. While a search is active, re-runs the
+    // search instead of switching back to a folder listing (SearchFiles
+    // doesn't take a sort param, so this has no visible effect until the
+    // search is cleared — better than silently discarding the search).
+    onSortChange(value) {
+        const [field, order] = value.split('-');
+        this.sortField = field;
+        this.sortOrder = order;
+        if (this._searchQuery) this._runSearch(this._searchQuery);
+        else this.loadFiles();
+    },
+
+    /* -- Type filter (client-side; see typeFilter comment above) -- */
+
+    TYPE_FILTER_OPTIONS: [
+        ['all', 'files.filter_all'],
+        ['document', 'files.filter_documents'],
+        ['image', 'files.filter_images'],
+        ['video', 'files.filter_video'],
+        ['audio', 'files.filter_audio'],
+        ['archive', 'files.filter_archives'],
+    ],
+
+    typeFilterOptionsHTML() {
+        return this.TYPE_FILTER_OPTIONS.map(([value, key]) =>
+            `<option value="${value}" ${value === this.typeFilter ? 'selected' : ''}>${I18N.t(key)}</option>`).join('');
+    },
+
+    onTypeFilterChange(value) {
+        this.typeFilter = value;
+        this.renderFiles();
+    },
+
+    ARCHIVE_EXTENSIONS: ['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz'],
+
+    fileCategory(item) {
+        const ext = item.name.split('.').pop().toLowerCase();
+        if (UI.isImage(ext)) return 'image';
+        if (UI.isVideo(ext)) return 'video';
+        if (UI.isAudio(ext)) return 'audio';
+        if (this.ARCHIVE_EXTENSIONS.includes(ext)) return 'archive';
+        if (UI.fileIconClass(item.name, false) === 'document') return 'document';
+        return 'other';
+    },
+
     _searchTimer: null,
     async onSearch(q) {
         clearTimeout(this._searchTimer);
         this._searchTimer = setTimeout(() => this._runSearch(q), 300);
     },
     async _runSearch(q) {
-        if (!q || q.length < 2) { this.loadFiles(); return; }
+        if (!q || q.length < 2) { this._searchQuery = null; this.loadFiles(); return; }
         this.selected.clear();
-        try { const data = await API.files.search(q); this.files = data || []; this.folders = []; this.breadcrumbs = []; this.renderBreadcrumbs(); this.renderFiles(); } catch {}
+        this._searchQuery = q;
+        this.filesOffset = 0;
+        try {
+            const data = await API.files.search(q, this.filesLimit, 0);
+            this.files = data || [];
+            this.folders = [];
+            this.breadcrumbs = [];
+            this.hasMoreFiles = this.files.length === this.filesLimit;
+            this.renderBreadcrumbs();
+            this.renderFiles();
+        } catch {}
     },
 
     showUploadModal() { document.getElementById('file-input').click(); },

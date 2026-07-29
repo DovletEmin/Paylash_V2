@@ -64,6 +64,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.logAuthAction(r, &user.ID, displayNameOrUsername(user), "auth.register", &user.ID, user.Username, nil)
 	writeJSON(w, http.StatusCreated, user)
 }
 
@@ -78,11 +79,13 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.db.GetUserByUsername(username)
 	if err != nil || user == nil {
+		h.logAuthAction(r, nil, username, "auth.login_failed", nil, username, map[string]any{"reason": "unknown_username"})
 		writeError(w, http.StatusUnauthorized, "nädogry ulanyjy ady ýa-da parol")
 		return
 	}
 
 	if !authutil.CheckPassword(req.Password, user.PasswordHash) {
+		h.logAuthAction(r, nil, username, "auth.login_failed", &user.ID, username, map[string]any{"reason": "wrong_password"})
 		writeError(w, http.StatusUnauthorized, "nädogry ulanyjy ady ýa-da parol")
 		return
 	}
@@ -93,16 +96,9 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     "session",
-		Value:    session.ID,
-		Path:     "/",
-		Expires:  session.ExpiresAt,
-		HttpOnly: true,
-		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
-		SameSite: http.SameSiteLaxMode,
-	})
+	setSessionCookie(w, r, session)
 
+	h.logAuthAction(r, &user.ID, displayNameOrUsername(user), "auth.login", &user.ID, user.Username, nil)
 	writeJSON(w, http.StatusOK, user)
 }
 
@@ -131,6 +127,14 @@ func (h *Handler) LogoutOthers(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("session")
 	if err == nil {
+		// Resolve who's logging out BEFORE the session is gone — this route
+		// runs with no AuthMiddleware (logging out an already-expired session
+		// must still succeed), so there's no request-context user to read.
+		if session, sErr := h.db.GetSession(cookie.Value); sErr == nil && session != nil {
+			if user, uErr := h.db.GetUserByID(session.UserID); uErr == nil && user != nil {
+				h.logAuthAction(r, &user.ID, displayNameOrUsername(user), "auth.logout", &user.ID, user.Username, nil)
+			}
+		}
 		h.db.DeleteSession(cookie.Value)
 	}
 	http.SetCookie(w, &http.Cookie{
@@ -149,8 +153,39 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "ulgama giriň")
 		return
 	}
-	writeJSON(w, http.StatusOK, user)
+	// impersonator rides along only when this session is one — the
+	// frontend uses its presence alone to decide whether to show the
+	// "viewing as" banner, never a separate boolean. Embedding *models.User
+	// (rather than listing every field again here) means this can never
+	// silently drift out of sync with User's own json tags.
+	impersonator := authutil.GetImpersonator(r)
+	if impersonator == nil {
+		writeJSON(w, http.StatusOK, user)
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		*models.User
+		Impersonator *models.UserSearchResult `json:"impersonator"`
+	}{
+		User: user,
+		Impersonator: &models.UserSearchResult{
+			ID: impersonator.ID, Username: impersonator.Username, DisplayName: impersonator.DisplayName,
+		},
+	})
 }
+
+// CompleteOnboarding dismisses the first-login welcome tour for good —
+// called once, whether the user finished it or explicitly skipped it, so it
+// never resurfaces on a later login from this or another device.
+func (h *Handler) CompleteOnboarding(w http.ResponseWriter, r *http.Request) {
+	user := authutil.GetUser(r)
+	if err := h.db.CompleteOnboarding(user.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "ýatda saklap bolmady")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 func (h *Handler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	user := authutil.GetUser(r)
 	if user == nil {

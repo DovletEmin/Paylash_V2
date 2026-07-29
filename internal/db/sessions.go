@@ -2,6 +2,7 @@ package db
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"paylash/internal/models"
 	"time"
@@ -21,13 +22,40 @@ func (d *DB) CreateSession(userID int) (*models.Session, error) {
 	return s, err
 }
 
+// CreateImpersonationSession is CreateSession's counterpart for an admin's
+// "log in as" action — the resulting session belongs to targetUserID (every
+// normal permission check treats it as exactly their session) but carries
+// adminID in impersonator_id, so the audit log and the "you're viewing as X"
+// banner can still tell who's really behind it. Deliberately short-lived
+// (2 hours, not the normal 7 days): an impersonation session left open
+// indefinitely is a much bigger blast radius than a forgotten login.
+func (d *DB) CreateImpersonationSession(targetUserID, adminID int) (*models.Session, error) {
+	token := generateToken(32)
+	s := &models.Session{
+		ID:             token,
+		UserID:         targetUserID,
+		ExpiresAt:      time.Now().Add(2 * time.Hour),
+		ImpersonatorID: &adminID,
+	}
+	_, err := d.Exec(
+		`INSERT INTO sessions (id, user_id, expires_at, impersonator_id) VALUES ($1, $2, $3, $4)`,
+		s.ID, s.UserID, s.ExpiresAt, adminID,
+	)
+	return s, err
+}
+
 func (d *DB) GetSession(token string) (*models.Session, error) {
 	s := &models.Session{}
+	var impersonatorID sql.NullInt64
 	err := d.QueryRow(
-		`SELECT id, user_id, expires_at, created_at FROM sessions WHERE id = $1 AND expires_at > NOW()`, token,
-	).Scan(&s.ID, &s.UserID, &s.ExpiresAt, &s.CreatedAt)
+		`SELECT id, user_id, expires_at, created_at, impersonator_id FROM sessions WHERE id = $1 AND expires_at > NOW()`, token,
+	).Scan(&s.ID, &s.UserID, &s.ExpiresAt, &s.CreatedAt, &impersonatorID)
 	if err != nil {
 		return nil, err
+	}
+	if impersonatorID.Valid {
+		v := int(impersonatorID.Int64)
+		s.ImpersonatorID = &v
 	}
 	return s, nil
 }

@@ -74,6 +74,36 @@ func TestIntPtrEqual(t *testing.T) {
 	}
 }
 
+func TestInlineSafeContentType(t *testing.T) {
+	tests := []struct {
+		ct   string
+		want bool
+	}{
+		{"image/png", true},
+		{"image/jpeg", true},
+		{"image/gif", true},
+		{"image/webp; charset=binary", true}, // DetectContentType can append a charset param
+		{"audio/mpeg", true},
+		{"video/mp4", true},
+		{"application/pdf", true},
+		// The whole point of this function: these must never be inline.
+		{"image/svg+xml", false},
+		{"text/html; charset=utf-8", false},
+		{"text/plain; charset=utf-8", false},
+		{"text/xml; charset=utf-8", false},
+		{"application/octet-stream", false},
+		{"application/zip", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ct, func(t *testing.T) {
+			if got := inlineSafeContentType(tt.ct); got != tt.want {
+				t.Errorf("inlineSafeContentType(%q) = %v, want %v", tt.ct, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCanEditFolderWith(t *testing.T) {
 	projectID := 3
 

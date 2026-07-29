@@ -165,7 +165,11 @@ func (d *DB) UpdateFileVersion(id int, sizeBytes int64) error {
 
 // SearchFiles searches personal files owned by the user, shared/common files,
 // and files in any project the user is a member of. Admins search everything.
-func (d *DB) SearchFiles(userID int, isAdmin bool, query string) ([]models.File, error) {
+// Keyset-free offset pagination (limit/offset) matches every other list
+// endpoint in this app (see parsePagination) — fine at this app's scale,
+// where "search result set large enough for offset drift to matter" never
+// really happens.
+func (d *DB) SearchFiles(userID int, isAdmin bool, query string, limit, offset int) ([]models.File, error) {
 	var q string
 	var args []any
 
@@ -182,7 +186,8 @@ func (d *DB) SearchFiles(userID int, isAdmin bool, query string) ([]models.File,
 		     )`
 		args = []any{"%" + query + "%", userID}
 	}
-	q += ` ORDER BY updated_at DESC LIMIT 50`
+	q += ` ORDER BY updated_at DESC LIMIT $` + strconv.Itoa(len(args)+1) + ` OFFSET $` + strconv.Itoa(len(args)+2)
+	args = append(args, limit, offset)
 
 	rows, err := d.Query(q, args...)
 	if err != nil {

@@ -86,6 +86,27 @@ func (h *Handler) AdminDashboard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dash)
 }
 
+// AdminStorageTrend backs the dashboard's storage-growth chart —
+// ?days=N (default 30, capped at 365) points, each the cumulative
+// file count/bytes as of that day. See DB.GetStorageTrend.
+func (h *Handler) AdminStorageTrend(w http.ResponseWriter, r *http.Request) {
+	days := 30
+	if v := r.URL.Query().Get("days"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 365 {
+			days = n
+		}
+	}
+	points, err := h.db.GetStorageTrend(days)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "maglumat alyp bolmady")
+		return
+	}
+	if points == nil {
+		points = []models.StorageTrendPoint{}
+	}
+	writeJSON(w, http.StatusOK, points)
+}
+
 // Projects (admin-managed shared folders with an employee ACL)
 
 func (h *Handler) AdminListProjects(w http.ResponseWriter, r *http.Request) {
@@ -331,6 +352,93 @@ func (h *Handler) AdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// Impersonate starts an admin "log in as" session for the target user — a
+// full act-as (not read-only): every request on the new session is
+// authorized exactly as if the target made it themselves, which is the
+// whole point (reproducing a bug, fixing something only reachable through
+// their own permissions). Restricted to non-admin targets — impersonating a
+// fellow admin has no clear support use case and only adds a confusing
+// power dynamic between two admin accounts. See CreateImpersonationSession
+// for how the resulting session differs from an ordinary login, and
+// logAction for how audit entries logged WHILE impersonating still credit
+// the admin, not the target, as the real actor.
+func (h *Handler) Impersonate(w http.ResponseWriter, r *http.Request) {
+	admin := authutil.GetUser(r)
+	targetID, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry ID")
+		return
+	}
+	if targetID == admin.ID {
+		writeError(w, http.StatusBadRequest, "özüňize giriş edip bolmaýar")
+		return
+	}
+	target, err := h.db.GetUserByID(targetID)
+	if err != nil || target == nil {
+		writeError(w, http.StatusNotFound, "ulanyjy tapylmady")
+		return
+	}
+	if target.Role == "admin" {
+		writeError(w, http.StatusForbidden, "başga admin hökmünde girip bolmaýar")
+		return
+	}
+	session, err := h.db.CreateImpersonationSession(target.ID, admin.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "sessiýa döredip bolmady")
+		return
+	}
+	setSessionCookie(w, r, session)
+	h.logAuthAction(r, &admin.ID, displayNameOrUsername(admin), "admin.impersonate_start", &target.ID, target.Username, nil)
+	writeJSON(w, http.StatusOK, target)
+}
+
+// ExitImpersonation ends the current impersonation session and returns a
+// fresh session as the admin — not the original pre-impersonation session,
+// which no longer exists (its cookie was overwritten the moment
+// impersonation started, and CreateImpersonationSession never stored a way
+// back to it). Gated on the session's own ImpersonatorID, not an admin-role
+// check: while impersonating, the "current user" for every normal
+// permission check is the (non-admin) target, so a role-gated route would
+// never be reachable from inside the very session that needs to call it.
+func (h *Handler) ExitImpersonation(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie("session")
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "ulgama giriň")
+		return
+	}
+	session, err := h.db.GetSession(cookie.Value)
+	if err != nil || session == nil || session.ImpersonatorID == nil {
+		writeError(w, http.StatusBadRequest, "häzir hiç kime giriş edilenok")
+		return
+	}
+	admin, err := h.db.GetUserByID(*session.ImpersonatorID)
+	if err != nil || admin == nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk")
+		return
+	}
+	target, _ := h.db.GetUserByID(session.UserID)
+
+	newSession, err := h.db.CreateSession(admin.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "sessiýa döredip bolmady")
+		return
+	}
+	if err := h.db.DeleteSession(cookie.Value); err != nil {
+		log.Printf("exit impersonation: delete session %s: %v", cookie.Value, err)
+	}
+	setSessionCookie(w, r, newSession)
+
+	var targetIDPtr *int
+	targetName := ""
+	if target != nil {
+		id := target.ID
+		targetIDPtr = &id
+		targetName = target.Username
+	}
+	h.logAuthAction(r, &admin.ID, displayNameOrUsername(admin), "admin.impersonate_end", targetIDPtr, targetName, nil)
+	writeJSON(w, http.StatusOK, admin)
+}
+
 func (h *Handler) AdminDeleteUser(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil {
@@ -509,19 +617,77 @@ func (h *Handler) AdminCreateUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, user)
 }
 
+// AdminBulkUserQuota sets a quota for every employee (the original,
+// unscoped action) or, when user_ids is given, just that selected subset —
+// the middle ground between "one at a time" (AdminUpdateUser) and
+// "literally everyone" this endpoint used to be limited to.
 func (h *Handler) AdminBulkUserQuota(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		QuotaMB int64 `json:"quota_mb"`
+		UserIDs []int `json:"user_ids"`
 	}
 	if err := readJSON(r, &req); err != nil || req.QuotaMB <= 0 {
 		writeError(w, http.StatusBadRequest, "kwota girizilmeli")
 		return
 	}
-	if err := h.db.SetAllUsersQuota(req.QuotaMB * 1024 * 1024); err != nil {
-		writeError(w, http.StatusInternalServerError, "üýtgedip bolmady")
-		return
+	quotaBytes := req.QuotaMB * 1024 * 1024
+	if len(req.UserIDs) > 0 {
+		if err := h.db.SetUsersQuota(req.UserIDs, quotaBytes); err != nil {
+			writeError(w, http.StatusInternalServerError, "üýtgedip bolmady")
+			return
+		}
+		h.logAction(r, "user.bulk_quota", "user", 0, "", map[string]any{"user_ids": req.UserIDs, "quota_mb": req.QuotaMB})
+	} else {
+		if err := h.db.SetAllUsersQuota(quotaBytes); err != nil {
+			writeError(w, http.StatusInternalServerError, "üýtgedip bolmady")
+			return
+		}
+		h.logAction(r, "user.bulk_quota_all", "user", 0, "", map[string]any{"quota_mb": req.QuotaMB})
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// AdminBulkDeleteUsers deletes exactly the selected users — the middle
+// ground between AdminDeleteUser (one) and AdminDeleteAllUsers (everyone,
+// word-confirmation gated). Reuses AdminDeleteUser's own per-user logic
+// (last-admin guard, upload-session cleanup, content reassignment, bucket
+// wipe) for each id in a loop rather than a separate bulk code path, so a
+// selected batch is exactly as safe as deleting each one individually —
+// including that a batch accidentally including the studio's last admin
+// account skips just that one row rather than failing (or worse,
+// succeeding on) the rest of the batch.
+func (h *Handler) AdminBulkDeleteUsers(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserIDs []int `json:"user_ids"`
+	}
+	if err := readJSON(r, &req); err != nil || len(req.UserIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "ulanyjylar saýlanmaly")
+		return
+	}
+	actor := authutil.GetUser(r)
+	deleted := 0
+	var skippedLastAdmin []string
+	for _, id := range req.UserIDs {
+		target, _ := h.db.GetUserByID(id)
+		if target == nil {
+			continue
+		}
+		if n, err := h.db.CountAdmins(); err == nil && wouldRemoveLastAdmin(target.Role, "user", n) {
+			skippedLastAdmin = append(skippedLastAdmin, target.Username)
+			continue
+		}
+		h.abortUserUploadSessions(r.Context(), id)
+		if err := h.db.ReassignAndDeleteUser(id, actor.ID); err != nil {
+			log.Printf("bulk delete user %d: %v", id, err)
+			continue
+		}
+		h.wipePersonalBucket(r.Context(), id)
+		deleted++
+	}
+	h.logAction(r, "user.bulk_delete", "user", 0, "", map[string]any{
+		"deleted": deleted, "requested": len(req.UserIDs), "skipped_last_admin": skippedLastAdmin,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "deleted": deleted, "skipped": skippedLastAdmin})
 }
 
 func (h *Handler) AdminBulkProjectQuota(w http.ResponseWriter, r *http.Request) {

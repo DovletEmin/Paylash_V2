@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"paylash/internal/models"
+	"time"
 )
 
 // Projects — admin-created shared folders with an explicit employee ACL.
@@ -183,4 +184,63 @@ func (d *DB) GetDashboard() (*models.AdminDashboard, error) {
 	_ = d.QueryRow(`SELECT COUNT(*) FROM files`).Scan(&dash.TotalFiles)
 	_ = d.QueryRow(`SELECT COALESCE(SUM(size_bytes), 0) FROM files`).Scan(&dash.TotalBytes)
 	return dash, nil
+}
+
+// GetStorageTrend returns one point per day for the last `days` days, each
+// with the CUMULATIVE file count/total bytes as of that day — the admin
+// dashboard's storage-growth chart. Counts every file regardless of
+// deleted_at, matching GetDashboard's own TotalFiles/TotalBytes (a trashed
+// file still occupies real MinIO space until purged), so the chart's final
+// point always agrees with the dashboard's current-totals stat cards.
+//
+// Computed as a baseline (everything created before the window) plus daily
+// deltas grouped in one query, then accumulated in Go — not a
+// generate_series-of-days LEFT JOIN, which would run a correlated subquery
+// per day and scale with days x files instead of just files.
+func (d *DB) GetStorageTrend(days int) ([]models.StorageTrendPoint, error) {
+	cutoff := time.Now().AddDate(0, 0, -(days - 1)).Truncate(24 * time.Hour)
+
+	var baseFiles int
+	var baseBytes int64
+	if err := d.QueryRow(
+		`SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM files WHERE created_at < $1`, cutoff,
+	).Scan(&baseFiles, &baseBytes); err != nil {
+		return nil, err
+	}
+
+	rows, err := d.Query(
+		`SELECT created_at::date, COUNT(*), COALESCE(SUM(size_bytes), 0)
+		 FROM files WHERE created_at >= $1
+		 GROUP BY created_at::date`, cutoff,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	deltaFiles := map[string]int{}
+	deltaBytes := map[string]int64{}
+	for rows.Next() {
+		var day time.Time
+		var count int
+		var bytes int64
+		if err := rows.Scan(&day, &count, &bytes); err != nil {
+			return nil, err
+		}
+		key := day.Format("2006-01-02")
+		deltaFiles[key] = count
+		deltaBytes[key] = bytes
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	points := make([]models.StorageTrendPoint, 0, days)
+	runningFiles, runningBytes := baseFiles, baseBytes
+	for i := 0; i < days; i++ {
+		key := cutoff.AddDate(0, 0, i).Format("2006-01-02")
+		runningFiles += deltaFiles[key]
+		runningBytes += deltaBytes[key]
+		points = append(points, models.StorageTrendPoint{Date: key, FileCount: runningFiles, TotalBytes: runningBytes})
+	}
+	return points, nil
 }

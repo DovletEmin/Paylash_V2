@@ -29,6 +29,19 @@ func AuthMiddleware(database *db.DB) func(http.Handler) http.Handler {
 				http.Error(w, `{"error":"ulanyjy tapylmady"}`, http.StatusUnauthorized)
 				return
 			}
+			ctx := context.WithValue(r.Context(), authutil.UserKey, user)
+			// An impersonation session's ImpersonatorID names the admin
+			// behind it — GetUser still resolves to the impersonated
+			// target above (every normal permission check must treat this
+			// request as genuinely theirs), but the audit log and the
+			// frontend's "viewing as" banner need to find the real actor
+			// too. A dangling reference (admin account deleted since) just
+			// means the session behaves as a plain one from here on.
+			if session.ImpersonatorID != nil {
+				if admin, err := database.GetUserByID(*session.ImpersonatorID); err == nil && admin != nil {
+					ctx = context.WithValue(ctx, authutil.ImpersonatorKey, admin)
+				}
+			}
 			// The frontend already blocks all interaction behind an
 			// un-dismissable "change your password" modal for an account
 			// flagged must_change_password — this is the same rule enforced
@@ -39,7 +52,6 @@ func AuthMiddleware(database *db.DB) func(http.Handler) http.Handler {
 				http.Error(w, `{"error":"parolyňyzy üýtgetmeli","code":"must_change_password"}`, http.StatusForbidden)
 				return
 			}
-			ctx := context.WithValue(r.Context(), authutil.UserKey, user)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

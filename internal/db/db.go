@@ -376,6 +376,20 @@ func (d *DB) Migrate() error {
 		// showing. ON DELETE SET NULL: a cache row is never load-bearing for
 		// the message row that references it.
 		`ALTER TABLE messages ADD COLUMN IF NOT EXISTS link_preview_url TEXT REFERENCES link_previews(url) ON DELETE SET NULL`,
+
+		// Admin "log in as" impersonation: a session with impersonator_id set
+		// belongs to the ADMIN in that column, acting as user_id (the
+		// target). ON DELETE SET NULL rather than CASCADE — deleting the
+		// admin account must not silently delete an in-progress
+		// impersonation session out from under the target user.
+		`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS impersonator_id INT REFERENCES users(id) ON DELETE SET NULL`,
+
+		// Gates the first-login welcome tour. Defaults TRUE so this backfills
+		// every EXISTING row as already onboarded — the tour must only ever
+		// appear for accounts created after this migration; CreateUser
+		// explicitly inserts FALSE for those. SeedAdmin's raw INSERT also
+		// omits it deliberately, so the bootstrap admin never sees it either.
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_completed BOOLEAN NOT NULL DEFAULT TRUE`,
 	}
 
 	for _, m := range migrations {

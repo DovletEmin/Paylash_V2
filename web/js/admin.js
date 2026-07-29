@@ -52,7 +52,10 @@ const AdminPage = {
     /* ── Dashboard ── */
     async renderDashboard(el) {
         try {
-            const [d, pq] = await Promise.all([API.admin.dashboard(), API.admin.publicQuota.get()]);
+            const [d, pq, trend] = await Promise.all([
+                API.admin.dashboard(), API.admin.publicQuota.get(),
+                API.admin.storageTrend(30).catch(() => []),
+            ]);
             const pqGB = Math.round((pq.quota_bytes || 53687091200) / (1024 ** 3) * 10) / 10;
             el.innerHTML = `
             <h2 style="font-size:1.1rem;font-weight:600;margin-bottom:16px">${I18N.t('admin.nav_dashboard')}</h2>
@@ -62,6 +65,8 @@ const AdminPage = {
                 <div class="stat-card"><div class="stat-card-value">${d.total_files || 0}</div><div class="stat-card-label">${I18N.t('app.nav_files')}</div></div>
                 <div class="stat-card"><div class="stat-card-value">${UI.formatBytes(d.total_bytes || 0)}</div><div class="stat-card-label">${I18N.t('admin.stat_used_space')}</div></div>
             </div>
+            <h3 style="font-size:1rem;font-weight:600;margin:24px 0 12px">${I18N.t('admin.trend_title')}</h3>
+            ${this.renderTrendChart(trend)}
             <h3 style="font-size:1rem;font-weight:600;margin:24px 0 12px">${I18N.t('admin.public_quota_title')}</h3>
             <div style="display:flex;align-items:center;gap:10px">
                 <input type="number" id="public-quota-gb" class="form-control" value="${pqGB}" min="0.1" step="0.1" style="width:160px">
@@ -76,6 +81,39 @@ const AdminPage = {
         const gb = parseFloat(document.getElementById('public-quota-gb').value) || 0;
         if (gb <= 0) { UI.toast(I18N.t('admin.invalid_quota'), 'error'); return; }
         try { await API.admin.publicQuota.set(Math.round(gb * 1024)); UI.toast(I18N.t('admin.public_quota_changed'), 'success'); } catch (e) { UI.toast(e.message, 'error'); }
+    },
+
+    // Self-contained inline SVG line chart — no charting library, matching
+    // this app's no-build-step/no-new-dependency approach everywhere else.
+    // viewBox + preserveAspectRatio="none" lets it stretch to fill its
+    // container's actual width via plain CSS, no resize-handling JS needed.
+    renderTrendChart(points) {
+        if (!points || points.length < 2) {
+            return `<p class="text-muted" style="font-size:.82rem">${I18N.t('admin.trend_no_data')}</p>`;
+        }
+        const w = 600, h = 160, padL = 4, padR = 4, padT = 8, padB = 8;
+        const innerW = w - padL - padR, innerH = h - padT - padB;
+        const maxBytes = Math.max(...points.map(p => p.total_bytes), 1);
+        const stepX = innerW / (points.length - 1);
+        const coords = points.map((p, i) => {
+            const x = padL + i * stepX;
+            const y = padT + innerH - (p.total_bytes / maxBytes) * innerH;
+            return `${x.toFixed(1)},${y.toFixed(1)}`;
+        });
+        const line = coords.join(' ');
+        const area = `${padL},${padT + innerH} ${line} ${padL + innerW},${padT + innerH}`;
+        const first = points[0], last = points[points.length - 1];
+        return `<div class="trend-chart-wrap">
+            <svg viewBox="0 0 ${w} ${h}" class="trend-chart" preserveAspectRatio="none" role="img" aria-label="${I18N.t('admin.trend_title')}">
+                <polyline points="${area}" class="trend-chart-area"></polyline>
+                <polyline points="${line}" class="trend-chart-line"></polyline>
+            </svg>
+            <div class="trend-chart-labels">
+                <span>${UI.esc(first.date)} · ${UI.formatBytes(first.total_bytes)}</span>
+                <span class="trend-chart-now">${I18N.t('admin.trend_now')}: ${UI.formatBytes(last.total_bytes)} (${last.file_count} ${I18N.t('app.nav_files').toLowerCase()})</span>
+                <span>${UI.esc(last.date)}</span>
+            </div>
+        </div>`;
     },
 
     /* ── Projects ── */
@@ -214,9 +252,18 @@ const AdminPage = {
     },
 
     /* ── Users ── */
+    // Selected rows for the bulk-quota/bulk-delete bar — the middle ground
+    // between "one user at a time" and the pre-existing "literally
+    // everyone" actions. Admin rows never get a checkbox at all (see
+    // userRowHTML): bulk quota silently no-ops on them server-side anyway
+    // (SetUsersQuota is scoped to role='user'), and bulk-deleting an admin
+    // is rare/dangerous enough to keep on the single-user delete flow only.
+    _selectedUserIds: new Set(),
+
     async renderUsers(el) {
         try {
             const users = (await API.admin.users.list()) || [];
+            this._selectedUserIds = new Set();
             el.innerHTML = `
             <div class="admin-header"><h2>${I18N.t('admin.nav_users')}</h2>
                 <div style="display:flex;gap:8px;align-items:center">
@@ -227,16 +274,67 @@ const AdminPage = {
                     <button class="btn btn-primary btn-sm" onclick="AdminPage.showCreateUserModal()">${UI.icons.plus} ${I18N.t('admin.new_button')}</button>
                 </div>
             </div>
-            <table class="admin-table" id="admin-users-table"><thead><tr><th>${I18N.t('admin.col_id')}</th><th>${I18N.t('admin.col_name')}</th><th>${I18N.t('admin.col_username')}</th><th>${I18N.t('admin.col_role')}</th><th>${I18N.t('admin.col_quota')}</th><th>${I18N.t('admin.col_actions')}</th></tr></thead><tbody>
-            ${users.map(u => `<tr data-uid="${u.id}"><td>${u.id}</td><td><div class="table-identity">${UI.avatarHTML(u.id, u.full_name, 'share-user-avatar-sm')}<span>${UI.esc(u.full_name)}</span> ${u.must_change_password ? `<span class="badge" title="${I18N.t('admin.force_pw_badge_title')}">🔑</span>` : ''}</div></td><td>@${UI.esc(u.username)}</td>
-                <td><span class="badge badge-${u.role === 'admin' ? 'admin' : 'user'}">${u.role === 'admin' ? I18N.t('app.role_admin') : I18N.t('app.role_user')}</span></td>
-                <td>${UI.formatBytes(u.quota_bytes || 0)}</td>
-                <td><button class="btn btn-sm btn-ghost" onclick="AdminPage.showEditUserModal(${u.id})" title="${I18N.t('common.edit')}" aria-label="${I18N.t('common.edit')}">✏️</button>
-                ${u.role !== 'admin' ? `<button class="btn btn-sm btn-danger" onclick="AdminPage.deleteUser(${u.id})" title="${I18N.t('common.delete')}" aria-label="${I18N.t('common.delete')}">🗑</button>` : ''}</td></tr>`).join('')}
-            ${!users.length ? `<tr><td colspan="6" class="text-muted text-center">${I18N.t('admin.no_employees')}</td></tr>` : ''}
+            <div id="admin-user-bulk-bar" class="bulk-actions-bar hidden"></div>
+            <table class="admin-table" id="admin-users-table"><thead><tr>
+                <th><input type="checkbox" id="admin-user-select-all" onchange="AdminPage.toggleSelectAllUsers(this.checked)" aria-label="${I18N.t('files.select_all')}"></th>
+                <th>${I18N.t('admin.col_id')}</th><th>${I18N.t('admin.col_name')}</th><th>${I18N.t('admin.col_username')}</th><th>${I18N.t('admin.col_role')}</th><th>${I18N.t('admin.col_quota')}</th><th>${I18N.t('admin.col_actions')}</th></tr></thead><tbody>
+            ${users.map(u => this.userRowHTML(u)).join('')}
+            ${!users.length ? `<tr><td colspan="7" class="text-muted text-center">${I18N.t('admin.no_employees')}</td></tr>` : ''}
             </tbody></table>`;
             this._users = users;
         } catch (e) { el.innerHTML = `<p class="text-muted">${UI.esc(e.message)}</p>`; }
+    },
+
+    userRowHTML(u) {
+        const checkbox = u.role === 'admin' ? '' :
+            `<input type="checkbox" ${this._selectedUserIds.has(u.id) ? 'checked' : ''} onchange="AdminPage.toggleSelectUser(${u.id},this.checked)" aria-label="${I18N.t('files.select_item')}">`;
+        return `<tr data-uid="${u.id}"><td>${checkbox}</td><td>${u.id}</td><td><div class="table-identity">${UI.avatarHTML(u.id, u.full_name, 'share-user-avatar-sm')}<span>${UI.esc(u.full_name)}</span> ${u.must_change_password ? `<span class="badge" title="${I18N.t('admin.force_pw_badge_title')}">🔑</span>` : ''}</div></td><td>@${UI.esc(u.username)}</td>
+                <td><span class="badge badge-${u.role === 'admin' ? 'admin' : 'user'}">${u.role === 'admin' ? I18N.t('app.role_admin') : I18N.t('app.role_user')}</span></td>
+                <td>${UI.formatBytes(u.quota_bytes || 0)}</td>
+                <td><button class="btn btn-sm btn-ghost" onclick="AdminPage.showEditUserModal(${u.id})" title="${I18N.t('common.edit')}" aria-label="${I18N.t('common.edit')}">✏️</button>
+                ${u.role !== 'admin' ? `<button class="btn btn-sm btn-ghost" onclick="AdminPage.impersonate(${u.id},${UI.escJson(u.full_name || u.username)})" title="${I18N.t('admin.impersonate_button')}" aria-label="${I18N.t('admin.impersonate_button')}">🎭</button>` : ''}
+                ${u.role !== 'admin' ? `<button class="btn btn-sm btn-danger" onclick="AdminPage.deleteUser(${u.id})" title="${I18N.t('common.delete')}" aria-label="${I18N.t('common.delete')}">🗑</button>` : ''}</td></tr>`;
+    },
+
+    toggleSelectUser(id, checked) {
+        if (checked) this._selectedUserIds.add(id); else this._selectedUserIds.delete(id);
+        this.renderUserBulkBar();
+    },
+
+    toggleSelectAllUsers(checked) {
+        this._selectedUserIds = new Set(checked ? (this._users || []).filter(u => u.role !== 'admin').map(u => u.id) : []);
+        document.querySelectorAll('#admin-users-table tbody input[type=checkbox]').forEach(cb => { cb.checked = checked; });
+        this.renderUserBulkBar();
+    },
+
+    renderUserBulkBar() {
+        const bar = document.getElementById('admin-user-bulk-bar');
+        if (!bar) return;
+        const count = this._selectedUserIds.size;
+        if (!count) { bar.classList.add('hidden'); bar.innerHTML = ''; return; }
+        bar.classList.remove('hidden');
+        bar.innerHTML = `
+            <span class="bulk-bar-count">${I18N.tn('files.selected_count', count)}</span>
+            <div class="bulk-bar-actions">
+                <button class="btn btn-ghost btn-sm" onclick="AdminPage.showBulkUserQuota(true)">📊 ${I18N.t('admin.bulk_quota_selected')}</button>
+                <button class="btn btn-ghost btn-sm btn-danger" onclick="AdminPage.confirmBulkDeleteSelected()">🗑 ${I18N.t('admin.bulk_delete_selected')}</button>
+                <button class="btn btn-icon btn-ghost btn-sm" onclick="AdminPage.toggleSelectAllUsers(false)" title="${I18N.t('files.clear_selection')}" aria-label="${I18N.t('files.clear_selection')}">✕</button>
+            </div>`;
+    },
+
+    confirmBulkDeleteSelected() {
+        const ids = Array.from(this._selectedUserIds);
+        if (!ids.length) return;
+        UI.confirmAction(I18N.t('admin.bulk_delete_selected'), I18N.tn('admin.bulk_delete_selected_confirm', ids.length, { count: ids.length }), I18N.t('common.delete'), async () => {
+            try {
+                const res = await API.admin.users.bulkDelete(ids);
+                UI.toast(I18N.tn('admin.bulk_delete_selected_done', res.deleted, { count: res.deleted }), 'success');
+                if (res.skipped && res.skipped.length) {
+                    UI.toast(I18N.t('admin.bulk_delete_skipped_admins', { names: res.skipped.join(', ') }), 'info');
+                }
+                this.switchTab('users');
+            } catch (e) { UI.toast(e.message, 'error'); }
+        });
     },
 
     filterUsers(q) {
@@ -355,6 +453,20 @@ const AdminPage = {
         });
     },
 
+    // Full page reload after switching sessions rather than trying to patch
+    // App.user and every already-loaded page's cached state in place — this
+    // is a genuine identity switch (new permissions, new files, new chat
+    // history), and a reload is the only way to guarantee nothing from the
+    // admin's own session lingers in memory.
+    impersonate(id, name) {
+        UI.confirmAction(I18N.t('admin.impersonate_confirm_title'), I18N.t('admin.impersonate_confirm_body', { name }), I18N.t('admin.impersonate_button'), async () => {
+            try {
+                await API.admin.users.impersonate(id);
+                location.reload();
+            } catch (e) { UI.toast(e.message, 'error'); }
+        });
+    },
+
     confirmDeleteAllUsers() {
         const word = I18N.t('admin.delete_all_confirm_word');
         UI.showModal(I18N.t('admin.delete_all_title'), `
@@ -370,16 +482,27 @@ const AdminPage = {
         catch (e) { UI.toast(e.message, 'error'); }
     },
 
-    showBulkUserQuota() {
-        UI.showModal(I18N.t('admin.bulk_user_quota_title'), `
+    // selectedOnly=true scopes the modal (and doBulkUserQuota below) to
+    // this._selectedUserIds instead of every employee — same modal, same
+    // submit handler, just remembers which mode it's in via a data
+    // attribute rather than two near-duplicate copies of both.
+    showBulkUserQuota(selectedOnly) {
+        const count = this._selectedUserIds.size;
+        UI.showModal(selectedOnly ? I18N.t('admin.bulk_quota_selected') : I18N.t('admin.bulk_user_quota_title'), `
             <div class="form-group"><label>${I18N.t('admin.bulk_quota_new_label')}</label><input type="number" id="bulk-user-quota" class="form-control" value="10" min="0.1" step="0.1"></div>
-            <p class="text-muted" style="font-size:.78rem">${I18N.t('admin.bulk_user_quota_hint')}</p>`,
-            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="AdminPage.doBulkUserQuota()">${I18N.t('common.change')}</button>`);
+            <p class="text-muted" style="font-size:.78rem">${selectedOnly ? I18N.tn('admin.bulk_quota_selected_hint', count, { count }) : I18N.t('admin.bulk_user_quota_hint')}</p>`,
+            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="AdminPage.doBulkUserQuota(${!!selectedOnly})">${I18N.t('common.change')}</button>`);
     },
-    async doBulkUserQuota() {
+    async doBulkUserQuota(selectedOnly) {
         const gb = parseFloat(document.getElementById('bulk-user-quota').value) || 0;
         if (gb <= 0) { UI.toast(I18N.t('admin.invalid_quota'), 'error'); return; }
-        try { await API.admin.users.bulkQuota(Math.round(gb * 1024)); UI.closeModal(); UI.toast(I18N.t('admin.bulk_user_quota_done'), 'success'); this.switchTab('users'); } catch (e) { UI.toast(e.message, 'error'); }
+        const ids = selectedOnly ? Array.from(this._selectedUserIds) : null;
+        try {
+            await API.admin.users.bulkQuota(Math.round(gb * 1024), ids);
+            UI.closeModal();
+            UI.toast(I18N.t('admin.bulk_user_quota_done'), 'success');
+            this.switchTab('users');
+        } catch (e) { UI.toast(e.message, 'error'); }
     },
 
     showImportModal() {

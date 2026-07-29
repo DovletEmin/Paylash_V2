@@ -24,3 +24,30 @@ jobs:
 
       - name: Test
         run: go test ./...
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      # Flags known-vulnerable dependencies actually reachable from this
+      # codebase's own call graph, not just anything present in go.sum.
+      - name: govulncheck
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-input: "1.25"
+          check-latest: true
+
+      # Static analysis for common Go security mistakes (SQL string
+      # concatenation, weak crypto, unhandled file-permission bits, etc.) —
+      # complements govulncheck, which only catches known CVEs, not
+      # first-party bugs in this code.
+      - name: gosec
+        uses: securego/gosec@master
+        with:
+          args: ./...

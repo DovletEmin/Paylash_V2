@@ -42,6 +42,8 @@ const API = {
                 .then(r => r.json().then(d => r.ok ? d : Promise.reject(new Error(d.error || I18N.t('common.error_short')))));
         },
         logoutOthers() { return API._request('POST', '/api/auth/logout-others'); },
+        exitImpersonation() { return API._request('POST', '/api/auth/exit-impersonation'); },
+        completeOnboarding() { return API._request('POST', '/api/auth/complete-onboarding'); },
     },
 
     push: {
@@ -102,7 +104,12 @@ const API = {
         rename(id, name) { return API._request('PATCH', `/api/files/${id}`, { name }); },
         move(id, folderId) { return API._request('PATCH', `/api/files/${id}/move`, { folder_id: folderId || null }); },
         delete(id) { return API._request('DELETE', `/api/files/${id}`); },
-        search(q) { return API._request('GET', `/api/search?q=${encodeURIComponent(q)}`); },
+        search(q, limit, offset) {
+            let url = `/api/search?q=${encodeURIComponent(q)}`;
+            if (limit) url += `&limit=${limit}`;
+            if (offset) url += `&offset=${offset}`;
+            return API._request('GET', url);
+        },
         storageUsage(scope, projectId) {
             let url = `/api/storage/usage?scope=${scope || 'personal'}`;
             if (projectId) url += `&project_id=${projectId}`;
@@ -299,6 +306,7 @@ const API = {
 
     admin: {
         dashboard() { return API._request('GET', '/api/admin/dashboard'); },
+        storageTrend(days) { return API._request('GET', `/api/admin/storage-trend?days=${days || 30}`); },
         auditLog(limit) { return API._request('GET', `/api/admin/audit-log${limit ? '?limit=' + limit : ''}`); },
         auditLogExportURL() { return '/api/admin/audit-log/export'; },
         uploads: {
@@ -332,7 +340,9 @@ const API = {
             },
             delete(id) { return API._request('DELETE', `/api/admin/users/${id}`); },
             deleteAll() { return API._request('DELETE', '/api/admin/users/all'); },
-            bulkQuota(quotaMB) { return API._request('POST', '/api/admin/users/bulk-quota', { quota_mb: quotaMB }); },
+            impersonate(id) { return API._request('POST', `/api/admin/users/${id}/impersonate`); },
+            bulkQuota(quotaMB, userIds) { return API._request('POST', '/api/admin/users/bulk-quota', { quota_mb: quotaMB, user_ids: userIds || undefined }); },
+            bulkDelete(userIds) { return API._request('POST', '/api/admin/users/bulk-delete', { user_ids: userIds }); },
             importFile(file) {
                 const form = new FormData();
                 form.append('file', file);

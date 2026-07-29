@@ -15,21 +15,40 @@ const App = {
         this.route();
         this._handlePushHash();
         this.checkForcedPasswordChange();
+        this.maybeShowOnboarding();
     },
 
-    // A notification click on a cold-started app arrives as #chat/<id> in the
-    // URL — open that conversation, then clean the hash back out.
+    // A notification click on a cold-started app arrives as a hash in the
+    // URL — #chat/<id> for a chat message, #shared for a share notification
+    // (see pushShareNotification server-side and sw.js's generic `url`
+    // field) — open the right page, then clean the hash back out. Also
+    // called directly (not just at boot) by push.js's already-open-tab
+    // message handler, reusing the same routing instead of duplicating it.
     _handlePushHash() {
-        const m = location.hash.match(/^#chat\/(\d+)/);
-        if (m && this.user) {
-            if (typeof ChatPage !== 'undefined') ChatPage._activeId = parseInt(m[1], 10);
+        const chatMatch = location.hash.match(/^#chat\/(\d+)/);
+        if (chatMatch && this.user) {
+            if (typeof ChatPage !== 'undefined') ChatPage._activeId = parseInt(chatMatch[1], 10);
             history.replaceState(null, '', '/');
             this.navigate('chat');
+            return;
+        }
+        if (location.hash === '#shared' && this.user) {
+            history.replaceState(null, '', '/');
+            this.navigate('shared');
         }
     },
 
     checkForcedPasswordChange() {
         if (this.user && this.user.must_change_password) this.showForcePasswordModal();
+    },
+
+    // Shown once per account, right after any mandatory password change is
+    // out of the way (never stacked on top of it) — see saveForcedPassword,
+    // and the login/register handlers in auth.js which call this too since
+    // App.start()'s own checkForcedPasswordChange/maybeShowOnboarding pair
+    // only re-runs on a full page load, not after an in-SPA login/register.
+    maybeShowOnboarding() {
+        if (this.user && !this.user.must_change_password && !this.user.onboarding_completed) this.showOnboarding();
     },
 
     showForcePasswordModal() {
@@ -56,7 +75,52 @@ const App = {
             // that the block is lifted so the shell shows real content
             // instead of whatever error state those failed calls left behind.
             this.renderPage(this.currentPage);
+            this.maybeShowOnboarding();
         } catch (e) { UI.toast(e.message, 'error'); }
+    },
+
+    // ─── Onboarding (first-login welcome tour) ───
+    _onboardingStep: 0,
+    onboardingSteps() {
+        return [
+            { icon: UI.icons.cloud, title: I18N.t('onboarding.step1_title'), body: I18N.t('onboarding.step1_body') },
+            { icon: UI.icons.folder, title: I18N.t('onboarding.step2_title'), body: I18N.t('onboarding.step2_body') },
+            { icon: UI.icons.share, title: I18N.t('onboarding.step3_title'), body: I18N.t('onboarding.step3_body') },
+            { icon: '💬', title: I18N.t('onboarding.step4_title'), body: I18N.t('onboarding.step4_body') },
+            { icon: UI.icons.trash, title: I18N.t('onboarding.step5_title'), body: I18N.t('onboarding.step5_body') },
+        ];
+    },
+    showOnboarding() {
+        this._onboardingStep = 0;
+        this.renderOnboardingStep();
+    },
+    renderOnboardingStep() {
+        const steps = this.onboardingSteps();
+        const step = steps[this._onboardingStep];
+        const isLast = this._onboardingStep === steps.length - 1;
+        const dots = steps.map((_, i) => `<span class="onboarding-dot ${i === this._onboardingStep ? 'active' : ''}"></span>`).join('');
+        // hideClose (no X, no Escape) — same reasoning as showForcePasswordModal:
+        // dismissal must go through Skip, or it'd silently never mark
+        // onboarding_completed and the tour would just reappear next login.
+        UI.showModal(step.title, `
+            <div class="onboarding-body">
+                <div class="onboarding-icon">${step.icon}</div>
+                <p>${UI.esc(step.body)}</p>
+            </div>
+            <div class="onboarding-dots">${dots}</div>`,
+            `<button class="btn btn-ghost" onclick="App.finishOnboarding()">${I18N.t('onboarding.skip')}</button>
+             <button class="btn btn-primary" onclick="App.onboardingNext()">${isLast ? I18N.t('onboarding.finish') : I18N.t('onboarding.next')}</button>`,
+            true);
+    },
+    onboardingNext() {
+        const steps = this.onboardingSteps();
+        if (this._onboardingStep < steps.length - 1) { this._onboardingStep++; this.renderOnboardingStep(); }
+        else this.finishOnboarding();
+    },
+    async finishOnboarding() {
+        UI.closeModal();
+        if (this.user) this.user.onboarding_completed = true;
+        try { await API.auth.completeOnboarding(); } catch (e) { console.error('completeOnboarding failed', e); }
     },
 
     async checkAuth() {
@@ -329,6 +393,10 @@ const App = {
                 </div>
             </aside>
             <main class="main-content">
+                ${u.impersonator ? `<div class="impersonation-banner">
+                    <span>🎭 ${I18N.t('admin.impersonation_banner', { name: UI.esc(u.full_name || u.username), admin: UI.esc(u.impersonator.full_name || u.impersonator.username) })}</span>
+                    <button class="btn btn-sm" onclick="App.exitImpersonation()">${I18N.t('admin.exit_impersonation')}</button>
+                </div>` : ''}
                 <header class="topbar">
                     <button class="sidebar-toggle" onclick="document.getElementById('sidebar').classList.toggle('open')" aria-label="${I18N.t('app.menu_label')}">${UI.icons.menu}</button>
                     <div class="topbar-title">${this.pageTitle(page)}</div>
@@ -371,6 +439,16 @@ const App = {
         ChatSocket.disconnect();
         this.navigate('login', true);
         UI.toast(I18N.t('app.logged_out'), 'info');
+    },
+
+    // Reload rather than patch this.user in place, same reasoning as
+    // AdminPage.impersonate — a session switch this large isn't worth
+    // trying to unwind piecemeal in already-loaded page state.
+    async exitImpersonation() {
+        try {
+            await API.auth.exitImpersonation();
+            location.reload();
+        } catch (e) { UI.toast(e.message, 'error'); }
     },
 
     async loadStorageUsage() {

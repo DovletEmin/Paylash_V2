@@ -3,6 +3,8 @@ package db
 import (
 	"database/sql"
 	"paylash/internal/models"
+
+	"github.com/lib/pq"
 )
 
 // mustChangePassword should be true whenever the caller (not the user)
@@ -19,11 +21,11 @@ import (
 func (d *DB) CreateUser(u *models.RegisterRequest, hash, role string, quotaBytes int64, mustChangePassword bool) (*models.User, error) {
 	user := &models.User{}
 	err := d.QueryRow(
-		`INSERT INTO users (username, password_hash, display_name, role, quota_bytes, must_change_password)
-		 VALUES ($1, $2, $3, $4, $5, $6)
-		 RETURNING id, username, display_name, role, quota_bytes, avatar_url, must_change_password, chat_notify_level, chat_notify_sound, created_at`,
+		`INSERT INTO users (username, password_hash, display_name, role, quota_bytes, must_change_password, onboarding_completed)
+		 VALUES ($1, $2, $3, $4, $5, $6, FALSE)
+		 RETURNING id, username, display_name, role, quota_bytes, avatar_url, must_change_password, chat_notify_level, chat_notify_sound, onboarding_completed, created_at`,
 		u.Username, hash, u.FullName, role, quotaBytes, mustChangePassword,
-	).Scan(&user.ID, &user.Username, &user.DisplayName, &user.Role, &user.QuotaBytes, &user.AvatarURL, &user.MustChangePassword, &user.ChatNotifyLevel, &user.ChatNotifySound, &user.CreatedAt)
+	).Scan(&user.ID, &user.Username, &user.DisplayName, &user.Role, &user.QuotaBytes, &user.AvatarURL, &user.MustChangePassword, &user.ChatNotifyLevel, &user.ChatNotifySound, &user.OnboardingCompleted, &user.CreatedAt)
 	return user, err
 }
 
@@ -38,9 +40,9 @@ func (d *DB) CountAdmins() (int, error) {
 func (d *DB) GetUserByUsername(username string) (*models.User, error) {
 	u := &models.User{}
 	err := d.QueryRow(
-		`SELECT id, username, password_hash, display_name, role, quota_bytes, avatar_url, must_change_password, chat_notify_level, chat_notify_sound, created_at
+		`SELECT id, username, password_hash, display_name, role, quota_bytes, avatar_url, must_change_password, chat_notify_level, chat_notify_sound, onboarding_completed, created_at
 		 FROM users WHERE username = $1`, username,
-	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.QuotaBytes, &u.AvatarURL, &u.MustChangePassword, &u.ChatNotifyLevel, &u.ChatNotifySound, &u.CreatedAt)
+	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.QuotaBytes, &u.AvatarURL, &u.MustChangePassword, &u.ChatNotifyLevel, &u.ChatNotifySound, &u.OnboardingCompleted, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -50,13 +52,20 @@ func (d *DB) GetUserByUsername(username string) (*models.User, error) {
 func (d *DB) GetUserByID(id int) (*models.User, error) {
 	u := &models.User{}
 	err := d.QueryRow(
-		`SELECT id, username, password_hash, display_name, role, quota_bytes, avatar_url, must_change_password, chat_notify_level, chat_notify_sound, created_at
+		`SELECT id, username, password_hash, display_name, role, quota_bytes, avatar_url, must_change_password, chat_notify_level, chat_notify_sound, onboarding_completed, created_at
 		 FROM users WHERE id = $1`, id,
-	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.QuotaBytes, &u.AvatarURL, &u.MustChangePassword, &u.ChatNotifyLevel, &u.ChatNotifySound, &u.CreatedAt)
+	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.QuotaBytes, &u.AvatarURL, &u.MustChangePassword, &u.ChatNotifyLevel, &u.ChatNotifySound, &u.OnboardingCompleted, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	return u, err
+}
+
+// CompleteOnboarding marks the first-login welcome tour as seen — called
+// once, when the user finishes or explicitly skips it.
+func (d *DB) CompleteOnboarding(id int) error {
+	_, err := d.Exec(`UPDATE users SET onboarding_completed = TRUE WHERE id = $1`, id)
+	return err
 }
 
 // UpdateChatNotifyPrefs sets the per-user chat notification privacy level
@@ -202,6 +211,15 @@ func (d *DB) UpdateAvatarURL(id int, url string) error {
 
 func (d *DB) SetAllUsersQuota(quotaBytes int64) error {
 	_, err := d.Exec(`UPDATE users SET quota_bytes = $1 WHERE role = 'user'`, quotaBytes)
+	return err
+}
+
+// SetUsersQuota is SetAllUsersQuota's counterpart for a specific selected
+// subset (the admin panel's bulk-quota-on-selected-rows action) rather than
+// every employee — still scoped to role = 'user' so it can never quietly
+// touch an admin account even if one somehow ended up in ids.
+func (d *DB) SetUsersQuota(ids []int, quotaBytes int64) error {
+	_, err := d.Exec(`UPDATE users SET quota_bytes = $1 WHERE id = ANY($2) AND role = 'user'`, quotaBytes, pq.Array(ids))
 	return err
 }
 
