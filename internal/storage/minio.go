@@ -44,7 +44,15 @@ func NewMinioClient(endpoint, accessKey, secretKey string, useSSL bool, publicEn
 	mc := &MinioClient{client: client, core: &minio.Core{Client: client}}
 
 	if publicEndpoint != "" {
-		pubClient, err := minio.New(publicEndpoint, &minio.Options{Creds: creds, Secure: useSSL, Region: minioRegion})
+		// Always Secure here, independent of useSSL above: publicEndpoint is
+		// reached by the browser, which is now always fronted by Caddy's TLS
+		// listener on the same port (see the Caddyfile site block for
+		// PAYLASH_MINIO_PUBLIC_ENDPOINT) — MinIO itself still only speaks
+		// plain HTTP internally. Signing an http:// URL here would make the
+		// browser's fetch() to it "mixed content" (blocked outright, or
+		// silently upgraded to https and refused, since nothing speaks TLS
+		// on that port except Caddy) once the main site is HTTPS.
+		pubClient, err := minio.New(publicEndpoint, &minio.Options{Creds: creds, Secure: true, Region: minioRegion})
 		if err != nil {
 			return nil, fmt.Errorf("minio public client: %w", err)
 		}

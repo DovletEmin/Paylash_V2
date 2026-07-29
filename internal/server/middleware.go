@@ -1,12 +1,15 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"fmt"
 	"log"
 	"log/slog"
+	"net"
 	"net/http"
 	"paylash/internal/authutil"
 	"paylash/internal/db"
@@ -115,6 +118,22 @@ type statusRecorder struct {
 func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)
+}
+
+// Hijack forwards to the underlying ResponseWriter's http.Hijacker. Without
+// this, statusRecorder embeds the http.ResponseWriter *interface* — which
+// doesn't declare Hijack() — so wrapping it silently drops hijack support
+// even though the real writer underneath still has it. gorilla/websocket's
+// Upgrade() needs to type-assert its way to a Hijacker to take over the raw
+// connection; failing that assertion makes it write back its own 500, which
+// is exactly what broke every /api/chat/ws connection once this middleware
+// started wrapping the whole mux.
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("underlying ResponseWriter does not support Hijack")
+	}
+	return hj.Hijack()
 }
 
 // LoggingMiddleware logs one structured line per request (method, route

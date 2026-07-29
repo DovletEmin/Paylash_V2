@@ -6,6 +6,10 @@ services:
     ports:
       - "80:80"
       - "443:443"
+      # TLS-terminating front for MinIO's S3 API (see the second site block
+      # in Caddyfile) — the browser's large-file upload PUTs land here now
+      # instead of hitting MinIO's own plain-HTTP port directly.
+      - "9000:9000"
     environment:
       PAYLASH_DOMAIN: "${PAYLASH_DOMAIN}"
       # Needed so the CSP's connect-src can allow the browser's direct-to-MinIO
@@ -21,6 +25,8 @@ services:
         condition: service_healthy
       collabora:
         condition: service_started
+      minio:
+        condition: service_healthy
 
   postgres:
     image: postgres:16-alpine
@@ -59,12 +65,13 @@ services:
       # SSH tunnel / on the host itself, without handing every device on
       # the studio's network a path around the app's permission model.
       - "127.0.0.1:19001:9001"
-      # S3 API port, published so browsers can PUT large-file upload parts
-      # directly to MinIO (see PAYLASH_MINIO_PUBLIC_ENDPOINT below) — the app
-      # server itself keeps talking to MinIO over the internal Docker network.
-      # Remapped to 19000 on this host: another project's stack (sary-minio)
-      # already holds the standard 9000/9001 here. Local-only, not committed.
-      - "19000:9000"
+      # The S3 API port is intentionally NOT published to the host/LAN here —
+      # the app server reaches MinIO over the internal Docker network
+      # (paylash-minio:9000), and the browser's direct-to-MinIO large-file
+      # upload PUTs go through Caddy's TLS-terminating :9000 site block
+      # instead (see Caddyfile), which reverse_proxies to this container by
+      # its Docker-internal hostname. Publishing this raw, unauthenticated-
+      # CORS port straight to the LAN would just be needless extra surface.
     volumes:
       - minio_data:/data
     healthcheck:
