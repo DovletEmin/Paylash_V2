@@ -50,6 +50,7 @@ func (d *DB) GetSharesForFile(fileID int) ([]models.ShareView, error) {
 	rows, err := d.Query(
 		`SELECT fs.id, fs.file_id, fs.shared_by, fs.shared_with, fs.permission, fs.is_public,
 		        COALESCE(u.display_name,'') AS full_name, COALESCE(u.username,'') AS username,
+		        COALESCE(u.avatar_url,'') AS avatar_url,
 		        fs.created_at
 		 FROM file_shares fs
 		 LEFT JOIN users u ON fs.shared_with = u.id
@@ -63,7 +64,7 @@ func (d *DB) GetSharesForFile(fileID int) ([]models.ShareView, error) {
 	for rows.Next() {
 		var s models.ShareView
 		if err := rows.Scan(&s.ID, &s.FileID, &s.SharedBy, &s.SharedWith, &s.Permission, &s.IsPublic,
-			&s.FullName, &s.Username, &s.CreatedAt); err != nil {
+			&s.FullName, &s.Username, &s.AvatarURL, &s.CreatedAt); err != nil {
 			return nil, err
 		}
 		shares = append(shares, s)
@@ -85,6 +86,7 @@ func (d *DB) GetSharedWithMe(userID int) ([]models.SharedFileView, error) {
 			f.id, f.name, f.mime_type, f.size_bytes, f.minio_bucket, f.minio_key,
 			f.folder_id, f.owner_id, f.project_id, f.scope, f.visibility, f.version, f.created_at, f.updated_at,
 			fs.shared_by, COALESCE(sharer.display_name, sharer.username, '') AS shared_by_name,
+			COALESCE(sharer.avatar_url, '') AS shared_by_avatar,
 			fs.permission,
 			fs.created_at AS shared_at
 		FROM file_shares fs
@@ -103,7 +105,7 @@ func (d *DB) GetSharedWithMe(userID int) ([]models.SharedFileView, error) {
 		var sv models.SharedFileView
 		if err := rows.Scan(&sv.ID, &sv.Name, &sv.MimeType, &sv.SizeBytes, &sv.MinioBucket, &sv.MinioKey,
 			&sv.FolderID, &sv.OwnerID, &sv.ProjectID, &sv.Scope, &sv.Visibility, &sv.Version, &sv.CreatedAt, &sv.UpdatedAt,
-			&sv.SharedByID, &sv.SharedByName, &sv.Permission, &sv.SharedAt); err != nil {
+			&sv.SharedByID, &sv.SharedByName, &sv.SharedByAvatar, &sv.Permission, &sv.SharedAt); err != nil {
 			return nil, err
 		}
 		list = append(list, sv)
@@ -116,6 +118,7 @@ func (d *DB) GetSharedByMe(userID int) ([]models.SharedByMeView, error) {
 			f.id, f.name, f.mime_type, f.size_bytes, f.minio_bucket, f.minio_key,
 			f.folder_id, f.owner_id, f.project_id, f.scope, f.visibility, f.version, f.created_at, f.updated_at,
 			fs.shared_with, COALESCE(u.display_name, u.username, '') AS shared_with_name,
+			COALESCE(u.avatar_url, '') AS shared_with_avatar,
 			fs.permission,
 			fs.created_at AS shared_at
 		FROM file_shares fs
@@ -134,7 +137,7 @@ func (d *DB) GetSharedByMe(userID int) ([]models.SharedByMeView, error) {
 		var sv models.SharedByMeView
 		if err := rows.Scan(&sv.ID, &sv.Name, &sv.MimeType, &sv.SizeBytes, &sv.MinioBucket, &sv.MinioKey,
 			&sv.FolderID, &sv.OwnerID, &sv.ProjectID, &sv.Scope, &sv.Visibility, &sv.Version, &sv.CreatedAt, &sv.UpdatedAt,
-			&sv.SharedWithID, &sv.SharedWithName, &sv.Permission, &sv.SharedAt); err != nil {
+			&sv.SharedWithID, &sv.SharedWithName, &sv.SharedWithAvatar, &sv.Permission, &sv.SharedAt); err != nil {
 			return nil, err
 		}
 		list = append(list, sv)

@@ -78,7 +78,7 @@ func (d *DB) UpdateChatNotifyPrefs(id int, level string, sound bool) error {
 
 func (d *DB) SearchUsers(query string, limit int) ([]models.UserSearchResult, error) {
 	rows, err := d.Query(
-		`SELECT id, username, display_name
+		`SELECT id, username, display_name, avatar_url
 		 FROM users
 		 WHERE role = 'user' AND (username ILIKE $1 OR display_name ILIKE $1)
 		 ORDER BY username LIMIT $2`,
@@ -91,7 +91,7 @@ func (d *DB) SearchUsers(query string, limit int) ([]models.UserSearchResult, er
 	var results []models.UserSearchResult
 	for rows.Next() {
 		var r models.UserSearchResult
-		if err := rows.Scan(&r.ID, &r.Username, &r.DisplayName); err != nil {
+		if err := rows.Scan(&r.ID, &r.Username, &r.DisplayName, &r.AvatarURL); err != nil {
 			return nil, err
 		}
 		results = append(results, r)

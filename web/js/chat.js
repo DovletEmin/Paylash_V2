@@ -240,7 +240,7 @@ const ChatPage = {
     },
 
     async blockUser(userId, name) {
-        UI.confirmAction(I18N.t('chat.block_user'), I18N.t('chat.block_user_confirm', { name: name || '' }), I18N.t('chat.block_user'), async () => {
+        UI.confirmAction(I18N.t('chat.block_user'), I18N.t('chat.block_user_confirm', { name: UI.esc(name || '') }), I18N.t('chat.block_user'), async () => {
             try {
                 await API.chat.blockUser(userId);
                 this._blockedIds.add(userId);
@@ -292,8 +292,8 @@ const ChatPage = {
         const isDirect = cv.type === 'direct';
         const name = this.conversationName(cv);
         const innerAvatar = isDirect && cv.other_participant
-            ? UI.avatarHTML(cv.other_participant.user_id, cv.other_participant.full_name, 'chat-avatar')
-            : this.groupAvatarHTML(cv.id, 'chat-avatar');
+            ? UI.avatarHTML(cv.other_participant.user_id, cv.other_participant.full_name, 'chat-avatar', cv.other_participant.avatar_url)
+            : this.groupAvatarHTML(cv.id, 'chat-avatar', cv.has_avatar);
         const online = isDirect && cv.other_participant && cv.other_participant.online;
         const avatar = `<span class="chat-avatar-wrap">${innerAvatar}${online ? '<span class="chat-presence-dot"></span>' : ''}</span>`;
         const preview = cv.last_message_body ? UI.esc(cv.last_message_body) : `<em>${I18N.t('chat.no_messages_yet')}</em>`;
@@ -316,8 +316,13 @@ const ChatPage = {
     // authenticated avatar endpoint, same onerror-falls-back-to-glyph
     // pattern as UI.avatarHTML), otherwise the plain 👥 placeholder — direct
     // conversations never call this, they always use UI.avatarHTML instead.
-    groupAvatarHTML(conversationId, extraClass) {
+    // hasAvatar mirrors UI.avatarHTML's avatarUrl param: pass the
+    // conversation's has_avatar when known so a group with no photo (the
+    // common case) never fires a doomed request; omit it to fall back to
+    // the old always-try-then-onerror path.
+    groupAvatarHTML(conversationId, extraClass, hasAvatar) {
         const cls = ('chat-avatar chat-avatar-group ' + (extraClass || '')).trim();
+        if (hasAvatar === false) return `<span class="${cls}">👥</span>`;
         return `<img class="${cls}" src="${API.chat.groupAvatarURL(conversationId)}" alt="👥" onerror="ChatPage._groupAvatarFallback(this)">`;
     },
 
@@ -505,8 +510,8 @@ const ChatPage = {
         const other = this._participants.find(p => p.user_id !== App.user.id);
         const name = isDirect ? (other ? (other.full_name || other.username) : I18N.t('chat.unknown_user')) : (cv.name || I18N.t('chat.unnamed_group'));
         const headerInner = isDirect && other
-            ? UI.avatarHTML(other.user_id, other.full_name || other.username, 'chat-avatar-sm chat-thread-avatar')
-            : this.groupAvatarHTML(cv.id, 'chat-avatar-sm chat-thread-avatar');
+            ? UI.avatarHTML(other.user_id, other.full_name || other.username, 'chat-avatar-sm chat-thread-avatar', other.avatar_url)
+            : this.groupAvatarHTML(cv.id, 'chat-avatar-sm chat-thread-avatar', cv.has_avatar);
         const headerAvatar = `<span class="chat-avatar-wrap">${headerInner}${isDirect && other && other.online ? '<span class="chat-presence-dot"></span>' : ''}</span>`;
 
         thread.innerHTML = `
@@ -831,7 +836,7 @@ const ChatPage = {
             </div>`;
         }
         const avatarSlot = (!mine && !isDirect)
-            ? (isGroupStart ? UI.avatarHTML(m.sender_id, m.sender_name, 'chat-avatar-sm chat-msg-avatar') : '<span class="chat-msg-avatar-spacer"></span>')
+            ? (isGroupStart ? UI.avatarHTML(m.sender_id, m.sender_name, 'chat-avatar-sm chat-msg-avatar', m.sender_avatar) : '<span class="chat-msg-avatar-spacer"></span>')
             : '';
         if (m.kind === 'sticker') {
             return `<div class="chat-msg chat-msg-sticker-row ${mine ? 'mine' : ''}${groupCls}${this._selectedIds.has(m.id) ? ' selected' : ''}" id="chat-msg-${m.id}" oncontextmenu="ChatPage.showMessageMenu(event,${m.id})" onclick="ChatPage.onMessageClick(event,${m.id})">
@@ -1008,7 +1013,7 @@ const ChatPage = {
         const others = this._participants.filter(p => p.user_id !== App.user.id);
         const readList = others.filter(p => readerIds.has(p.user_id));
         const unreadList = others.filter(p => !readerIds.has(p.user_id));
-        const row = (p) => `<div class="chat-reader-row">${UI.avatarHTML(p.user_id, p.full_name || p.username, 'chat-avatar-sm')}<span>${UI.esc(p.full_name || p.username)}</span></div>`;
+        const row = (p) => `<div class="chat-reader-row">${UI.avatarHTML(p.user_id, p.full_name || p.username, 'chat-avatar-sm', p.avatar_url)}<span>${UI.esc(p.full_name || p.username)}</span></div>`;
         let html = '';
         if (readList.length) html += `<div class="chat-readers-section"><div class="chat-readers-label">✓✓ ${I18N.t('chat.read_by_label')} · ${readList.length}</div>${readList.map(row).join('')}</div>`;
         if (unreadList.length) html += `<div class="chat-readers-section"><div class="chat-readers-label">${I18N.t('chat.unread_by_label')} · ${unreadList.length}</div>${unreadList.map(row).join('')}</div>`;
@@ -1187,7 +1192,7 @@ const ChatPage = {
             document.querySelector('.chat-composer')?.appendChild(wrap);
         }
         wrap.innerHTML = matches.map(p => `<div class="chat-mention-option" onmousedown="event.preventDefault();ChatPage.insertMention(${UI.escJson(p.username)})">
-            ${UI.avatarHTML(p.user_id, p.full_name, 'chat-avatar-sm')}<span>${UI.esc(p.full_name || p.username)}</span><span class="chat-mention-username">@${UI.esc(p.username)}</span>
+            ${UI.avatarHTML(p.user_id, p.full_name, 'chat-avatar-sm', p.avatar_url)}<span>${UI.esc(p.full_name || p.username)}</span><span class="chat-mention-username">@${UI.esc(p.username)}</span>
         </div>`).join('');
     },
 
@@ -1836,7 +1841,7 @@ const ChatPage = {
             if (!users?.length) { r.innerHTML = `<div class="share-user-no-result">${I18N.t('shares.no_results')}</div>`; return; }
             r.innerHTML = users.map(u => `
                 <div class="share-user-item" onclick="ChatPage.startDM(${u.id})">
-                    ${UI.avatarHTML(u.id, u.full_name)}
+                    ${UI.avatarHTML(u.id, u.full_name, '', u.avatar_url)}
                     <div><div class="share-user-name">${UI.esc(u.full_name)}</div><div class="share-user-username">@${UI.esc(u.username)}</div></div>
                 </div>`).join('');
         } catch { r.innerHTML = ''; }
@@ -1889,7 +1894,7 @@ const ChatPage = {
             if (!filtered.length) { r.innerHTML = `<div class="share-user-no-result">${I18N.t('shares.no_results')}</div>`; return; }
             r.innerHTML = filtered.map(u => `
                 <div class="share-user-item" onclick="ChatPage.addGroupMember(${u.id},${UI.escJson(u.full_name)},${UI.escJson(u.username)})">
-                    ${UI.avatarHTML(u.id, u.full_name)}
+                    ${UI.avatarHTML(u.id, u.full_name, '', u.avatar_url)}
                     <div><div class="share-user-name">${UI.esc(u.full_name)}</div><div class="share-user-username">@${UI.esc(u.username)}</div></div>
                 </div>`).join('');
         } catch { r.innerHTML = ''; }
@@ -1943,7 +1948,7 @@ const ChatPage = {
         const canManage = isOwner || isAdmin;
         UI.showModal(I18N.t('chat.group_info'), `
             <div class="chat-group-avatar-row">
-                ${this.groupAvatarHTML(cv.id, 'chat-avatar-lg')}
+                ${this.groupAvatarHTML(cv.id, 'chat-avatar-lg', cv.has_avatar)}
                 ${canManage ? `<label class="btn btn-ghost btn-sm chat-avatar-upload-btn">${I18N.t('chat.change_photo')}
                     <input type="file" accept="image/*" style="display:none" onchange="ChatPage.uploadGroupAvatar(this.files[0])"></label>` : ''}
             </div>
@@ -1981,7 +1986,7 @@ const ChatPage = {
         // themselves or the viewer's own row.
         const canToggleAdmin = isOwner && !isRowOwner && p.user_id !== App.user.id;
         return `<div class="chat-member-row">
-            ${UI.avatarHTML(p.user_id, p.full_name, 'chat-avatar-sm')}
+            ${UI.avatarHTML(p.user_id, p.full_name, 'chat-avatar-sm', p.avatar_url)}
             <span class="chat-member-name">${UI.esc(p.full_name || p.username)}</span>
             ${roleBadge}
             ${canToggleAdmin ? `<button class="btn btn-ghost btn-sm chat-role-toggle-btn" onclick="ChatPage.setMemberRole(${p.user_id},'${p.role === 'admin' ? 'member' : 'admin'}')">${p.role === 'admin' ? I18N.t('chat.demote_admin') : I18N.t('chat.promote_admin')}</button>` : ''}
@@ -2030,7 +2035,7 @@ const ChatPage = {
             const filtered = (users || []).filter(u => !existingIds.has(u.id));
             r.innerHTML = filtered.map(u => `
                 <div class="share-user-item" onclick="ChatPage.addMember(${u.id})">
-                    ${UI.avatarHTML(u.id, u.full_name)}
+                    ${UI.avatarHTML(u.id, u.full_name, '', u.avatar_url)}
                     <div><div class="share-user-name">${UI.esc(u.full_name)}</div></div>
                 </div>`).join('') || `<div class="share-user-no-result">${I18N.t('shares.no_results')}</div>`;
         } catch { r.innerHTML = ''; }
@@ -2048,7 +2053,7 @@ const ChatPage = {
     removeMember(userId) {
         const p = this._participants.find(x => x.user_id === userId);
         const name = p ? (p.full_name || p.username) : '';
-        UI.confirmAction(I18N.t('chat.remove_member_title'), I18N.t('chat.remove_member_confirm', { name }), I18N.t('common.remove'), async () => {
+        UI.confirmAction(I18N.t('chat.remove_member_title'), I18N.t('chat.remove_member_confirm', { name: UI.esc(name) }), I18N.t('common.remove'), async () => {
             try {
                 await API.chat.removeParticipant(this._activeId, userId);
                 this._participants = this._participants.filter(x => x.user_id !== userId);

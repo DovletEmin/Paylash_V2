@@ -17,7 +17,7 @@ import (
 // never re-surfaces someone they deliberately blocked.
 func (d *DB) SearchChatUsers(query string, excludeUserID, limit int) ([]models.UserSearchResult, error) {
 	rows, err := d.Query(
-		`SELECT id, username, display_name
+		`SELECT id, username, display_name, avatar_url
 		 FROM users
 		 WHERE id != $1 AND (username ILIKE $2 OR display_name ILIKE $2)
 		   AND id NOT IN (SELECT blocked_id FROM blocked_users WHERE blocker_id = $1)
@@ -31,7 +31,7 @@ func (d *DB) SearchChatUsers(query string, excludeUserID, limit int) ([]models.U
 	var results []models.UserSearchResult
 	for rows.Next() {
 		var r models.UserSearchResult
-		if err := rows.Scan(&r.ID, &r.Username, &r.DisplayName); err != nil {
+		if err := rows.Scan(&r.ID, &r.Username, &r.DisplayName, &r.AvatarURL); err != nil {
 			return nil, err
 		}
 		results = append(results, r)
@@ -141,7 +141,11 @@ func (d *DB) GetConversation(id int) (*models.Conversation, error) {
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-	return c, err
+	if err != nil {
+		return nil, err
+	}
+	c.HasAvatar = c.AvatarURL != ""
+	return c, nil
 }
 
 // ListConversationsForUser returns every conversation userID participates
@@ -154,7 +158,7 @@ func (d *DB) GetConversation(id int) (*models.Conversation, error) {
 // archived; true returns ONLY the archived ones (the separate archived view).
 func (d *DB) ListConversationsForUser(userID int, archived bool) ([]models.ConversationView, error) {
 	rows, err := d.Query(`
-		SELECT c.id, c.type, c.name, c.project_id, c.created_by, c.last_message_at, c.created_at,
+		SELECT c.id, c.type, c.name, c.project_id, c.created_by, c.avatar_url, c.last_message_at, c.created_at,
 		       COALESCE(unread.cnt, 0) AS unread_count,
 		       lm.body, lm.created_at,
 		       other.user_id, other.username, other.display_name, other.avatar_url,
@@ -189,19 +193,21 @@ func (d *DB) ListConversationsForUser(userID int, archived bool) ([]models.Conve
 	var list []models.ConversationView
 	for rows.Next() {
 		var cv models.ConversationView
+		var groupAvatar string
 		var lastBody sql.NullString
 		var lastAt sql.NullTime
 		var otherID sql.NullInt64
 		var otherUsername, otherDisplayName, otherAvatar sql.NullString
 		var mutedUntil sql.NullTime
 		if err := rows.Scan(
-			&cv.ID, &cv.Type, &cv.Name, &cv.ProjectID, &cv.CreatedBy, &cv.LastMessageAt, &cv.CreatedAt,
+			&cv.ID, &cv.Type, &cv.Name, &cv.ProjectID, &cv.CreatedBy, &groupAvatar, &cv.LastMessageAt, &cv.CreatedAt,
 			&cv.UnreadCount, &lastBody, &lastAt,
 			&otherID, &otherUsername, &otherDisplayName, &otherAvatar,
 			&cv.Muted, &mutedUntil, &cv.Pinned, &cv.Archived,
 		); err != nil {
 			return nil, err
 		}
+		cv.HasAvatar = groupAvatar != ""
 		if mutedUntil.Valid {
 			t := mutedUntil.Time
 			cv.MutedUntil = &t

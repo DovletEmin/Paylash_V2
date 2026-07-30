@@ -95,7 +95,7 @@ func (d *DB) RemoveProjectMember(projectID, userID int) error {
 
 func (d *DB) ListProjectMembers(projectID int) ([]models.ProjectMemberView, error) {
 	rows, err := d.Query(
-		`SELECT pm.id, pm.project_id, pm.user_id, u.username, u.display_name, pm.permission, pm.created_at
+		`SELECT pm.id, pm.project_id, pm.user_id, u.username, u.display_name, u.avatar_url, pm.permission, pm.created_at
 		 FROM project_members pm
 		 JOIN users u ON u.id = pm.user_id
 		 WHERE pm.project_id = $1
@@ -108,7 +108,7 @@ func (d *DB) ListProjectMembers(projectID int) ([]models.ProjectMemberView, erro
 	var list []models.ProjectMemberView
 	for rows.Next() {
 		var m models.ProjectMemberView
-		if err := rows.Scan(&m.ID, &m.ProjectID, &m.UserID, &m.Username, &m.DisplayName, &m.Permission, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.ProjectID, &m.UserID, &m.Username, &m.DisplayName, &m.AvatarURL, &m.Permission, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		list = append(list, m)

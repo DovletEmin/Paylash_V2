@@ -288,7 +288,7 @@ const PreviewPage = {
         const canDelete = App.user && (App.user.id === c.user_id || App.user.role === 'admin');
         const pinBadge = c.x_pct != null ? `<span class="comment-pin-badge" title="${I18N.t('comments.pinned')}">${i + 1}</span>` : '';
         return `<div class="comment-item" id="comment-item-${c.id}" ${c.x_pct != null ? `onclick="PreviewPage.highlightPin(${c.id})"` : ''}>
-            ${UI.avatarHTML(c.user_id, c.user_name, 'share-user-avatar-sm')}
+            ${UI.avatarHTML(c.user_id, c.user_name, 'share-user-avatar-sm', c.user_avatar)}
             <div class="comment-item-body">
                 <div class="comment-item-head"><strong>${UI.esc(c.user_name)}</strong>${pinBadge} <span class="text-muted">${UI.formatDate(c.created_at)}</span></div>
                 <div class="comment-item-text">${UI.esc(c.body)}</div>

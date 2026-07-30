@@ -107,6 +107,7 @@ func (h *Handler) CreateFileComment(w http.ResponseWriter, r *http.Request) {
 	} else {
 		c.UserName = user.Username
 	}
+	c.UserAvatar = user.AvatarURL
 	go h.pushCommentNotification(fileID, user.ID, c.UserName, body)
 	writeJSON(w, http.StatusCreated, c)
 }

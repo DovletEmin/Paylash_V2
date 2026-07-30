@@ -269,6 +269,7 @@ const App = {
             if (focused) {
                 ChatSocket.showInAppToast({
                     avatarUserId: data.message && data.message.sender_id, avatarName: senderName,
+                    avatarUrl: data.message && data.message.sender_avatar,
                     title, body, conversationId: data.conversation_id,
                 });
             } else {
@@ -590,7 +591,7 @@ const App = {
             return;
         }
         el.innerHTML = list.map(u => `<div class="chat-member-row">
-            ${UI.avatarHTML(u.id, u.full_name, 'chat-avatar-sm')}
+            ${UI.avatarHTML(u.id, u.full_name, 'chat-avatar-sm', u.avatar_url)}
             <span class="chat-member-name">${UI.esc(u.full_name || u.username)}</span>
             <button class="btn btn-ghost btn-sm" onclick="App.unblockUserFromProfile(${u.id})">${I18N.t('chat.unblock_user')}</button>
         </div>`).join('');

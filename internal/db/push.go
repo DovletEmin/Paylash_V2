@@ -15,11 +15,13 @@ func (d *DB) SavePushSubscription(userID int, endpoint, p256dh, auth string) err
 	return err
 }
 
-// DeletePushSubscription removes a subscription by endpoint — used both when
-// the client unsubscribes and when a push service reports the endpoint gone
-// (HTTP 404/410).
-func (d *DB) DeletePushSubscription(endpoint string) error {
-	_, err := d.Exec(`DELETE FROM push_subscriptions WHERE endpoint = $1`, endpoint)
+// DeletePushSubscription removes a subscription by endpoint and owning user —
+// used both when the client unsubscribes and when a push service reports the
+// endpoint gone (HTTP 404/410). Scoped to userID (not endpoint alone) so an
+// authenticated user can never unsubscribe someone else's device by guessing
+// or replaying another browser's endpoint URL.
+func (d *DB) DeletePushSubscription(userID int, endpoint string) error {
+	_, err := d.Exec(`DELETE FROM push_subscriptions WHERE user_id = $1 AND endpoint = $2`, userID, endpoint)
 	return err
 }
 

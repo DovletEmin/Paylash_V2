@@ -22,7 +22,7 @@ func (d *DB) CreateComment(fileID, userID int, body string, xPct, yPct *float64)
 
 func (d *DB) ListComments(fileID int) ([]models.FileComment, error) {
 	rows, err := d.Query(
-		`SELECT fc.id, fc.file_id, fc.user_id, COALESCE(u.display_name, u.username, ''), fc.body, fc.x_pct, fc.y_pct, fc.created_at
+		`SELECT fc.id, fc.file_id, fc.user_id, COALESCE(u.display_name, u.username, ''), u.avatar_url, fc.body, fc.x_pct, fc.y_pct, fc.created_at
 		 FROM file_comments fc
 		 JOIN users u ON u.id = fc.user_id
 		 WHERE fc.file_id = $1
@@ -35,7 +35,7 @@ func (d *DB) ListComments(fileID int) ([]models.FileComment, error) {
 	var list []models.FileComment
 	for rows.Next() {
 		var c models.FileComment
-		if err := rows.Scan(&c.ID, &c.FileID, &c.UserID, &c.UserName, &c.Body, &c.XPct, &c.YPct, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.FileID, &c.UserID, &c.UserName, &c.UserAvatar, &c.Body, &c.XPct, &c.YPct, &c.CreatedAt); err != nil {
 			return nil, err
 		}
 		list = append(list, c)

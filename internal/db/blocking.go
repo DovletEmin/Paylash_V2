@@ -66,7 +66,7 @@ func (d *DB) ListBlockedUserIDs(blockerID int) ([]int, error) {
 // display info for a "Blocked users" management list.
 func (d *DB) ListBlockedUsers(blockerID int) ([]models.UserSearchResult, error) {
 	rows, err := d.Query(
-		`SELECT u.id, u.username, COALESCE(u.display_name, u.username, '')
+		`SELECT u.id, u.username, COALESCE(u.display_name, u.username, ''), u.avatar_url
 		 FROM blocked_users b JOIN users u ON u.id = b.blocked_id
 		 WHERE b.blocker_id = $1 ORDER BY u.username`,
 		blockerID,
@@ -78,7 +78,7 @@ func (d *DB) ListBlockedUsers(blockerID int) ([]models.UserSearchResult, error) 
 	var list []models.UserSearchResult
 	for rows.Next() {
 		var r models.UserSearchResult
-		if err := rows.Scan(&r.ID, &r.Username, &r.DisplayName); err != nil {
+		if err := rows.Scan(&r.ID, &r.Username, &r.DisplayName, &r.AvatarURL); err != nil {
 			return nil, err
 		}
 		list = append(list, r)

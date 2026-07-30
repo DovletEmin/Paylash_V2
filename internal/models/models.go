@@ -52,6 +52,7 @@ type ProjectMemberView struct {
 	UserID      int       `json:"user_id"`
 	Username    string    `json:"username"`
 	DisplayName string    `json:"full_name"`
+	AvatarURL   string    `json:"avatar_url"`
 	Permission  string    `json:"permission"`
 	CreatedAt   time.Time `json:"created_at"`
 }
@@ -121,6 +122,7 @@ type ShareView struct {
 	IsPublic   bool      `json:"is_public"`
 	FullName   string    `json:"full_name"`
 	Username   string    `json:"username"`
+	AvatarURL  string    `json:"avatar_url"`
 	CreatedAt  time.Time `json:"created_at"`
 }
 
@@ -222,32 +224,35 @@ type AdminDashboard struct {
 
 type SharedFileView struct {
 	File
-	SharedByID   int       `json:"shared_by_id"`
-	SharedByName string    `json:"shared_by_name"`
-	Permission   string    `json:"permission"`
-	SharedAt     time.Time `json:"shared_at"`
+	SharedByID     int       `json:"shared_by_id"`
+	SharedByName   string    `json:"shared_by_name"`
+	SharedByAvatar string    `json:"shared_by_avatar"`
+	Permission     string    `json:"permission"`
+	SharedAt       time.Time `json:"shared_at"`
 }
 
 // FileComment is a review note on a file, optionally pinned to a point on an
 // image/drawing (XPct/YPct, both 0–100, nil for a plain unpinned comment) —
 // backs the comments panel on the media preview page.
 type FileComment struct {
-	ID        int       `json:"id"`
-	FileID    int       `json:"file_id"`
-	UserID    int       `json:"user_id"`
-	UserName  string    `json:"user_name"`
-	Body      string    `json:"body"`
-	XPct      *float64  `json:"x_pct,omitempty"`
-	YPct      *float64  `json:"y_pct,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	ID         int       `json:"id"`
+	FileID     int       `json:"file_id"`
+	UserID     int       `json:"user_id"`
+	UserName   string    `json:"user_name"`
+	UserAvatar string    `json:"user_avatar"`
+	Body       string    `json:"body"`
+	XPct       *float64  `json:"x_pct,omitempty"`
+	YPct       *float64  `json:"y_pct,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 type SharedByMeView struct {
 	File
-	SharedWithID   int       `json:"shared_with_id"`
-	SharedWithName string    `json:"shared_with_name"`
-	Permission     string    `json:"permission"`
-	SharedAt       time.Time `json:"shared_at"`
+	SharedWithID     int       `json:"shared_with_id"`
+	SharedWithName   string    `json:"shared_with_name"`
+	SharedWithAvatar string    `json:"shared_with_avatar"`
+	Permission       string    `json:"permission"`
+	SharedAt         time.Time `json:"shared_at"`
 }
 
 // UploadSession tracks an in-progress resumable/chunked large-file upload —
@@ -305,6 +310,7 @@ type UserSearchResult struct {
 	ID          int    `json:"id"`
 	Username    string `json:"username"`
 	DisplayName string `json:"full_name"`
+	AvatarURL   string `json:"avatar_url"`
 }
 
 // PushSubscription is a stored browser Web Push subscription.
@@ -333,6 +339,13 @@ type Conversation struct {
 	// json:"-" like MessageAttachment.MinioKey, since it's only ever
 	// resolved server-side by the avatar-serving endpoint, never sent raw.
 	AvatarURL string `json:"-"`
+	// HasAvatar mirrors AvatarURL != "" — computed by every query that
+	// populates a Conversation, not scanned from a column — so the client
+	// can decide whether to even attempt GET .../avatar without needing the
+	// raw storage key. Without this every group with no photo (the common
+	// case) fires a doomed request on each render, same problem AvatarURL's
+	// own comment describes for why it's hidden in the first place.
+	HasAvatar bool `json:"has_avatar"`
 	// PinnedMessageID is the single pinned message for this conversation, if
 	// any. Resolved to a full MessageView (PinnedMessage) by handlers that
 	// return it to the client — this raw id is what's actually stored.
@@ -414,7 +427,7 @@ type MessageReplyPreview struct {
 type MessageView struct {
 	Message
 	SenderName   string                `json:"sender_name"`
-	SenderAvatar string                `json:"sender_avatar,omitempty"`
+	SenderAvatar string                `json:"sender_avatar"`
 	Attachments  []MessageAttachment   `json:"attachments,omitempty"`
 	ReplyTo      *MessageReplyPreview  `json:"reply_to,omitempty"`
 	// Status is computed, not stored — "sent" or "read", meaningful only for

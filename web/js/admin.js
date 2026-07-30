@@ -226,7 +226,7 @@ const AdminPage = {
             el.innerHTML = members.map(m => `
                 <div class="member-row">
                     <div class="member-row-identity">
-                        ${UI.avatarHTML(m.user_id, m.full_name || m.username)}
+                        ${UI.avatarHTML(m.user_id, m.full_name || m.username, '', m.avatar_url)}
                         <div><strong>${UI.esc(m.full_name || m.username)}</strong> <span class="text-muted">@${UI.esc(m.username)}</span></div>
                     </div>
                     <div class="member-row-actions">
@@ -251,7 +251,7 @@ const AdminPage = {
                 const users = (await API.sharing.searchUsers(q)) || [];
                 resEl.innerHTML = users.map(u => `
                     <div class="member-search-item" onclick="AdminPage.addMember(${projectId},${u.id})">
-                        ${UI.avatarHTML(u.id, u.full_name || u.username)}
+                        ${UI.avatarHTML(u.id, u.full_name || u.username, '', u.avatar_url)}
                         <div><strong>${UI.esc(u.full_name || u.username)}</strong> <span class="text-muted">@${UI.esc(u.username)}</span></div>
                     </div>`).join('') || `<div class="text-muted" style="font-size:.8rem;padding:4px 0">${I18N.t('shares.no_results')}</div>`;
             } catch { resEl.innerHTML = ''; }
@@ -272,7 +272,7 @@ const AdminPage = {
         try { await API.admin.projects.members.update(projectId, userId, permission); UI.toast(I18N.t('admin.updated'), 'success'); } catch (e) { UI.toast(e.message, 'error'); }
     },
     removeMember(projectId, userId, name) {
-        UI.confirmAction(I18N.t('admin.remove_member_title'), I18N.t('admin.remove_member_confirm_body', { name: name || '' }), I18N.t('common.remove'), async () => {
+        UI.confirmAction(I18N.t('admin.remove_member_title'), I18N.t('admin.remove_member_confirm_body', { name: UI.esc(name || '') }), I18N.t('common.remove'), async () => {
             try { await API.admin.projects.members.remove(projectId, userId); UI.toast(I18N.t('admin.member_removed'), 'success'); this._loadMembers(projectId); } catch (e) { UI.toast(e.message, 'error'); }
         });
     },
@@ -314,7 +314,7 @@ const AdminPage = {
     userRowHTML(u) {
         const checkbox = u.role === 'admin' ? '' :
             `<input type="checkbox" ${this._selectedUserIds.has(u.id) ? 'checked' : ''} onchange="AdminPage.toggleSelectUser(${u.id},this.checked)" aria-label="${I18N.t('files.select_item')}">`;
-        return `<tr data-uid="${u.id}"><td>${checkbox}</td><td>${u.id}</td><td><div class="table-identity">${UI.avatarHTML(u.id, u.full_name, 'share-user-avatar-sm')}<span>${UI.esc(u.full_name)}</span> ${u.must_change_password ? `<span class="badge" title="${I18N.t('admin.force_pw_badge_title')}">🔑</span>` : ''}</div></td><td>@${UI.esc(u.username)}</td>
+        return `<tr data-uid="${u.id}"><td>${checkbox}</td><td>${u.id}</td><td><div class="table-identity">${UI.avatarHTML(u.id, u.full_name, 'share-user-avatar-sm', u.avatar_url)}<span>${UI.esc(u.full_name)}</span> ${u.must_change_password ? `<span class="badge" title="${I18N.t('admin.force_pw_badge_title')}">🔑</span>` : ''}</div></td><td>@${UI.esc(u.username)}</td>
                 <td><span class="badge badge-${u.role === 'admin' ? 'admin' : 'user'}">${u.role === 'admin' ? I18N.t('app.role_admin') : I18N.t('app.role_user')}</span></td>
                 <td>${UI.formatBytes(u.quota_bytes || 0)}</td>
                 <td><button class="btn btn-sm btn-ghost" onclick="AdminPage.showEditUserModal(${u.id})" title="${I18N.t('common.edit')}" aria-label="${I18N.t('common.edit')}">✏️</button>
@@ -457,7 +457,7 @@ const AdminPage = {
         const target = r.reported_user_name ? I18N.t('admin.report_against', { name: r.reported_user_name }) : '';
         return `<div class="report-card">
             <div class="report-card-head">
-                <span>${I18N.t('admin.report_by', { name: r.reporter_name || I18N.t('admin.report_unknown_user') })} · ${UI.esc(conv)}</span>
+                <span>${I18N.t('admin.report_by', { name: UI.esc(r.reporter_name || I18N.t('admin.report_unknown_user')) })} · ${UI.esc(conv)}</span>
                 <span class="text-muted" style="font-size:.78rem">${UI.formatDate(r.created_at)}</span>
             </div>
             ${target ? `<div class="text-muted" style="font-size:.82rem">${UI.esc(target)}</div>` : ''}
@@ -547,7 +547,7 @@ const AdminPage = {
     // history), and a reload is the only way to guarantee nothing from the
     // admin's own session lingers in memory.
     impersonate(id, name) {
-        UI.confirmAction(I18N.t('admin.impersonate_confirm_title'), I18N.t('admin.impersonate_confirm_body', { name }), I18N.t('admin.impersonate_button'), async () => {
+        UI.confirmAction(I18N.t('admin.impersonate_confirm_title'), I18N.t('admin.impersonate_confirm_body', { name: UI.esc(name) }), I18N.t('admin.impersonate_button'), async () => {
             try {
                 await API.admin.users.impersonate(id);
                 location.reload();

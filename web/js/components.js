@@ -261,15 +261,21 @@ const UI = {
     // initials circle otherwise — used everywhere another person shows up
     // (share dialogs, the shared-with-me/by-me groups, project members).
     // Previously every one of those spots hardcoded just the initials, so a
-    // colleague's uploaded photo was only ever visible to themselves. There's
-    // no cheap way to know up front whether userId has an avatar, so this
-    // always points the <img> at /api/avatar/{id} and lets onerror (a 404
-    // for someone with no photo) swap in the initials — same fallback
-    // pattern as FilesPage.thumbError for file thumbnails.
-    avatarHTML(userId, name, extraClass) {
+    // colleague's uploaded photo was only ever visible to themselves.
+    //
+    // avatarUrl is the person's avatar_url field from whatever API payload
+    // the caller already has (empty string/falsy = no photo, known for
+    // certain). When the caller has it, we skip the <img> entirely for
+    // someone with no photo instead of firing a request that's guaranteed to
+    // 404 — every list of people (conversation list, message senders,
+    // participants, search results...) now carries this, so most callers
+    // have it. Passing avatarUrl as undefined (the 3-arg call) means "caller
+    // doesn't know" and falls back to the old always-try-then-onerror path,
+    // for the few spots that still don't carry the field.
+    avatarHTML(userId, name, extraClass, avatarUrl) {
         const initial = (name || '?').charAt(0).toUpperCase();
         const cls = ('share-user-avatar ' + (extraClass || '')).trim();
-        if (!userId) return `<span class="${cls}">${this.esc(initial)}</span>`;
+        if (!userId || avatarUrl === '') return `<span class="${cls}">${this.esc(initial)}</span>`;
         return `<img class="${cls}" src="/api/avatar/${userId}" alt="${this.esc(initial)}" onerror="UI.avatarFallback(this)">`;
     },
     avatarFallback(img) {

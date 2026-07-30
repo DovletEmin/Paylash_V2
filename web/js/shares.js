@@ -77,6 +77,7 @@ const SharesPage = {
         const files = isWithMe ? this._withMeFiles : this._byMeFiles;
         const idKey = isWithMe ? 'shared_by_id' : 'shared_with_id';
         const nameKey = isWithMe ? 'shared_by_name' : 'shared_with_name';
+        const avatarKey = isWithMe ? 'shared_by_avatar' : 'shared_with_avatar';
 
         if (!files.length) {
             const icon = isWithMe ? '📥' : '📤';
@@ -92,7 +93,7 @@ const SharesPage = {
             c.innerHTML = `
                 <div class="share-group-header">
                     <button class="btn btn-icon btn-ghost btn-sm" onclick="SharesPage.collapseGroup()" title="${I18N.t('shares.back_to_users')}" aria-label="${I18N.t('shares.back_to_users')}">${UI.icons.back}</button>
-                    ${UI.avatarHTML(this._expandedUserId, name, 'share-user-avatar-lg')}
+                    ${UI.avatarHTML(this._expandedUserId, name, 'share-user-avatar-lg', userFiles[0][avatarKey])}
                     <span class="share-group-title">${UI.esc(name)}</span>
                 </div>
                 <div class="file-grid">${userFiles.map(f => this.shareFileCard(f)).join('')}</div>`;
@@ -102,13 +103,13 @@ const SharesPage = {
         const groups = new Map();
         for (const f of files) {
             const id = f[idKey];
-            if (!groups.has(id)) groups.set(id, { id, name: f[nameKey] || '', count: 0 });
+            if (!groups.has(id)) groups.set(id, { id, name: f[nameKey] || '', avatar: f[avatarKey], count: 0 });
             groups.get(id).count++;
         }
         const sorted = [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
         c.innerHTML = `<div class="share-user-grid">` + sorted.map(g => `
             <div class="share-user-card" onclick="SharesPage.expandGroup(${g.id})">
-                ${UI.avatarHTML(g.id, g.name, 'share-user-avatar-lg')}
+                ${UI.avatarHTML(g.id, g.name, 'share-user-avatar-lg', g.avatar)}
                 <div class="share-user-card-name" title="${UI.esc(g.name)}">${UI.esc(g.name)}</div>
                 <div class="share-user-card-count">${I18N.tn('shares.file_count', g.count)}</div>
             </div>`).join('') + `</div>`;
@@ -247,17 +248,17 @@ const SharesPage = {
             const filtered = users.filter(u => !skipIds.has(u.id));
             if (!filtered.length) { r.innerHTML = `<div class="share-user-no-result">${I18N.t('shares.no_results')}</div>`; return; }
             r.innerHTML = filtered.map(u => `
-                <div class="share-user-item" onclick="SharesPage.addRecipient(${u.id},${UI.escJson(u.full_name)},${UI.escJson(u.username)})">
-                    ${UI.avatarHTML(u.id, u.full_name)}
+                <div class="share-user-item" onclick="SharesPage.addRecipient(${u.id},${UI.escJson(u.full_name)},${UI.escJson(u.username)},${UI.escJson(u.avatar_url)})">
+                    ${UI.avatarHTML(u.id, u.full_name, '', u.avatar_url)}
                     <div><div class="share-user-name">${UI.esc(u.full_name)}</div><div class="share-user-username">@${UI.esc(u.username)}</div></div>
                 </div>`).join('');
         } catch { r.innerHTML = ''; }
     },
 
-    addRecipient(id, name, username) {
+    addRecipient(id, name, username, avatarUrl) {
         if (this._pendingRecipients.some(p => p.id === id)) return;
         const perm = document.getElementById('share-permission')?.value || 'view';
-        this._pendingRecipients.push({ id, name, username, permission: perm });
+        this._pendingRecipients.push({ id, name, username, avatarUrl, permission: perm });
         document.getElementById('share-user-search').value = '';
         document.getElementById('share-user-results').innerHTML = '';
         this.renderPendingList();
@@ -280,7 +281,7 @@ const SharesPage = {
         el.innerHTML = `<h4 style="font-size:.82rem;font-weight:600;color:var(--text-2);margin:8px 0">${I18N.t('shares.new_shares_heading')}</h4>` +
             this._pendingRecipients.map(p => `
             <div class="share-pending-item">
-                ${UI.avatarHTML(p.id, p.name)}
+                ${UI.avatarHTML(p.id, p.name, '', p.avatarUrl)}
                 <div style="flex:1;min-width:0"><div style="font-size:.82rem;font-weight:500">${UI.esc(p.name)}</div></div>
                 <select class="form-control" style="width:auto;padding:4px 28px 4px 8px;font-size:.72rem" onchange="SharesPage.updateRecipientPermission(${p.id},this.value)">
                     <option value="view" ${p.permission === 'view' ? 'selected' : ''}>👁 ${I18N.t('shares.perm_view_option')}</option>
@@ -343,7 +344,7 @@ const SharesPage = {
             el.innerHTML = `<h4 style="font-size:.82rem;font-weight:600;color:var(--text-2);margin-bottom:8px">${I18N.t('shares.existing_heading')}</h4>` +
                 shares.map(s => `
                 <div class="share-existing-item">
-                    ${UI.avatarHTML(s.shared_with, s.full_name || s.username)}
+                    ${UI.avatarHTML(s.shared_with, s.full_name || s.username, '', s.avatar_url)}
                     <div class="share-existing-info">
                         <div style="font-size:.82rem;font-weight:500">${UI.esc(s.full_name || s.username)}</div>
                     </div>
@@ -364,7 +365,7 @@ const SharesPage = {
     },
 
     removeShare(fileId, userId, name) {
-        UI.confirmAction(I18N.t('shares.remove_title'), I18N.t('shares.remove_confirm_body', { name: name || '' }), I18N.t('common.remove'), async () => {
+        UI.confirmAction(I18N.t('shares.remove_title'), I18N.t('shares.remove_confirm_body', { name: UI.esc(name || '') }), I18N.t('common.remove'), async () => {
             try { await API.sharing.deleteShare(fileId, userId); UI.toast(I18N.t('shares.share_removed'), 'success'); this.loadExistingShares(fileId); }
             catch (e) { UI.toast(e.message, 'error'); }
         });

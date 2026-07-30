@@ -103,6 +103,7 @@ func (h *Handler) PushSubscribe(w http.ResponseWriter, r *http.Request) {
 // PushUnsubscribe removes a subscription by endpoint (the browser dropped it,
 // or the user turned notifications off).
 func (h *Handler) PushUnsubscribe(w http.ResponseWriter, r *http.Request) {
+	user := authutil.GetUser(r)
 	var req struct {
 		Endpoint string `json:"endpoint"`
 	}
@@ -110,7 +111,7 @@ func (h *Handler) PushUnsubscribe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "nädogry maglumat")
 		return
 	}
-	if err := h.db.DeletePushSubscription(req.Endpoint); err != nil {
+	if err := h.db.DeletePushSubscription(user.ID, req.Endpoint); err != nil {
 		writeError(w, http.StatusInternalServerError, "ýalňyşlyk ýüze çykdy")
 		return
 	}
@@ -304,7 +305,7 @@ func (h *Handler) sendPushToUser(userID int, payload []byte) {
 			continue
 		}
 		if status == http.StatusNotFound || status == http.StatusGone {
-			if err := h.db.DeletePushSubscription(s.Endpoint); err != nil {
+			if err := h.db.DeletePushSubscription(s.UserID, s.Endpoint); err != nil {
 				log.Printf("prune dead push subscription: %v", err)
 			}
 		}

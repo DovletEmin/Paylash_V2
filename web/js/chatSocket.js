@@ -151,13 +151,13 @@ const ChatSocket = {
     // A rich in-app toast (avatar, sender/text per the caller's privacy
     // choice, click-to-jump) — used instead of the native notify() while the
     // tab itself is focused, where a native OS toast reads as out of place.
-    showInAppToast({ avatarUserId, avatarName, title, body, conversationId }) {
+    showInAppToast({ avatarUserId, avatarName, avatarUrl, title, body, conversationId }) {
         const stack = document.getElementById('chat-toast-stack');
         if (!stack) return;
         const el = document.createElement('div');
         el.className = 'chat-toast';
         el.innerHTML = `
-            ${UI.avatarHTML(avatarUserId, avatarName, 'chat-toast-avatar')}
+            ${UI.avatarHTML(avatarUserId, avatarName, 'chat-toast-avatar', avatarUrl)}
             <div class="chat-toast-body">
                 <div class="chat-toast-title">${UI.esc(title)}</div>
                 <div class="chat-toast-text">${UI.esc(body)}</div>
