@@ -311,6 +311,19 @@ const API = {
         updateNotifyPrefs(level, sound) { return API._request('PATCH', '/api/chat/notification-prefs', { level, sound }); },
     },
 
+    // Attendance: check-in/check-out is always the caller acting on their
+    // own record — see internal/api/attendance.go's CheckIn/CheckOut, which
+    // stamp time.Now() server-side and never accept a client-supplied time.
+    attendance: {
+        checkIn() { return API._request('POST', '/api/attendance/check-in'); },
+        checkOut() { return API._request('POST', '/api/attendance/check-out'); },
+        today() { return API._request('GET', '/api/attendance/me/today'); },
+        myHistory(from, to) {
+            const qs = new URLSearchParams(); if (from) qs.set('from', from); if (to) qs.set('to', to);
+            return API._request('GET', `/api/attendance/me/history?${qs}`);
+        },
+    },
+
     admin: {
         dashboard() { return API._request('GET', '/api/admin/dashboard'); },
         storageTrend(days) { return API._request('GET', `/api/admin/storage-trend?days=${days || 30}`); },
@@ -328,6 +341,30 @@ const API = {
         publicQuota: {
             get() { return API._request('GET', '/api/admin/public-quota'); },
             set(quotaMB) { return API._request('PATCH', '/api/admin/public-quota', { quota_mb: quotaMB }); },
+        },
+        // Read endpoints here are reachable by admin AND manager
+        // (ManagerOrAdminMiddleware); update()/schedule.set() are admin-only
+        // server-side (AdminMiddleware) — see internal/server/server.go.
+        attendance: {
+            list(from, to, userId) {
+                const qs = new URLSearchParams(); if (from) qs.set('from', from); if (to) qs.set('to', to); if (userId) qs.set('user_id', userId);
+                return API._request('GET', `/api/admin/attendance?${qs}`);
+            },
+            analytics(from, to) {
+                const qs = new URLSearchParams(); if (from) qs.set('from', from); if (to) qs.set('to', to);
+                return API._request('GET', `/api/admin/attendance/analytics?${qs}`);
+            },
+            exportURL(from, to) {
+                const qs = new URLSearchParams(); if (from) qs.set('from', from); if (to) qs.set('to', to);
+                return `/api/admin/attendance/export?${qs}`;
+            },
+            update(id, checkInAt, checkOutAt, notes) {
+                return API._request('PATCH', `/api/admin/attendance/${id}`, { check_in_at: checkInAt, check_out_at: checkOutAt, notes });
+            },
+            schedule: {
+                get() { return API._request('GET', '/api/admin/attendance/schedule'); },
+                set(sched) { return API._request('PATCH', '/api/admin/attendance/schedule', sched); },
+            },
         },
         projects: {
             list() { return API._request('GET', '/api/admin/projects'); },

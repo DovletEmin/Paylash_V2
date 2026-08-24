@@ -526,3 +526,80 @@ type MessageAttachment struct {
 	ContentType    string    `json:"content_type"`
 	CreatedAt      time.Time `json:"created_at"`
 }
+
+// AttendanceSchedule is the single company-wide work schedule, stored as one
+// JSON blob under the 'attendance_schedule' settings key (see
+// db.GetSetting/SetSetting — same pattern AdminGetPublicQuota already uses).
+// StartMin/EndMin are minutes since midnight (e.g. 540 = 09:00). Workdays is
+// a set of Go weekday numbers (0=Sunday..6=Saturday) that count as a working
+// day for lateness purposes; a check-in on a day not in this set is never
+// flagged late or early, even if outside Start/End.
+type AttendanceSchedule struct {
+	StartMin     int   `json:"start_min"`
+	EndMin       int   `json:"end_min"`
+	GraceMinutes int   `json:"grace_minutes"`
+	Workdays     []int `json:"workdays"`
+}
+
+// AttendanceRecord is one employee's check-in/check-out for one work_date.
+// ExpectedStartMin/ExpectedEndMin/GraceMinutes are snapshotted from
+// AttendanceSchedule at check-in time (see attendance_records' comment in
+// db.go) — every derived field below is computed from that snapshot, never
+// from whatever the schedule currently says, so editing the schedule later
+// never rewrites history.
+type AttendanceRecord struct {
+	ID               int        `json:"id"`
+	UserID           int        `json:"user_id"`
+	WorkDate         string     `json:"work_date"` // YYYY-MM-DD
+	CheckInAt        time.Time  `json:"check_in_at"`
+	CheckOutAt       *time.Time `json:"check_out_at,omitempty"`
+	ExpectedStartMin int        `json:"-"`
+	ExpectedEndMin   int        `json:"-"`
+	GraceMinutes     int        `json:"-"`
+	IsWorkday        bool       `json:"is_workday"`
+	NeedsReview      bool       `json:"needs_review"`
+	Notes            string     `json:"notes"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+
+	// Computed (never stored) — see computeAttendanceStatus in internal/db.
+	IsLate            bool `json:"is_late"`
+	LateMinutes       int  `json:"late_minutes,omitempty"`
+	IsEarlyLeave      bool `json:"is_early_leave"`
+	EarlyLeaveMinutes int  `json:"early_leave_minutes,omitempty"`
+	// WorkedMinutes is 0, not omitted, whenever CheckOutAt is set — a
+	// same-minute check-in/check-out is a legitimate 0, and the client must
+	// be able to tell that apart from "not checked out yet" (see
+	// computeAttendanceStatus: this is left at its zero value precisely
+	// when CheckOutAt is nil, which the client checks directly instead).
+	WorkedMinutes int `json:"worked_minutes"`
+}
+
+// AttendanceView is an AttendanceRecord joined with the employee's display
+// info — what admin/manager listing and export return, one row per
+// employee. Mirrors the *View naming convention used throughout (e.g.
+// ConversationView, ParticipantView).
+type AttendanceView struct {
+	AttendanceRecord
+	Username    string `json:"username"`
+	DisplayName string `json:"full_name"`
+	AvatarURL   string `json:"avatar_url"`
+}
+
+// AttendanceAnalytics summarizes a date range for the admin/manager
+// dashboard — total counts plus a per-day breakdown for the trend chart
+// (same SVG trend-chart pattern already used by AdminStorageTrend).
+type AttendanceAnalytics struct {
+	TotalRecords    int                     `json:"total_records"`
+	LateCount       int                     `json:"late_count"`
+	EarlyLeaveCount int                     `json:"early_leave_count"`
+	NeedsReviewCount int                    `json:"needs_review_count"`
+	AvgWorkedMinutes int                    `json:"avg_worked_minutes"`
+	Daily           []AttendanceDailyPoint  `json:"daily"`
+}
+
+type AttendanceDailyPoint struct {
+	Date      string `json:"date"`
+	LateCount int    `json:"late_count"`
+	Total     int    `json:"total"`
+}

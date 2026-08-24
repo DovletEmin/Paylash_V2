@@ -4,18 +4,30 @@ const AdminPage = {
     _users: [],
     _projects: [],
 
+    // A manager only ever sees the attendance tab (read-only monitoring) —
+    // every other section (users, projects, audit log, uploads, chat
+    // moderation) stays admin-exclusive. isManager() is used both to filter
+    // the sidebar nav below and to hide edit-only controls inside the
+    // attendance tab itself.
+    isManager() { return App.user && App.user.role === 'manager'; },
+
     render() {
+        const isManager = this.isManager();
+        const navItems = [
+            { tab: 'dashboard',    icon: UI.icons.dashboard, label: I18N.t('admin.nav_dashboard') },
+            { tab: 'projects',     icon: UI.icons.users,     label: I18N.t('admin.nav_projects') },
+            { tab: 'users',        icon: UI.icons.user,      label: I18N.t('admin.nav_users') },
+            { tab: 'attendance',   icon: '🕐',               label: I18N.t('admin.nav_attendance') },
+            { tab: 'audit-log',    icon: '🕓',               label: I18N.t('admin.nav_audit_log') },
+            { tab: 'uploads',      icon: '⬆',                label: I18N.t('admin.nav_uploads') },
+            { tab: 'chat-reports', icon: '🚩',               label: I18N.t('admin.nav_chat_reports'), badge: this._openReportCount },
+        ].filter(item => !isManager || item.tab === 'attendance');
         return `
         <div class="admin-page">
             <div class="admin-sidebar">
-                <div class="admin-title">${UI.icons.settings} ${I18N.t('app.nav_admin_section')}</div>
+                <div class="admin-title">${UI.icons.settings} ${I18N.t(isManager ? 'admin.nav_attendance' : 'app.nav_admin_section')}</div>
                 <nav class="admin-nav">
-                    <a class="admin-nav-item ${this.currentTab === 'dashboard' ? 'active' : ''}" onclick="AdminPage.switchTab('dashboard')">${UI.icons.dashboard} ${I18N.t('admin.nav_dashboard')}</a>
-                    <a class="admin-nav-item ${this.currentTab === 'projects' ? 'active' : ''}" onclick="AdminPage.switchTab('projects')">${UI.icons.users} ${I18N.t('admin.nav_projects')}</a>
-                    <a class="admin-nav-item ${this.currentTab === 'users' ? 'active' : ''}" onclick="AdminPage.switchTab('users')">${UI.icons.user} ${I18N.t('admin.nav_users')}</a>
-                    <a class="admin-nav-item ${this.currentTab === 'audit-log' ? 'active' : ''}" onclick="AdminPage.switchTab('audit-log')">🕓 ${I18N.t('admin.nav_audit_log')}</a>
-                    <a class="admin-nav-item ${this.currentTab === 'uploads' ? 'active' : ''}" onclick="AdminPage.switchTab('uploads')">⬆ ${I18N.t('admin.nav_uploads')}</a>
-                    <a class="admin-nav-item ${this.currentTab === 'chat-reports' ? 'active' : ''}" onclick="AdminPage.switchTab('chat-reports')">🚩 ${I18N.t('admin.nav_chat_reports')}${this._openReportCount ? ` <span class="nav-badge">${this._openReportCount}</span>` : ''}</a>
+                    ${navItems.map(item => `<a class="admin-nav-item ${this.currentTab === item.tab ? 'active' : ''}" data-tab="${item.tab}" onclick="AdminPage.switchTab('${item.tab}')">${item.icon} ${item.label}${item.badge ? ` <span class="nav-badge">${item.badge}</span>` : ''}</a>`).join('')}
                 </nav>
             </div>
             <div class="admin-content" id="admin-content"></div>
@@ -23,8 +35,9 @@ const AdminPage = {
     },
 
     async init() {
+        if (this.isManager()) this.currentTab = 'attendance';
         await this.switchTab(this.currentTab, true);
-        this.refreshOpenReportCount();
+        if (!this.isManager()) this.refreshOpenReportCount();
     },
 
     // Restores the active tab from ?tab= — called by App.initPage before
@@ -32,7 +45,7 @@ const AdminPage = {
     // drop back to the dashboard.
     applyURLParams(params) {
         const tab = params && params.get('tab');
-        const valid = ['dashboard', 'projects', 'users', 'audit-log', 'uploads', 'chat-reports'];
+        const valid = ['dashboard', 'projects', 'users', 'attendance', 'audit-log', 'uploads', 'chat-reports'];
         if (tab && valid.includes(tab)) this.currentTab = tab;
     },
 
@@ -43,8 +56,8 @@ const AdminPage = {
         try {
             const res = await API.admin.chatReports.openCount();
             this._openReportCount = res.count || 0;
-            const badge = document.querySelector('.admin-nav-item[onclick*="chat-reports"]');
-            if (badge) badge.outerHTML = `<a class="admin-nav-item ${this.currentTab === 'chat-reports' ? 'active' : ''}" onclick="AdminPage.switchTab('chat-reports')">🚩 ${I18N.t('admin.nav_chat_reports')}${this._openReportCount ? ` <span class="nav-badge">${this._openReportCount}</span>` : ''}</a>`;
+            const badge = document.querySelector('.admin-nav-item[data-tab="chat-reports"]');
+            if (badge) badge.outerHTML = `<a class="admin-nav-item ${this.currentTab === 'chat-reports' ? 'active' : ''}" data-tab="chat-reports" onclick="AdminPage.switchTab('chat-reports')">🚩 ${I18N.t('admin.nav_chat_reports')}${this._openReportCount ? ` <span class="nav-badge">${this._openReportCount}</span>` : ''}</a>`;
         } catch { /* best-effort — a stale/missing badge count isn't worth surfacing an error for */ }
     },
 
@@ -57,8 +70,8 @@ const AdminPage = {
         this.currentTab = tab;
         if (!fromURLRestore && tab !== 'dashboard') App.updatePageURL({ tab }, false);
         else if (!fromURLRestore) App.updatePageURL({}, false);
-        document.querySelectorAll('.admin-nav-item').forEach((el, i) => {
-            el.classList.toggle('active', ['dashboard','projects','users','audit-log','uploads','chat-reports'][i] === tab);
+        document.querySelectorAll('.admin-nav-item').forEach(el => {
+            el.classList.toggle('active', el.dataset.tab === tab);
         });
         const c = document.getElementById('admin-content');
         if (!c) return;
@@ -67,6 +80,7 @@ const AdminPage = {
             case 'dashboard':    await this.renderDashboard(c); break;
             case 'projects':     await this.renderProjects(c); break;
             case 'users':        await this.renderUsers(c); break;
+            case 'attendance':   await this.renderAttendance(c); break;
             case 'audit-log':    await this.renderAuditLog(c); break;
             case 'uploads':      await this.renderUploads(c); break;
             case 'chat-reports': await this.renderChatReports(c); break;
@@ -138,6 +152,166 @@ const AdminPage = {
                 <span>${UI.esc(last.date)}</span>
             </div>
         </div>`;
+    },
+
+    /* ── Attendance (admin: full control; manager: read-only) ── */
+    async renderAttendance(el) {
+        const isManager = this.isManager();
+        this._attnFrom = this._attnFrom || UI.dateDaysAgo(30);
+        this._attnTo = this._attnTo || UI.dateDaysAgo(0);
+        try {
+            const [list, analytics, sched] = await Promise.all([
+                API.admin.attendance.list(this._attnFrom, this._attnTo),
+                API.admin.attendance.analytics(this._attnFrom, this._attnTo),
+                API.admin.attendance.schedule.get(),
+            ]);
+            this._attnList = list || [];
+            this._attnSchedule = sched;
+            el.innerHTML = `
+            <div class="admin-header"><h2>${I18N.t('admin.nav_attendance')}</h2><div style="display:flex;gap:8px">
+                <button class="btn btn-ghost btn-sm" onclick="AdminPage.exportAttendance()">${UI.icons.download} ${I18N.t('admin.export_csv')}</button>
+            </div></div>
+            <div class="attn-filter-bar">
+                <label>${I18N.t('attendance.filter_from')} <input type="date" id="attn-from" value="${UI.esc(this._attnFrom)}" class="form-control"></label>
+                <label>${I18N.t('attendance.filter_to')} <input type="date" id="attn-to" value="${UI.esc(this._attnTo)}" class="form-control"></label>
+                <button class="btn btn-sm btn-primary" onclick="AdminPage.applyAttendanceFilter()">${I18N.t('common.apply')}</button>
+            </div>
+            <div class="stat-cards">
+                <div class="stat-card"><div class="stat-card-value">${analytics.late_count || 0}</div><div class="stat-card-label">${I18N.t('attendance.late_count')}</div></div>
+                <div class="stat-card"><div class="stat-card-value">${analytics.early_leave_count || 0}</div><div class="stat-card-label">${I18N.t('attendance.early_count')}</div></div>
+                <div class="stat-card"><div class="stat-card-value">${analytics.needs_review_count || 0}</div><div class="stat-card-label">${I18N.t('attendance.needs_review')}</div></div>
+                <div class="stat-card"><div class="stat-card-value">${UI.formatAttnDuration(analytics.avg_worked_minutes)}</div><div class="stat-card-label">${I18N.t('attendance.avg_worked')}</div></div>
+            </div>
+            <h3 style="font-size:1rem;font-weight:600;margin:20px 0 12px">${I18N.t('attendance.trend_title')}</h3>
+            ${this.renderAttendanceTrend(analytics.daily)}
+            ${!isManager ? this.scheduleFormHTML(sched) : ''}
+            <h3 style="font-size:1rem;font-weight:600;margin:20px 0 12px">${I18N.t('attendance.employees_title')}</h3>
+            <div class="table-responsive">${this.attendanceTableHTML(this._attnList, isManager)}</div>`;
+        } catch (e) { el.innerHTML = `<p class="text-muted">${UI.esc(e.message)}</p>`; }
+    },
+
+    // Same self-contained SVG line-chart approach as renderTrendChart above,
+    // plotting late_count/total per day instead of storage bytes.
+    renderAttendanceTrend(points) {
+        if (!points || points.length < 2) {
+            return `<p class="text-muted" style="font-size:.82rem">${I18N.t('admin.trend_no_data')}</p>`;
+        }
+        const w = 600, h = 160, padL = 4, padR = 4, padT = 8, padB = 8;
+        const innerW = w - padL - padR, innerH = h - padT - padB;
+        const maxLate = Math.max(...points.map(p => p.late_count), 1);
+        const stepX = innerW / (points.length - 1);
+        const coords = points.map((p, i) => {
+            const x = padL + i * stepX;
+            const y = padT + innerH - (p.late_count / maxLate) * innerH;
+            return `${x.toFixed(1)},${y.toFixed(1)}`;
+        });
+        const line = coords.join(' ');
+        const area = `${padL},${padT + innerH} ${line} ${padL + innerW},${padT + innerH}`;
+        const first = points[0], last = points[points.length - 1];
+        return `<div class="trend-chart-wrap">
+            <svg viewBox="0 0 ${w} ${h}" class="trend-chart" preserveAspectRatio="none" role="img" aria-label="${I18N.t('attendance.trend_title')}">
+                <polyline points="${area}" class="trend-chart-area"></polyline>
+                <polyline points="${line}" class="trend-chart-line"></polyline>
+            </svg>
+            <div class="trend-chart-labels">
+                <span>${UI.esc(first.date)} · ${I18N.tn('attendance.late_count_n', first.late_count, { count: first.late_count })}</span>
+                <span class="trend-chart-now">${I18N.t('admin.trend_now')}: ${I18N.tn('attendance.late_count_n', last.late_count, { count: last.late_count })}</span>
+                <span>${UI.esc(last.date)}</span>
+            </div>
+        </div>`;
+    },
+
+    applyAttendanceFilter() {
+        this._attnFrom = document.getElementById('attn-from').value || this._attnFrom;
+        this._attnTo = document.getElementById('attn-to').value || this._attnTo;
+        this.switchTab('attendance');
+    },
+
+    exportAttendance() {
+        const a = document.createElement('a');
+        a.href = API.admin.attendance.exportURL(this._attnFrom, this._attnTo);
+        a.download = 'paylash-attendance.csv';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    },
+
+    attendanceTableHTML(list, isManager) {
+        if (!list.length) return `<p class="text-muted text-center">${I18N.t('attendance.no_history')}</p>`;
+        return `<table class="admin-table"><thead><tr>
+            <th>${I18N.t('attendance.col_date')}</th><th>${I18N.t('admin.col_name')}</th>
+            <th>${I18N.t('attendance.col_check_in')}</th><th>${I18N.t('attendance.col_check_out')}</th>
+            <th>${I18N.t('attendance.col_worked')}</th><th>${I18N.t('attendance.col_status')}</th>
+            ${!isManager ? `<th>${I18N.t('admin.col_actions')}</th>` : ''}
+        </tr></thead><tbody>
+            ${list.map(r => `<tr>
+                <td>${UI.esc(r.work_date)}</td>
+                <td><div class="table-identity">${UI.avatarHTML(r.user_id, r.full_name, 'share-user-avatar-sm', r.avatar_url)}<span>${UI.esc(r.full_name || r.username)}</span></div></td>
+                <td>${UI.formatTime(r.check_in_at)}</td>
+                <td>${r.check_out_at ? UI.formatTime(r.check_out_at) : '—'}</td>
+                <td>${r.check_out_at ? UI.formatAttnDuration(r.worked_minutes) : '—'}</td>
+                <td>${UI.attendanceStatusBadges(r)}</td>
+                ${!isManager ? `<td><button class="btn btn-sm btn-ghost" onclick="AdminPage.editAttendanceRecord(${r.id})" title="${I18N.t('common.edit')}" aria-label="${I18N.t('common.edit')}">✏️</button></td>` : ''}
+            </tr>`).join('')}
+        </tbody></table>`;
+    },
+
+    editAttendanceRecord(id) {
+        const r = (this._attnList || []).find(x => x.id === id);
+        if (!r) return;
+        const toInput = (iso) => iso ? new Date(iso).toISOString().slice(0, 16) : '';
+        UI.showModal(I18N.t('attendance.edit_title'), `
+            <div class="form-group"><label>${I18N.t('attendance.col_check_in')}</label><input type="datetime-local" id="attn-edit-in" class="form-control" value="${toInput(r.check_in_at)}"></div>
+            <div class="form-group"><label>${I18N.t('attendance.col_check_out')}</label><input type="datetime-local" id="attn-edit-out" class="form-control" value="${toInput(r.check_out_at)}"></div>
+            <div class="form-group"><label>${I18N.t('attendance.notes_label')}</label><textarea id="attn-edit-notes" class="form-control" rows="2">${UI.esc(r.notes || '')}</textarea></div>`,
+            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="AdminPage.saveAttendanceRecord(${id})">${I18N.t('common.save')}</button>`);
+    },
+
+    async saveAttendanceRecord(id) {
+        const inVal = document.getElementById('attn-edit-in').value;
+        const outVal = document.getElementById('attn-edit-out').value;
+        const notes = document.getElementById('attn-edit-notes').value.trim();
+        if (!inVal) { UI.toast(I18N.t('attendance.check_in_required'), 'error'); return; }
+        try {
+            await API.admin.attendance.update(id, new Date(inVal).toISOString(), outVal ? new Date(outVal).toISOString() : null, notes);
+            UI.closeModal();
+            UI.toast(I18N.t('admin.updated'), 'success');
+            this.switchTab('attendance');
+        } catch (e) { UI.toast(e.message, 'error'); }
+    },
+
+    scheduleFormHTML(s) {
+        const toHHMM = (min) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+        const days = [
+            [1, I18N.t('attendance.day_mon')], [2, I18N.t('attendance.day_tue')], [3, I18N.t('attendance.day_wed')],
+            [4, I18N.t('attendance.day_thu')], [5, I18N.t('attendance.day_fri')], [6, I18N.t('attendance.day_sat')], [0, I18N.t('attendance.day_sun')],
+        ];
+        return `
+        <h3 style="font-size:1rem;font-weight:600;margin:20px 0 12px">${I18N.t('attendance.schedule_title')}</h3>
+        <div class="attn-schedule-form">
+            <div class="form-group"><label>${I18N.t('attendance.expected_start')}</label><input type="time" id="attn-sched-start" class="form-control" value="${toHHMM(s.start_min)}"></div>
+            <div class="form-group"><label>${I18N.t('attendance.expected_end')}</label><input type="time" id="attn-sched-end" class="form-control" value="${toHHMM(s.end_min)}"></div>
+            <div class="form-group"><label>${I18N.t('attendance.grace_minutes')}</label><input type="number" id="attn-sched-grace" class="form-control" min="0" max="120" value="${s.grace_minutes}" style="width:100px"></div>
+            <div class="form-group"><label>${I18N.t('attendance.workdays')}</label><div class="attn-workdays">
+                ${days.map(([n, label]) => `<label class="attn-workday-chip"><input type="checkbox" value="${n}" ${s.workdays.includes(n) ? 'checked' : ''}> ${label}</label>`).join('')}
+            </div></div>
+            <button class="btn btn-primary btn-sm" onclick="AdminPage.saveAttendanceSchedule()">${I18N.t('common.save')}</button>
+        </div>`;
+    },
+
+    async saveAttendanceSchedule() {
+        const startMin = this._timeToMin(document.getElementById('attn-sched-start').value);
+        const endMin = this._timeToMin(document.getElementById('attn-sched-end').value);
+        const grace = parseInt(document.getElementById('attn-sched-grace').value, 10) || 0;
+        const workdays = Array.from(document.querySelectorAll('.attn-workdays input:checked')).map(el => parseInt(el.value, 10));
+        if (startMin === null || endMin === null || startMin >= endMin) { UI.toast(I18N.t('attendance.invalid_schedule'), 'error'); return; }
+        try {
+            await API.admin.attendance.schedule.set({ start_min: startMin, end_min: endMin, grace_minutes: grace, workdays });
+            UI.toast(I18N.t('admin.updated'), 'success');
+        } catch (e) { UI.toast(e.message, 'error'); }
+    },
+
+    _timeToMin(hhmm) {
+        const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm || '');
+        return m ? parseInt(m[1], 10) * 60 + parseInt(m[2], 10) : null;
     },
 
     /* ── Projects ── */
@@ -315,7 +489,7 @@ const AdminPage = {
         const checkbox = u.role === 'admin' ? '' :
             `<input type="checkbox" ${this._selectedUserIds.has(u.id) ? 'checked' : ''} onchange="AdminPage.toggleSelectUser(${u.id},this.checked)" aria-label="${I18N.t('files.select_item')}">`;
         return `<tr data-uid="${u.id}"><td>${checkbox}</td><td>${u.id}</td><td><div class="table-identity">${UI.avatarHTML(u.id, u.full_name, 'share-user-avatar-sm', u.avatar_url)}<span>${UI.esc(u.full_name)}</span> ${u.must_change_password ? `<span class="badge" title="${I18N.t('admin.force_pw_badge_title')}">🔑</span>` : ''}</div></td><td>@${UI.esc(u.username)}</td>
-                <td><span class="badge badge-${u.role === 'admin' ? 'admin' : 'user'}">${u.role === 'admin' ? I18N.t('app.role_admin') : I18N.t('app.role_user')}</span></td>
+                <td><span class="badge badge-${u.role === 'admin' ? 'admin' : (u.role === 'manager' ? 'manager' : 'user')}">${{ admin: I18N.t('app.role_admin'), manager: I18N.t('app.role_manager') }[u.role] || I18N.t('app.role_user')}</span></td>
                 <td>${UI.formatBytes(u.quota_bytes || 0)}</td>
                 <td><button class="btn btn-sm btn-ghost" onclick="AdminPage.showEditUserModal(${u.id})" title="${I18N.t('common.edit')}" aria-label="${I18N.t('common.edit')}">✏️</button>
                 ${u.role !== 'admin' ? `<button class="btn btn-sm btn-ghost" onclick="AdminPage.impersonate(${u.id},${UI.escJson(u.full_name || u.username)})" title="${I18N.t('admin.impersonate_button')}" aria-label="${I18N.t('admin.impersonate_button')}">🎭</button>` : ''}
@@ -496,7 +670,7 @@ const AdminPage = {
             <div class="form-group"><label>${I18N.t('auth.fullname_label')}</label><input type="text" id="nu-name" class="form-control" placeholder="${I18N.t('auth.fullname_placeholder')}"></div>
             <div class="form-group"><label>${I18N.t('auth.username_label')}</label><input type="text" id="nu-username" class="form-control" placeholder="${I18N.t('admin.username_field_placeholder')}"></div>
             <div class="form-group"><label>${I18N.t('auth.password_label')}</label>${UI.passwordField('nu-password', I18N.t('auth.password_min_placeholder'))}</div>
-            <div class="form-group"><label>${I18N.t('admin.col_role')}</label><select id="nu-role" class="form-control"><option value="user">${I18N.t('app.role_user')}</option><option value="admin">${I18N.t('app.role_admin')}</option></select></div>
+            <div class="form-group"><label>${I18N.t('admin.col_role')}</label><select id="nu-role" class="form-control"><option value="user">${I18N.t('app.role_user')}</option><option value="manager">${I18N.t('app.role_manager')}</option><option value="admin">${I18N.t('app.role_admin')}</option></select></div>
             <div class="form-group"><label>${I18N.t('admin.quota_gb_label')}</label><input type="number" id="nu-quota" class="form-control" value="10" min="0" step="0.1"></div>
             <p class="text-muted" style="font-size:.78rem">${I18N.t('admin.project_membership_hint')}</p>`,
             `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="UI.busyClick(this,()=>AdminPage.doCreateUser())">${I18N.t('common.create')}</button>`);
@@ -521,7 +695,7 @@ const AdminPage = {
         UI.showModal(I18N.t('admin.edit_user_title'), `
             <div class="form-group"><label>${I18N.t('auth.fullname_label')}</label><input type="text" id="eu-name" value="${UI.esc(u.full_name)}" class="form-control"></div>
             <div class="form-group"><label>${I18N.t('app.new_password_label')}</label>${UI.passwordField('eu-password', I18N.t('admin.new_password_optional_placeholder'))}</div>
-            <div class="form-group"><label>${I18N.t('admin.col_role')}</label><select id="eu-role" class="form-control"><option value="user" ${u.role==='user'?'selected':''}>${I18N.t('app.role_user')}</option><option value="admin" ${u.role==='admin'?'selected':''}>${I18N.t('app.role_admin')}</option></select></div>
+            <div class="form-group"><label>${I18N.t('admin.col_role')}</label><select id="eu-role" class="form-control"><option value="user" ${u.role==='user'?'selected':''}>${I18N.t('app.role_user')}</option><option value="manager" ${u.role==='manager'?'selected':''}>${I18N.t('app.role_manager')}</option><option value="admin" ${u.role==='admin'?'selected':''}>${I18N.t('app.role_admin')}</option></select></div>
             <div class="form-group"><label>${I18N.t('admin.quota_gb_label')}</label><input type="number" id="eu-quota" value="${gb}" class="form-control" min="0" step="0.1"></div>`,
             `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="UI.busyClick(this,()=>AdminPage.saveUser(${id}))">${I18N.t('common.save')}</button>`);
     },

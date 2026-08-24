@@ -81,6 +81,14 @@ func (s *Server) routes(webFS embed.FS) {
 	s.mux.Handle("POST /api/push/subscribe", auth(http.HandlerFunc(h.PushSubscribe)))
 	s.mux.Handle("POST /api/push/unsubscribe", auth(http.HandlerFunc(h.PushUnsubscribe)))
 
+	// Attendance — check-in/check-out is every authenticated user's own
+	// action on their own record; nobody (not even admin) reads another
+	// user's history through these routes — see AdminListAttendance below.
+	s.mux.Handle("POST /api/attendance/check-in", auth(http.HandlerFunc(h.CheckIn)))
+	s.mux.Handle("POST /api/attendance/check-out", auth(http.HandlerFunc(h.CheckOut)))
+	s.mux.Handle("GET /api/attendance/me/today", auth(http.HandlerFunc(h.MyTodayAttendance)))
+	s.mux.Handle("GET /api/attendance/me/history", auth(http.HandlerFunc(h.MyAttendanceHistory)))
+
 	// Files
 	s.mux.Handle("GET /api/files", auth(http.HandlerFunc(h.ListFiles)))
 	s.mux.Handle("POST /api/files/upload", auth(http.HandlerFunc(h.UploadFile)))
@@ -215,6 +223,15 @@ func (s *Server) routes(webFS embed.FS) {
 	s.mux.Handle("GET /api/admin/chat-reports", auth(AdminMiddleware(http.HandlerFunc(h.AdminListChatReports))))
 	s.mux.Handle("GET /api/admin/chat-reports/open-count", auth(AdminMiddleware(http.HandlerFunc(h.AdminOpenChatReportCount))))
 	s.mux.Handle("POST /api/admin/chat-reports/{id}/resolve", auth(AdminMiddleware(http.HandlerFunc(h.AdminResolveChatReport))))
+
+	// Attendance admin/manager views — read-only, so ManagerOrAdminMiddleware;
+	// the one write action (correcting a record) stays AdminMiddleware-only.
+	s.mux.Handle("GET /api/admin/attendance", auth(ManagerOrAdminMiddleware(http.HandlerFunc(h.AdminListAttendance))))
+	s.mux.Handle("GET /api/admin/attendance/analytics", auth(ManagerOrAdminMiddleware(http.HandlerFunc(h.AdminAttendanceAnalytics))))
+	s.mux.Handle("GET /api/admin/attendance/export", auth(ManagerOrAdminMiddleware(http.HandlerFunc(h.AdminExportAttendance))))
+	s.mux.Handle("GET /api/admin/attendance/schedule", auth(ManagerOrAdminMiddleware(http.HandlerFunc(h.AdminGetAttendanceSchedule))))
+	s.mux.Handle("PATCH /api/admin/attendance/schedule", auth(AdminMiddleware(http.HandlerFunc(h.AdminSetAttendanceSchedule))))
+	s.mux.Handle("PATCH /api/admin/attendance/{id}", auth(AdminMiddleware(http.HandlerFunc(h.AdminUpdateAttendanceRecord))))
 
 	// WOPI endpoints (accessed by Collabora, token-based auth)
 	s.mux.HandleFunc("GET /wopi/files/{id}", wopiH.CheckFileInfo)

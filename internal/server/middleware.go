@@ -85,6 +85,22 @@ func AdminMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// ManagerOrAdminMiddleware gates read-only admin-panel views a manager may
+// also see (currently: attendance listing/analytics/export/schedule) — a
+// manager can never reach a route wrapped in AdminMiddleware instead, which
+// is how every state-changing admin action (including attendance
+// corrections) stays admin-only.
+func ManagerOrAdminMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user := authutil.GetUser(r)
+		if user == nil || (user.Role != "admin" && user.Role != "manager") {
+			http.Error(w, `{"error":"admin ýa-da menejer rugsady gerek"}`, http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // requestIDContextKey is unexported so only this package can mint/read it —
 // callers elsewhere get it through RequestIDFromContext.
 type requestIDContextKey struct{}

@@ -352,7 +352,7 @@ const App = {
         if (!this.user && !['login', 'register'].includes(page)) { this.navigate('login', true); return; }
         if (this.user && ['login', 'register'].includes(page)) { this.navigate('files', true); return; }
         if (page === 'register' && !this.config.allow_registration) { this.navigate('login', true); return; }
-        if (page === 'admin' && this.user && this.user.role !== 'admin') { this.navigate('files', true); return; }
+        if (page === 'admin' && this.user && this.user.role !== 'admin' && this.user.role !== 'manager') { this.navigate('files', true); return; }
 
         this.renderPage(page, params);
     },
@@ -385,17 +385,20 @@ const App = {
         this.loadStorageUsage();
         this.renderNotifBadge(this._lastNotifCount);
         this.renderChatBadge(this._lastChatUnread);
+        AttendanceWidget.init();
     },
 
     renderShell(page) {
         const u = this.user;
         const isAdmin = u && u.role === 'admin';
+        const isManager = u && u.role === 'manager';
         return `
         <div class="app-layout">
             <aside class="sidebar" id="sidebar">
                 <div class="sidebar-header">
                     <div class="sidebar-logo">${UI.icons.cloud} Paýlaş</div>
                 </div>
+                <div class="attn-widget" id="attendance-widget"></div>
                 <nav class="sidebar-nav">
                     <div class="sidebar-section">${I18N.t('app.nav_main')}</div>
                     <a class="nav-item ${page === 'files' ? 'active' : ''}" onclick="App.navigate('files')">
@@ -422,7 +425,10 @@ const App = {
                     <a class="nav-item ${page === 'trash' ? 'active' : ''}" onclick="App.navigate('trash')">
                         ${UI.icons.trash} <span>${I18N.t('app.nav_trash')}</span>
                     </a>
-                    ${isAdmin ? `
+                    <a class="nav-item ${page === 'attendance' ? 'active' : ''}" onclick="App.navigate('attendance')">
+                        🕐 <span>${I18N.t('app.nav_attendance')}</span>
+                    </a>
+                    ${(isAdmin || isManager) ? `
                     <div class="sidebar-section">${I18N.t('app.nav_admin_section')}</div>
                     <a class="nav-item admin-item ${page === 'admin' ? 'active' : ''}" onclick="App.navigate('admin')">
                         ${UI.icons.settings} <span>${I18N.t('app.nav_admin_panel')}</span>
@@ -434,7 +440,7 @@ const App = {
                         ${u.avatar_url ? `<img class="sidebar-avatar-img" src="/api/avatar/${u.id}?v=${Date.now()}" alt="">` : `<div class="sidebar-avatar">${(u.full_name || 'U').charAt(0).toUpperCase()}</div>`}
                         <div class="sidebar-user-info">
                             <div class="sidebar-user-name">${UI.esc(u.full_name)}</div>
-                            <div class="sidebar-user-role">${u.role === 'admin' ? I18N.t('app.role_admin') : I18N.t('app.role_user')}</div>
+                            <div class="sidebar-user-role">${{ admin: I18N.t('app.role_admin'), manager: I18N.t('app.role_manager') }[u.role] || I18N.t('app.role_user')}</div>
                         </div>
                         <button class="sidebar-logout" onclick="event.stopPropagation();App.logout()" title="${I18N.t('app.logout')}" aria-label="${I18N.t('app.logout')}">${UI.icons.logout}</button>
                     </div>
@@ -462,7 +468,7 @@ const App = {
     },
 
     pageTitle(p) {
-        return { files: I18N.t('app.nav_files'), shared: I18N.t('app.nav_shared'), trash: I18N.t('app.nav_trash'), admin: I18N.t('app.nav_admin_section') }[p] || 'Paýlaş';
+        return { files: I18N.t('app.nav_files'), shared: I18N.t('app.nav_shared'), trash: I18N.t('app.nav_trash'), admin: I18N.t('app.nav_admin_section'), attendance: I18N.t('app.nav_attendance') }[p] || 'Paýlaş';
     },
 
     initPage(page, params) {
@@ -477,6 +483,7 @@ const App = {
                 if (typeof ChatPage !== 'undefined') ChatPage.applyURLParams(params);
                 c.innerHTML = ChatPage.render(); ChatPage.init(); break;
             case 'trash':  c.innerHTML = TrashPage.render(); TrashPage.init(); break;
+            case 'attendance': c.innerHTML = AttendancePage.render(); AttendancePage.init(); break;
             case 'admin':
                 if (typeof AdminPage !== 'undefined') AdminPage.applyURLParams(params);
                 c.innerHTML = AdminPage.render(); AdminPage.init(); break;

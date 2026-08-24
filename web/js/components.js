@@ -366,6 +366,41 @@ const UI = {
         return dt.toLocaleDateString(I18N.dateLocale());
     },
 
+    // Plain HH:MM clock time (not relative like formatDate above) — used for
+    // attendance check-in/check-out timestamps, where "at 09:14" is what
+    // matters, not "5 minutes ago".
+    formatTime(d) {
+        if (!d) return '';
+        return new Date(d).toLocaleTimeString(I18N.dateLocale(), { hour: '2-digit', minute: '2-digit' });
+    },
+
+    // YYYY-MM-DD for "n days ago" (n=0 is today) — backs the default date
+    // range on the attendance filter bar and personal history.
+    dateDaysAgo(n) {
+        const d = new Date();
+        d.setDate(d.getDate() - n);
+        return d.toISOString().slice(0, 10);
+    },
+
+    formatAttnDuration(min) {
+        if (min === undefined || min === null) return '—';
+        const h = Math.floor(min / 60), m = min % 60;
+        return I18N.t('attendance.duration_short', { h, m });
+    },
+
+    // Status pills for one attendance record — needs_review takes priority
+    // (an admin must resolve it before the day counts as settled), then
+    // late/early (can both apply to the same day), falling back to a plain
+    // on-time pill when neither applies.
+    attendanceStatusBadges(r) {
+        const badges = [];
+        if (r.needs_review) badges.push(`<span class="attn-badge attn-badge-review">${this.esc(I18N.t('attendance.needs_review'))}</span>`);
+        if (r.is_late) badges.push(`<span class="attn-badge attn-badge-late">${this.esc(I18N.tn('attendance.late_by', r.late_minutes))}</span>`);
+        if (r.is_early_leave) badges.push(`<span class="attn-badge attn-badge-early">${this.esc(I18N.tn('attendance.early_by', r.early_leave_minutes))}</span>`);
+        if (!badges.length) badges.push(`<span class="attn-badge attn-badge-ontime">${this.esc(I18N.t('attendance.on_time'))}</span>`);
+        return badges.join(' ');
+    },
+
     // Compact EN/RU/TK/TR switcher — used in the topbar (post-login shell)
     // and on the login/register screens (which render before App exists).
     langSwitcher() {

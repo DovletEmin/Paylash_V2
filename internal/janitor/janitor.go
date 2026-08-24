@@ -49,6 +49,11 @@ func runOnce(database *db.DB, minioClient *storage.MinioClient) {
 	if err := purgeOrphanedChatAttachments(database, minioClient); err != nil {
 		log.Printf("janitor: purge orphaned chat attachments: %v", err)
 	}
+	if n, err := database.FlagMissingCheckouts(); err != nil {
+		log.Printf("janitor: flag missing attendance checkouts: %v", err)
+	} else if n > 0 {
+		log.Printf("janitor: flagged %d attendance record(s) with a missing checkout for review", n)
+	}
 }
 
 // purgeOrphanedChatAttachments removes attachments a user uploaded but never

@@ -434,6 +434,41 @@ func (d *DB) Migrate() error {
 			delivered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			PRIMARY KEY (message_id, user_id)
 		)`,
+
+		// Attendance (check-in/check-out): one row per employee per calendar
+		// work_date. expected_start_min/expected_end_min/grace_minutes are a
+		// SNAPSHOT of the company-wide schedule (see settings key
+		// 'attendance_schedule') taken at check-in time — stored as plain
+		// minutes-since-midnight rather than a SQL TIME column to sidestep
+		// lib/pq's TIME scanning quirks entirely. This means a later change to
+		// the schedule never silently rewrites whether a past day counts as
+		// "late" — late/early/worked-minutes are always computed from what was
+		// actually in effect that day. needs_review is set by the nightly
+		// janitor sweep for a record whose check_out_at is still NULL after its
+		// work_date has passed (see internal/janitor) — deliberately never
+		// auto-filled with a guessed checkout time; an admin must resolve it.
+		`CREATE TABLE IF NOT EXISTS attendance_records (
+			id                 SERIAL PRIMARY KEY,
+			user_id            INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			work_date          DATE NOT NULL,
+			check_in_at        TIMESTAMPTZ NOT NULL,
+			check_out_at       TIMESTAMPTZ,
+			expected_start_min INT NOT NULL,
+			expected_end_min   INT NOT NULL,
+			grace_minutes      INT NOT NULL DEFAULT 0,
+			-- Also snapshotted: whether work_date's weekday was a configured
+			-- workday at check-in time, so a later change to the schedule's
+			-- workday set can't retroactively brand a Saturday check-in "late".
+			is_workday         BOOLEAN NOT NULL DEFAULT TRUE,
+			needs_review       BOOLEAN NOT NULL DEFAULT FALSE,
+			notes              VARCHAR(500) NOT NULL DEFAULT '',
+			created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE(user_id, work_date)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_attendance_records_user ON attendance_records(user_id, work_date DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_attendance_records_date ON attendance_records(work_date DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_attendance_records_needs_review ON attendance_records(needs_review) WHERE needs_review`,
 	}
 
 	for _, m := range migrations {

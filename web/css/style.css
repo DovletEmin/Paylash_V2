@@ -172,6 +172,7 @@ html.light .theme-icon-light{display:inline}
 .btn-danger{background:var(--danger);color:#fff;border-color:var(--danger)}
 .btn-danger:hover{opacity:.9}
 .btn-sm{padding:5px 10px;font-size:.78rem}
+.btn-lg{padding:11px 22px;font-size:.92rem}
 .btn-block{width:100%;justify-content:center}
 .btn-icon{padding:6px;border-radius:var(--r)}
 
@@ -530,6 +531,7 @@ select.form-control,select.form-input{appearance:none;cursor:pointer;background-
 .member-row{border-bottom:1px solid var(--border);font-size:.85rem}
 .member-row:last-child{border-bottom:none}
 .badge-admin{background:var(--purple-bg);color:var(--purple)}
+.badge-manager{background:var(--primary-bg);color:var(--primary)}
 .badge-user{background:var(--surface-3);color:var(--text-2)}
 
 /* ─── Share UI ─── */
@@ -1152,6 +1154,46 @@ html.light .modal{box-shadow:0 16px 48px rgba(0,0,0,.12)}
 html.light .toast{box-shadow:0 4px 16px rgba(0,0,0,.08)}
 html.light .upload-progress{box-shadow:0 8px 32px rgba(0,0,0,.1)}
 html.light .context-menu{box-shadow:0 8px 32px rgba(0,0,0,.1)}
+
+/* ─── Attendance ─── */
+.attn-widget{padding:10px 16px 14px;border-bottom:1px solid var(--border)}
+.attn-widget:empty{display:none}
+.attn-widget-btn{
+  width:100%;display:flex;align-items:center;justify-content:center;gap:6px;
+  padding:9px 12px;border-radius:var(--r);font-size:.82rem;font-weight:600;
+  border:1px solid transparent;transition:transform var(--tr-spring),box-shadow var(--tr-spring);
+}
+.attn-widget-btn:hover{transform:translateY(-1px);box-shadow:var(--shadow-sm)}
+.attn-widget-btn:disabled{opacity:.6;cursor:default;transform:none;box-shadow:none}
+.attn-widget-in{background:var(--success-bg);color:var(--success);border-color:var(--success)}
+.attn-widget-out{background:var(--danger-bg);color:var(--danger);border-color:var(--danger)}
+.attn-widget-status{font-size:.76rem;color:var(--text-2);margin-bottom:8px;text-align:center}
+.attn-widget-status.attn-widget-done{color:var(--success);font-weight:500}
+
+.attn-page{max-width:900px}
+.attn-today-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);padding:24px;margin-bottom:20px}
+.attn-today-inner{display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center}
+.attn-today-line{font-size:1.1rem;font-weight:600}
+.attn-today-line.attn-today-done{color:var(--success)}
+.attn-today-worked{font-size:.82rem;color:var(--text-2)}
+.attn-today-clock{font-size:2rem;font-weight:700;font-variant-numeric:tabular-nums;color:var(--text-2)}
+
+.attn-badge{display:inline-flex;align-items:center;font-size:.7rem;padding:2px 8px;border-radius:var(--r-full);font-weight:500;white-space:nowrap;margin:1px}
+.attn-badge-ontime{background:var(--success-bg);color:var(--success)}
+.attn-badge-late{background:var(--warn-bg);color:var(--warn)}
+.attn-badge-early{background:var(--accent-bg);color:var(--accent)}
+.attn-badge-review{background:var(--danger-bg);color:var(--danger)}
+
+.attn-filter-bar{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:20px}
+.attn-filter-bar label{display:flex;flex-direction:column;gap:5px;font-size:.78rem;font-weight:500;color:var(--text-2)}
+
+.attn-schedule-form{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:16px;margin-bottom:8px}
+.attn-schedule-form .form-group{margin-bottom:0}
+.attn-workdays{display:flex;gap:6px;flex-wrap:wrap}
+.attn-workday-chip{display:flex;align-items:center;gap:4px;font-size:.76rem;padding:5px 9px;border-radius:var(--r-full);border:1px solid var(--border);cursor:pointer;user-select:none}
+.attn-workday-chip input{accent-color:var(--primary)}
+
+.table-responsive{overflow-x:auto}
 
 /* ─── Utility ─── */
 .hidden{display:none!important}

@@ -312,7 +312,7 @@ func (h *Handler) AdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "nädogry maglumat")
 		return
 	}
-	if req.Role != "user" && req.Role != "admin" {
+	if req.Role != "user" && req.Role != "admin" && req.Role != "manager" {
 		req.Role = "user"
 	}
 	if target, _ := h.db.GetUserByID(id); target != nil {
@@ -595,8 +595,8 @@ func (h *Handler) AdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		FullName: strings.TrimSpace(req.FullName),
 	}
 	role := "user"
-	if req.Role == "admin" {
-		role = "admin"
+	if req.Role == "admin" || req.Role == "manager" {
+		role = req.Role
 	}
 	quotaBytes := models.DefaultQuotaBytes
 	if req.QuotaMB > 0 {
