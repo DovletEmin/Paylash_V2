@@ -1,4 +1,10 @@
 /* Paylash — Admin Panel */
+
+// How many absent-employee chips a day's detail renders before collapsing
+// the rest into a "+N more" count — enough to read at a glance on a normal
+// roster without a large one pushing the table off the screen.
+const ABSENT_CHIP_LIMIT = 30;
+
 const AdminPage = {
     currentTab: 'dashboard',
     _users: [],
@@ -155,107 +161,398 @@ const AdminPage = {
     },
 
     /* ── Attendance (admin: full control; manager: read-only) ── */
+    // Four sub-views sharing one selected month: a calendar (click a day to
+    // see exactly who came and who didn't), per-employee monthly analytics,
+    // a flat record list for arbitrary date ranges, and the schedule config
+    // (admin only). Sub-view + month live in AdminPage state so switching
+    // between them, or re-rendering after an edit, keeps your place.
+    _attnView: 'calendar',
+    _attnMonth: null,          // 'YYYY-MM'
+    _attnSelectedDate: null,   // 'YYYY-MM-DD' clicked in the calendar
+    _attnSortKey: 'name',
+    _attnSortDir: 1,
+    _attnRecords: {},          // id -> record, so an edit can find its row from any view
+    _attnExpandedUser: null,
+
+    attnMonth() {
+        if (!this._attnMonth) this._attnMonth = UI.dateDaysAgo(0).slice(0, 7);
+        return this._attnMonth;
+    },
+
+    // The inclusive range the CURRENT sub-view operates on: the selected
+    // month everywhere except the flat record list, which has its own
+    // explicit from/to filter.
+    attnRange() {
+        if (this._attnView === 'records') {
+            return { from: this._attnFrom || UI.dateDaysAgo(30), to: this._attnTo || UI.dateDaysAgo(0) };
+        }
+        return UI.monthBounds(this.attnMonth());
+    },
+
+    // Every list fetch feeds this so editAttendanceRecord can resolve a row
+    // by id no matter which view surfaced it (calendar day, employee
+    // expansion, or the flat list).
+    cacheAttnRecords(list) {
+        (list || []).forEach(r => { this._attnRecords[r.id] = r; });
+        return list || [];
+    },
+
     async renderAttendance(el) {
-        const isManager = this.isManager();
-        this._attnFrom = this._attnFrom || UI.dateDaysAgo(30);
-        this._attnTo = this._attnTo || UI.dateDaysAgo(0);
+        const isAdmin = !this.isManager();
+        const views = [
+            ['calendar', '📅', I18N.t('attendance.view_calendar')],
+            ['employees', '👥', I18N.t('attendance.view_employees')],
+            ['records', '📋', I18N.t('attendance.view_records')],
+            ...(isAdmin ? [['settings', '⚙️', I18N.t('attendance.view_settings')]] : []),
+        ];
+        el.innerHTML = `
+        <div class="admin-header"><h2>${I18N.t('admin.nav_attendance')}</h2><div style="display:flex;gap:8px">
+            <button class="btn btn-ghost btn-sm" onclick="AdminPage.exportAttendance()">${UI.icons.download} ${I18N.t('admin.export_csv')}</button>
+        </div></div>
+        <div class="attn-subnav">
+            ${views.map(([v, icon, label]) => `<button class="attn-subnav-btn ${this._attnView === v ? 'active' : ''}" onclick="AdminPage.setAttendanceView('${v}')">${icon} ${label}</button>`).join('')}
+        </div>
+        <div id="attn-view-body"><div class="admin-loading"><div class="spinner"></div></div></div>`;
+        await this.renderAttendanceView();
+    },
+
+    setAttendanceView(view) {
+        this._attnView = view;
+        this.switchTab('attendance');
+    },
+
+    shiftAttendanceMonth(delta) {
+        this._attnMonth = UI.shiftMonth(this.attnMonth(), delta);
+        this._attnSelectedDate = null;
+        this._attnExpandedUser = null;
+        this.renderAttendanceView();
+    },
+
+    // Shared month stepper above the calendar and employees views. Next is
+    // disabled past the current month — attendance can't exist in the future,
+    // and an empty grid for next March is just a dead end to back out of.
+    monthNavHTML() {
+        const ym = this.attnMonth();
+        const atCurrent = ym >= UI.dateDaysAgo(0).slice(0, 7);
+        return `<div class="attn-month-nav">
+            <button class="btn btn-ghost btn-sm" onclick="AdminPage.shiftAttendanceMonth(-1)" aria-label="${I18N.t('attendance.prev_month')}">‹</button>
+            <span class="attn-month-label">${UI.esc(UI.monthLabel(ym))}</span>
+            <button class="btn btn-ghost btn-sm" onclick="AdminPage.shiftAttendanceMonth(1)" ${atCurrent ? 'disabled' : ''} aria-label="${I18N.t('attendance.next_month')}">›</button>
+        </div>`;
+    },
+
+    async renderAttendanceView() {
+        const body = document.getElementById('attn-view-body');
+        if (!body) return;
+        body.innerHTML = '<div class="admin-loading"><div class="spinner"></div></div>';
         try {
-            const [list, analytics, sched] = await Promise.all([
-                API.admin.attendance.list(this._attnFrom, this._attnTo),
-                API.admin.attendance.analytics(this._attnFrom, this._attnTo),
-                API.admin.attendance.schedule.get(),
-            ]);
-            this._attnList = list || [];
-            this._attnSchedule = sched;
+            switch (this._attnView) {
+                case 'calendar':  await this.renderAttendanceCalendar(body); break;
+                case 'employees': await this.renderAttendanceEmployees(body); break;
+                case 'records':   await this.renderAttendanceRecords(body); break;
+                case 'settings':  await this.renderAttendanceSettings(body); break;
+            }
+        } catch (e) { body.innerHTML = `<p class="text-muted">${UI.esc(e.message)}</p>`; }
+    },
+
+    /* ── Calendar view ── */
+    async renderAttendanceCalendar(body) {
+        const { from, to } = this.attnRange();
+        const [analytics, summary, sched] = await Promise.all([
+            API.admin.attendance.analytics(from, to),
+            API.admin.attendance.summary(from, to),
+            API.admin.attendance.schedule.get(),
+        ]);
+        this._attnSummary = summary || [];
+        this._attnSchedule = sched;
+
+        body.innerHTML = `
+        ${this.monthNavHTML()}
+        <div class="stat-cards">
+            <div class="stat-card"><div class="stat-card-value">${analytics.total_records || 0}</div><div class="stat-card-label">${I18N.t('attendance.records_count')}</div></div>
+            <div class="stat-card"><div class="stat-card-value">${analytics.late_count || 0}</div><div class="stat-card-label">${I18N.t('attendance.late_count')}</div></div>
+            <div class="stat-card"><div class="stat-card-value">${analytics.early_leave_count || 0}</div><div class="stat-card-label">${I18N.t('attendance.early_count')}</div></div>
+            <div class="stat-card"><div class="stat-card-value">${analytics.needs_review_count || 0}</div><div class="stat-card-label">${I18N.t('attendance.needs_review')}</div></div>
+            <div class="stat-card"><div class="stat-card-value">${UI.formatAttnDuration(analytics.avg_worked_minutes)}</div><div class="stat-card-label">${I18N.t('attendance.avg_worked')}</div></div>
+        </div>
+        ${this.calendarGridHTML(analytics.daily || [], sched)}
+        <div id="attn-day-detail" class="attn-day-detail"></div>`;
+
+        if (this._attnSelectedDate) this.loadAttendanceDay(this._attnSelectedDate);
+    },
+
+    calendarGridHTML(daily, sched) {
+        const ym = this.attnMonth();
+        const [y, m] = ym.split('-').map(Number);
+        const byDate = {};
+        daily.forEach(p => { byDate[p.date] = p; });
+
+        const daysInMonth = new Date(y, m, 0).getDate();
+        // Monday-first grid (matches the schedule form's Mon-first day chips).
+        const leading = (new Date(y, m - 1, 1).getDay() + 6) % 7;
+        const today = UI.dateDaysAgo(0);
+        const dowLabels = ['attendance.day_mon', 'attendance.day_tue', 'attendance.day_wed', 'attendance.day_thu', 'attendance.day_fri', 'attendance.day_sat', 'attendance.day_sun'];
+
+        const cells = [];
+        for (let i = 0; i < leading; i++) cells.push('<div class="attn-cal-cell attn-cal-blank"></div>');
+        for (let d = 1; d <= daysInMonth; d++) {
+            const date = `${ym}-${String(d).padStart(2, '0')}`;
+            const p = byDate[date];
+            const isWorkday = (sched.workdays || []).includes(new Date(y, m - 1, d).getDay());
+            const isFuture = date > today;
+
+            // Priority: unresolved review > any lateness > everyone on time >
+            // a workday nobody logged at all > a scheduled day off.
+            let state = 'attn-cal-none';
+            if (p && p.needs_review_count) state = 'attn-cal-review';
+            else if (p && p.late_count) state = 'attn-cal-late';
+            else if (p && p.total) state = 'attn-cal-ok';
+            else if (!isWorkday) state = 'attn-cal-off';
+            else if (isFuture) state = 'attn-cal-future';
+            else state = 'attn-cal-absent';
+
+            // Cell colour follows the worst state only (review > late > ok),
+            // so the marks carry the counts the colour can't — early leaves
+            // in particular have no colour of their own but still matter.
+            const marks = [];
+            if (p && p.total) marks.push(`<span class="attn-cal-mark" title="${I18N.t('attendance.records_count')}">👤${p.total}</span>`);
+            if (p && p.late_count) marks.push(`<span class="attn-cal-mark attn-cal-mark-late" title="${I18N.t('attendance.late_count')}">⏰${p.late_count}</span>`);
+            if (p && p.early_leave_count) marks.push(`<span class="attn-cal-mark attn-cal-mark-early" title="${I18N.t('attendance.early_count')}">🚪${p.early_leave_count}</span>`);
+            if (p && p.needs_review_count) marks.push(`<span class="attn-cal-mark attn-cal-mark-review" title="${I18N.t('attendance.needs_review')}">⚠${p.needs_review_count}</span>`);
+
+            cells.push(`<button class="attn-cal-cell attn-cal-day ${state} ${this._attnSelectedDate === date ? 'attn-cal-selected' : ''} ${date === today ? 'attn-cal-today' : ''}"
+                onclick="AdminPage.selectAttendanceDay(${UI.escJson(date)})" aria-label="${UI.esc(date)}">
+                <span class="attn-cal-num">${d}</span>
+                <span class="attn-cal-marks">${marks.join('')}</span>
+            </button>`);
+        }
+        while (cells.length % 7 !== 0) cells.push('<div class="attn-cal-cell attn-cal-blank"></div>');
+
+        return `<div class="attn-calendar">
+            <div class="attn-cal-dow">${dowLabels.map(k => `<div>${I18N.t(k)}</div>`).join('')}</div>
+            <div class="attn-cal-grid">${cells.join('')}</div>
+            <div class="attn-cal-legend">
+                <span><i class="attn-cal-swatch attn-cal-ok"></i>${I18N.t('attendance.legend_ok')}</span>
+                <span><i class="attn-cal-swatch attn-cal-late"></i>${I18N.t('attendance.legend_late')}</span>
+                <span><i class="attn-cal-swatch attn-cal-review"></i>${I18N.t('attendance.legend_review')}</span>
+                <span><i class="attn-cal-swatch attn-cal-absent"></i>${I18N.t('attendance.legend_absent')}</span>
+                <span><i class="attn-cal-swatch attn-cal-off"></i>${I18N.t('attendance.legend_off')}</span>
+            </div>
+        </div>`;
+    },
+
+    selectAttendanceDay(date) {
+        this._attnSelectedDate = date;
+        document.querySelectorAll('.attn-cal-day').forEach(el => {
+            el.classList.toggle('attn-cal-selected', el.getAttribute('onclick').includes(`"${date}"`));
+        });
+        this.loadAttendanceDay(date);
+    },
+
+    async loadAttendanceDay(date) {
+        const el = document.getElementById('attn-day-detail');
+        if (!el) return;
+        el.innerHTML = '<div class="admin-loading"><div class="spinner"></div></div>';
+        try {
+            const list = this.cacheAttnRecords(await API.admin.attendance.list(date, date));
+            const isManager = this.isManager();
+            const present = new Set(list.map(r => r.user_id));
+            const sched = this._attnSchedule || { workdays: [] };
+            const [y, m, d] = date.split('-').map(Number);
+            const isWorkday = (sched.workdays || []).includes(new Date(y, m - 1, d).getDay());
+            // Only a past-or-present WORKDAY can meaningfully have absentees —
+            // nobody is "absent" on a scheduled day off or a date that hasn't
+            // happened yet.
+            const absent = (isWorkday && date <= UI.dateDaysAgo(0))
+                ? (this._attnSummary || []).filter(s => !present.has(s.user_id))
+                : [];
+
             el.innerHTML = `
-            <div class="admin-header"><h2>${I18N.t('admin.nav_attendance')}</h2><div style="display:flex;gap:8px">
-                <button class="btn btn-ghost btn-sm" onclick="AdminPage.exportAttendance()">${UI.icons.download} ${I18N.t('admin.export_csv')}</button>
-            </div></div>
-            <div class="attn-filter-bar">
-                <label>${I18N.t('attendance.filter_from')} <input type="date" id="attn-from" value="${UI.esc(this._attnFrom)}" class="form-control"></label>
-                <label>${I18N.t('attendance.filter_to')} <input type="date" id="attn-to" value="${UI.esc(this._attnTo)}" class="form-control"></label>
-                <button class="btn btn-sm btn-primary" onclick="AdminPage.applyAttendanceFilter()">${I18N.t('common.apply')}</button>
+            <div class="attn-day-head">
+                <h3>${UI.esc(new Date(y, m - 1, d).toLocaleDateString(I18N.dateLocale(), { weekday: 'long', day: 'numeric', month: 'long' }))}</h3>
+                <span class="text-muted">${I18N.tn('attendance.present_n', list.length, { count: list.length })}${absent.length ? ` · ${I18N.tn('attendance.absent_n', absent.length, { count: absent.length })}` : ''}</span>
             </div>
-            <div class="stat-cards">
-                <div class="stat-card"><div class="stat-card-value">${analytics.late_count || 0}</div><div class="stat-card-label">${I18N.t('attendance.late_count')}</div></div>
-                <div class="stat-card"><div class="stat-card-value">${analytics.early_leave_count || 0}</div><div class="stat-card-label">${I18N.t('attendance.early_count')}</div></div>
-                <div class="stat-card"><div class="stat-card-value">${analytics.needs_review_count || 0}</div><div class="stat-card-label">${I18N.t('attendance.needs_review')}</div></div>
-                <div class="stat-card"><div class="stat-card-value">${UI.formatAttnDuration(analytics.avg_worked_minutes)}</div><div class="stat-card-label">${I18N.t('attendance.avg_worked')}</div></div>
-            </div>
-            <h3 style="font-size:1rem;font-weight:600;margin:20px 0 12px">${I18N.t('attendance.trend_title')}</h3>
-            ${this.renderAttendanceTrend(analytics.daily)}
-            ${!isManager ? this.scheduleFormHTML(sched) : ''}
-            <h3 style="font-size:1rem;font-weight:600;margin:20px 0 12px">${I18N.t('attendance.employees_title')}</h3>
-            <div class="table-responsive">${this.attendanceTableHTML(this._attnList, isManager)}</div>`;
+            ${list.length ? `<div class="table-responsive">${this.attendanceTableHTML(list, isManager, true)}</div>`
+                          : `<p class="text-muted">${I18N.t('attendance.nobody_that_day')}</p>`}
+            ${absent.length ? `
+                <h4 class="attn-absent-title">${I18N.t('attendance.absent_title')}</h4>
+                <div class="attn-absent-list">
+                    ${absent.slice(0, ABSENT_CHIP_LIMIT).map(s => `<span class="attn-absent-chip">${UI.avatarHTML(s.user_id, s.full_name, 'share-user-avatar-sm', s.avatar_url)}${UI.esc(s.full_name || s.username)}</span>`).join('')}
+                    ${absent.length > ABSENT_CHIP_LIMIT ? `<span class="attn-absent-more">${I18N.tn('attendance.and_n_more', absent.length - ABSENT_CHIP_LIMIT, { count: absent.length - ABSENT_CHIP_LIMIT })}</span>` : ''}
+                </div>` : ''}`;
         } catch (e) { el.innerHTML = `<p class="text-muted">${UI.esc(e.message)}</p>`; }
     },
 
-    // Same self-contained SVG line-chart approach as renderTrendChart above,
-    // plotting late_count/total per day instead of storage bytes.
-    renderAttendanceTrend(points) {
-        if (!points || points.length < 2) {
-            return `<p class="text-muted" style="font-size:.82rem">${I18N.t('admin.trend_no_data')}</p>`;
-        }
-        const w = 600, h = 160, padL = 4, padR = 4, padT = 8, padB = 8;
-        const innerW = w - padL - padR, innerH = h - padT - padB;
-        const maxLate = Math.max(...points.map(p => p.late_count), 1);
-        const stepX = innerW / (points.length - 1);
-        const coords = points.map((p, i) => {
-            const x = padL + i * stepX;
-            const y = padT + innerH - (p.late_count / maxLate) * innerH;
-            return `${x.toFixed(1)},${y.toFixed(1)}`;
+    /* ── Per-employee monthly analytics ── */
+    async renderAttendanceEmployees(body) {
+        const { from, to } = this.attnRange();
+        const summary = await API.admin.attendance.summary(from, to);
+        this._attnSummary = summary || [];
+        body.innerHTML = `
+        ${this.monthNavHTML()}
+        <p class="text-muted" style="font-size:.8rem;margin-bottom:12px">${I18N.t('attendance.employees_hint', { n: (this._attnSummary[0] || {}).expected_workdays || 0 })}</p>
+        <div class="attn-filter-bar">
+            <input type="search" id="attn-emp-search" class="form-control" style="min-width:220px"
+                placeholder="${I18N.t('attendance.search_employee')}" value="${UI.esc(this._attnEmpQuery || '')}"
+                oninput="AdminPage.filterEmployeeSummary()">
+            <label class="attn-workday-chip"><input type="checkbox" id="attn-emp-onlypresent" ${this._attnEmpOnlyPresent ? 'checked' : ''} onchange="AdminPage.filterEmployeeSummary()"> ${I18N.t('attendance.only_present')}</label>
+        </div>
+        <div class="table-responsive">${this.employeeSummaryTableHTML(this._attnSummary)}</div>`;
+    },
+
+    // Re-renders only the table, so typing doesn't refetch the month or
+    // bounce focus out of the search box.
+    filterEmployeeSummary() {
+        this._attnEmpQuery = (document.getElementById('attn-emp-search') || {}).value || '';
+        this._attnEmpOnlyPresent = !!(document.getElementById('attn-emp-onlypresent') || {}).checked;
+        const wrap = document.querySelector('#attn-view-body .table-responsive');
+        if (wrap) wrap.innerHTML = this.employeeSummaryTableHTML(this._attnSummary);
+    },
+
+    sortAttendanceSummary(key) {
+        if (this._attnSortKey === key) this._attnSortDir *= -1;
+        else { this._attnSortKey = key; this._attnSortDir = key === 'name' ? 1 : -1; }
+        const body = document.querySelector('#attn-view-body .table-responsive');
+        if (body) body.innerHTML = this.employeeSummaryTableHTML(this._attnSummary);
+    },
+
+    employeeSummaryTableHTML(rows) {
+        if (!rows || !rows.length) return `<p class="text-muted text-center">${I18N.t('attendance.no_history')}</p>`;
+        const q = (this._attnEmpQuery || '').trim().toLowerCase();
+        let filtered = rows;
+        if (q) filtered = filtered.filter(s => (`${s.full_name || ''} ${s.username}`).toLowerCase().includes(q));
+        if (this._attnEmpOnlyPresent) filtered = filtered.filter(s => s.days_present > 0);
+        if (!filtered.length) return `<p class="text-muted text-center">${I18N.t('attendance.no_matching_employees')}</p>`;
+
+        const key = this._attnSortKey, dir = this._attnSortDir;
+        const sorted = filtered.slice().sort((a, b) => {
+            if (key === 'name') return dir * (a.full_name || a.username).localeCompare(b.full_name || b.username);
+            // -1 is the server's "no data" sentinel for avg check-in and
+            // punctuality; those rows sink to the bottom either direction
+            // rather than masquerading as the best or worst performer.
+            const av = a[key], bv = b[key];
+            if (av < 0 && bv < 0) return 0;
+            if (av < 0) return 1;
+            if (bv < 0) return -1;
+            return dir * (av - bv);
         });
-        const line = coords.join(' ');
-        const area = `${padL},${padT + innerH} ${line} ${padL + innerW},${padT + innerH}`;
-        const first = points[0], last = points[points.length - 1];
-        return `<div class="trend-chart-wrap">
-            <svg viewBox="0 0 ${w} ${h}" class="trend-chart" preserveAspectRatio="none" role="img" aria-label="${I18N.t('attendance.trend_title')}">
-                <polyline points="${area}" class="trend-chart-area"></polyline>
-                <polyline points="${line}" class="trend-chart-line"></polyline>
-            </svg>
-            <div class="trend-chart-labels">
-                <span>${UI.esc(first.date)} · ${I18N.tn('attendance.late_count_n', first.late_count, { count: first.late_count })}</span>
-                <span class="trend-chart-now">${I18N.t('admin.trend_now')}: ${I18N.tn('attendance.late_count_n', last.late_count, { count: last.late_count })}</span>
-                <span>${UI.esc(last.date)}</span>
-            </div>
-        </div>`;
+        const th = (k, label) => `<th class="attn-sortable ${key === k ? 'attn-sorted' : ''}" onclick="AdminPage.sortAttendanceSummary('${k}')">${label}${key === k ? (dir > 0 ? ' ▲' : ' ▼') : ''}</th>`;
+        return `<table class="admin-table attn-summary-table"><thead><tr>
+            ${th('name', I18N.t('attendance.col_employee'))}
+            ${th('days_present', I18N.t('attendance.col_days'))}
+            ${th('late_count', I18N.t('attendance.late_count'))}
+            ${th('total_late_minutes', I18N.t('attendance.col_late_total'))}
+            ${th('early_leave_count', I18N.t('attendance.early_count'))}
+            ${th('avg_check_in_minutes', I18N.t('attendance.col_avg_arrival'))}
+            ${th('avg_worked_minutes', I18N.t('attendance.avg_worked'))}
+            ${th('punctuality_pct', I18N.t('attendance.col_punctuality'))}
+        </tr></thead><tbody>
+            ${sorted.map(s => this.employeeSummaryRowHTML(s)).join('')}
+        </tbody></table>`;
+    },
+
+    employeeSummaryRowHTML(s) {
+        const pct = s.punctuality_pct;
+        const bar = pct < 0 ? `<span class="text-muted">—</span>` : `
+            <div class="attn-pct">
+                <div class="attn-pct-bar"><i style="width:${pct}%" class="${pct >= 90 ? 'attn-pct-good' : pct >= 70 ? 'attn-pct-mid' : 'attn-pct-bad'}"></i></div>
+                <span>${pct}%</span>
+            </div>`;
+        const absent = Math.max(0, s.expected_workdays - s.days_present);
+        return `<tr class="attn-emp-row" onclick="AdminPage.toggleAttendanceEmployee(${s.user_id})">
+            <td><div class="table-identity">${UI.avatarHTML(s.user_id, s.full_name, 'share-user-avatar-sm', s.avatar_url)}<span>${UI.esc(s.full_name || s.username)}</span>${s.needs_review_count ? `<span class="attn-badge attn-badge-review">${s.needs_review_count}</span>` : ''}</div></td>
+            <td>${s.days_present}<span class="text-muted">/${s.expected_workdays}</span>${absent ? ` <span class="attn-badge attn-badge-absent">−${absent}</span>` : ''}</td>
+            <td>${s.late_count || '—'}</td>
+            <td>${s.total_late_minutes ? UI.formatAttnDuration(s.total_late_minutes) : '—'}</td>
+            <td>${s.early_leave_count || '—'}</td>
+            <td>${UI.formatMinutesAsTime(s.avg_check_in_minutes)}</td>
+            <td>${s.days_present ? UI.formatAttnDuration(s.avg_worked_minutes) : '—'}</td>
+            <td>${bar}</td>
+        </tr>
+        <tr id="attn-emp-detail-${s.user_id}" class="attn-emp-detail hidden"><td colspan="8"></td></tr>`;
+    },
+
+    async toggleAttendanceEmployee(userId) {
+        const row = document.getElementById(`attn-emp-detail-${userId}`);
+        if (!row) return;
+        if (!row.classList.contains('hidden')) { row.classList.add('hidden'); this._attnExpandedUser = null; return; }
+        document.querySelectorAll('.attn-emp-detail').forEach(el => el.classList.add('hidden'));
+        row.classList.remove('hidden');
+        this._attnExpandedUser = userId;
+        const cell = row.firstElementChild;
+        cell.innerHTML = '<div class="admin-loading"><div class="spinner"></div></div>';
+        try {
+            const { from, to } = this.attnRange();
+            const list = this.cacheAttnRecords(await API.admin.attendance.list(from, to, userId));
+            cell.innerHTML = list.length
+                ? `<div class="table-responsive">${this.attendanceTableHTML(list, this.isManager(), false, true)}</div>`
+                : `<p class="text-muted">${I18N.t('attendance.no_history')}</p>`;
+        } catch (e) { cell.innerHTML = `<p class="text-muted">${UI.esc(e.message)}</p>`; }
+    },
+
+    /* ── Flat record list (arbitrary range) ── */
+    async renderAttendanceRecords(body) {
+        const { from, to } = this.attnRange();
+        this._attnFrom = from; this._attnTo = to;
+        const list = this.cacheAttnRecords(await API.admin.attendance.list(from, to));
+        body.innerHTML = `
+        <div class="attn-filter-bar">
+            <label>${I18N.t('attendance.filter_from')} <input type="date" id="attn-from" value="${UI.esc(from)}" class="form-control"></label>
+            <label>${I18N.t('attendance.filter_to')} <input type="date" id="attn-to" value="${UI.esc(to)}" class="form-control"></label>
+            <button class="btn btn-sm btn-primary" onclick="AdminPage.applyAttendanceFilter()">${I18N.t('common.apply')}</button>
+        </div>
+        <div class="table-responsive">${this.attendanceTableHTML(list, this.isManager())}</div>`;
+    },
+
+    /* ── Schedule settings (admin only) ── */
+    async renderAttendanceSettings(body) {
+        const sched = await API.admin.attendance.schedule.get();
+        this._attnSchedule = sched;
+        body.innerHTML = this.scheduleFormHTML(sched);
     },
 
     applyAttendanceFilter() {
         this._attnFrom = document.getElementById('attn-from').value || this._attnFrom;
         this._attnTo = document.getElementById('attn-to').value || this._attnTo;
-        this.switchTab('attendance');
+        this.renderAttendanceView();
     },
 
+    // Exports whatever the active sub-view is actually showing — the
+    // selected month, or the explicit range on the record list.
     exportAttendance() {
+        const { from, to } = this.attnRange();
         const a = document.createElement('a');
-        a.href = API.admin.attendance.exportURL(this._attnFrom, this._attnTo);
-        a.download = 'paylash-attendance.csv';
+        a.href = API.admin.attendance.exportURL(from, to);
+        a.download = `paylash-attendance-${from}_${to}.csv`;
         document.body.appendChild(a); a.click(); document.body.removeChild(a);
     },
 
-    attendanceTableHTML(list, isManager) {
+    // hideDate/hideName drop the column that's already implied by context —
+    // the date when the table IS one day's detail, the name when it's one
+    // employee's expanded row.
+    attendanceTableHTML(list, isManager, hideDate, hideName) {
         if (!list.length) return `<p class="text-muted text-center">${I18N.t('attendance.no_history')}</p>`;
         return `<table class="admin-table"><thead><tr>
-            <th>${I18N.t('attendance.col_date')}</th><th>${I18N.t('admin.col_name')}</th>
+            ${hideDate ? '' : `<th>${I18N.t('attendance.col_date')}</th>`}
+            ${hideName ? '' : `<th>${I18N.t('attendance.col_employee')}</th>`}
             <th>${I18N.t('attendance.col_check_in')}</th><th>${I18N.t('attendance.col_check_out')}</th>
             <th>${I18N.t('attendance.col_worked')}</th><th>${I18N.t('attendance.col_status')}</th>
             ${!isManager ? `<th>${I18N.t('admin.col_actions')}</th>` : ''}
         </tr></thead><tbody>
             ${list.map(r => `<tr>
-                <td>${UI.esc(r.work_date)}</td>
-                <td><div class="table-identity">${UI.avatarHTML(r.user_id, r.full_name, 'share-user-avatar-sm', r.avatar_url)}<span>${UI.esc(r.full_name || r.username)}</span></div></td>
+                ${hideDate ? '' : `<td>${UI.esc(r.work_date)}</td>`}
+                ${hideName ? '' : `<td><div class="table-identity">${UI.avatarHTML(r.user_id, r.full_name, 'share-user-avatar-sm', r.avatar_url)}<span>${UI.esc(r.full_name || r.username)}</span></div></td>`}
                 <td>${UI.formatTime(r.check_in_at)}</td>
                 <td>${r.check_out_at ? UI.formatTime(r.check_out_at) : '—'}</td>
                 <td>${r.check_out_at ? UI.formatAttnDuration(r.worked_minutes) : '—'}</td>
                 <td>${UI.attendanceStatusBadges(r)}</td>
-                ${!isManager ? `<td><button class="btn btn-sm btn-ghost" onclick="AdminPage.editAttendanceRecord(${r.id})" title="${I18N.t('common.edit')}" aria-label="${I18N.t('common.edit')}">✏️</button></td>` : ''}
+                ${!isManager ? `<td><button class="btn btn-sm btn-ghost" onclick="event.stopPropagation();AdminPage.editAttendanceRecord(${r.id})" title="${I18N.t('common.edit')}" aria-label="${I18N.t('common.edit')}">✏️</button></td>` : ''}
             </tr>`).join('')}
         </tbody></table>`;
     },
 
     editAttendanceRecord(id) {
-        const r = (this._attnList || []).find(x => x.id === id);
+        const r = this._attnRecords[id];
         if (!r) return;
         const toInput = (iso) => iso ? new Date(iso).toISOString().slice(0, 16) : '';
         UI.showModal(I18N.t('attendance.edit_title'), `
@@ -274,7 +571,7 @@ const AdminPage = {
             await API.admin.attendance.update(id, new Date(inVal).toISOString(), outVal ? new Date(outVal).toISOString() : null, notes);
             UI.closeModal();
             UI.toast(I18N.t('admin.updated'), 'success');
-            this.switchTab('attendance');
+            this.renderAttendanceView();
         } catch (e) { UI.toast(e.message, 'error'); }
     },
 
@@ -285,7 +582,8 @@ const AdminPage = {
             [4, I18N.t('attendance.day_thu')], [5, I18N.t('attendance.day_fri')], [6, I18N.t('attendance.day_sat')], [0, I18N.t('attendance.day_sun')],
         ];
         return `
-        <h3 style="font-size:1rem;font-weight:600;margin:20px 0 12px">${I18N.t('attendance.schedule_title')}</h3>
+        <h3 style="font-size:1rem;font-weight:600;margin:0 0 12px">${I18N.t('attendance.schedule_title')}</h3>
+        <p class="text-muted" style="font-size:.8rem;margin-bottom:12px">${I18N.t('attendance.schedule_hint')}</p>
         <div class="attn-schedule-form">
             <div class="form-group"><label>${I18N.t('attendance.expected_start')}</label><input type="time" id="attn-sched-start" class="form-control" value="${toHHMM(s.start_min)}"></div>
             <div class="form-group"><label>${I18N.t('attendance.expected_end')}</label><input type="time" id="attn-sched-end" class="form-control" value="${toHHMM(s.end_min)}"></div>

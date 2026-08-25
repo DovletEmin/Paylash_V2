@@ -388,6 +388,34 @@ const UI = {
         return I18N.t('attendance.duration_short', { h, m });
     },
 
+    // Minutes-since-midnight (the form AttendanceEmployeeSummary reports an
+    // average arrival time in) rendered as a plain HH:MM clock. -1 is the
+    // server's "no records to average" sentinel.
+    formatMinutesAsTime(min) {
+        if (min === undefined || min === null || min < 0) return '—';
+        return `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+    },
+
+    // ── Month helpers (attendance calendar) ──
+    // A month is passed around as 'YYYY-MM'; these convert to/from the
+    // inclusive 'YYYY-MM-DD' range the attendance API takes.
+    monthBounds(ym) {
+        const [y, m] = ym.split('-').map(Number);
+        const last = new Date(y, m, 0).getDate(); // day 0 of next month = last of this one
+        return { from: `${ym}-01`, to: `${ym}-${String(last).padStart(2, '0')}` };
+    },
+
+    shiftMonth(ym, delta) {
+        const [y, m] = ym.split('-').map(Number);
+        const d = new Date(y, m - 1 + delta, 1);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    },
+
+    monthLabel(ym) {
+        const [y, m] = ym.split('-').map(Number);
+        return new Date(y, m - 1, 1).toLocaleDateString(I18N.dateLocale(), { month: 'long', year: 'numeric' });
+    },
+
     // Status pills for one attendance record — needs_review takes priority
     // (an admin must resolve it before the day counts as settled), then
     // late/early (can both apply to the same day), falling back to a plain

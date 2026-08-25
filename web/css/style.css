@@ -1186,6 +1186,9 @@ html.light .context-menu{box-shadow:0 8px 32px rgba(0,0,0,.1)}
 
 .attn-filter-bar{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:20px}
 .attn-filter-bar label{display:flex;flex-direction:column;gap:5px;font-size:.78rem;font-weight:500;color:var(--text-2)}
+/* A checkbox chip is a label too, and the column direction above would
+   otherwise stack its box on top of its text. */
+.attn-filter-bar .attn-workday-chip{flex-direction:row;align-items:center;height:34px}
 
 .attn-schedule-form{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:16px;margin-bottom:8px}
 .attn-schedule-form .form-group{margin-bottom:0}
@@ -1194,6 +1197,96 @@ html.light .context-menu{box-shadow:0 8px 32px rgba(0,0,0,.1)}
 .attn-workday-chip input{accent-color:var(--primary)}
 
 .table-responsive{overflow-x:auto}
+
+/* Attendance sub-navigation + month stepper */
+.attn-subnav{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:18px;border-bottom:1px solid var(--border);padding-bottom:10px}
+.attn-subnav-btn{
+  display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:var(--r);
+  font-size:.82rem;font-weight:500;color:var(--text-2);border:1px solid transparent;transition:background var(--tr),color var(--tr);
+}
+.attn-subnav-btn:hover{background:var(--surface-2);color:var(--text)}
+.attn-subnav-btn.active{background:var(--primary-bg);color:var(--primary);border-color:var(--primary)}
+.attn-month-nav{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+/* ::first-letter, not text-transform:capitalize — a localized month string
+   like "июль 2026 г." must become "Июль 2026 г.", and capitalize would
+   also uppercase the trailing "г." into "Г.". */
+.attn-month-label{font-size:1rem;font-weight:600;min-width:180px;text-align:center}
+.attn-month-label::first-letter{text-transform:uppercase}
+.attn-month-nav .btn:disabled{opacity:.35;cursor:default}
+
+/* Month calendar */
+.attn-calendar{margin-bottom:8px}
+.attn-cal-dow,.attn-cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.attn-cal-dow{margin-bottom:6px}
+.attn-cal-dow div{font-size:.7rem;font-weight:600;color:var(--text-3);text-transform:uppercase;letter-spacing:.04em;text-align:center}
+.attn-cal-cell{min-height:72px;border-radius:var(--r);border:1px solid var(--border)}
+.attn-cal-blank{border-color:transparent;background:none}
+.attn-cal-day{
+  display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:6px 7px;
+  background:var(--surface);text-align:left;transition:transform var(--tr-spring),box-shadow var(--tr-spring),border-color var(--tr);
+}
+.attn-cal-day:hover{transform:translateY(-2px);box-shadow:var(--shadow-sm);border-color:var(--border-2)}
+.attn-cal-num{font-size:.82rem;font-weight:600;font-variant-numeric:tabular-nums;color:var(--text-2)}
+.attn-cal-marks{display:flex;flex-direction:column;gap:2px}
+.attn-cal-mark{font-size:.68rem;color:var(--text-2);white-space:nowrap}
+.attn-cal-mark-late{color:var(--warn)}
+.attn-cal-mark-early{color:var(--accent)}
+.attn-cal-mark-review{color:var(--danger)}
+.attn-cal-ok{background:var(--success-bg);border-color:rgba(34,197,94,.35)}
+.attn-cal-ok .attn-cal-num{color:var(--success)}
+.attn-cal-late{background:var(--warn-bg);border-color:rgba(234,179,8,.4)}
+.attn-cal-late .attn-cal-num{color:var(--warn)}
+.attn-cal-review{background:var(--danger-bg);border-color:rgba(239,68,68,.45)}
+.attn-cal-review .attn-cal-num{color:var(--danger)}
+/* A scheduled day off is filled and quiet; a workday nobody logged is an
+   open dashed outline — the two must not read the same, since one is
+   expected and the other is the thing a manager needs to notice. */
+.attn-cal-off{background:var(--surface-2);border-color:transparent}
+.attn-cal-off .attn-cal-num,.attn-cal-future .attn-cal-num{color:var(--text-3)}
+.attn-cal-future{background:none;border-style:dashed;border-color:var(--border)}
+.attn-cal-absent{background:none;border-style:dashed;border-color:var(--border-2)}
+.attn-cal-absent .attn-cal-num{color:var(--text-2)}
+.attn-cal-today{box-shadow:inset 0 0 0 1px var(--primary)}
+.attn-cal-selected{border-color:var(--primary);box-shadow:0 0 0 2px var(--primary-bg),var(--shadow-sm)}
+.attn-cal-legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;font-size:.72rem;color:var(--text-3)}
+.attn-cal-legend span{display:inline-flex;align-items:center;gap:5px}
+/* The cell tints are deliberately faint at full size; at 11px they'd read
+   as five identical grey squares, so the legend uses solid hues instead. */
+.attn-cal-swatch{width:11px;height:11px;border-radius:3px;border:1px solid var(--border);display:inline-block;flex:none}
+.attn-cal-legend .attn-cal-ok{background:var(--success);border-color:var(--success)}
+.attn-cal-legend .attn-cal-late{background:var(--warn);border-color:var(--warn)}
+.attn-cal-legend .attn-cal-review{background:var(--danger);border-color:var(--danger)}
+.attn-cal-legend .attn-cal-absent{background:none;border-style:dashed;border-color:var(--border-2)}
+.attn-cal-legend .attn-cal-off{background:var(--surface-3);border-color:var(--surface-3)}
+
+/* Day detail under the calendar */
+.attn-day-detail:not(:empty){margin-top:20px;padding-top:18px;border-top:1px solid var(--border)}
+.attn-day-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.attn-day-head h3{font-size:1rem;font-weight:600}
+.attn-day-head h3::first-letter{text-transform:uppercase}
+.attn-day-head span{font-size:.8rem}
+.attn-absent-title{font-size:.85rem;font-weight:600;margin:16px 0 8px;color:var(--text-2)}
+.attn-absent-list{display:flex;flex-wrap:wrap;gap:6px}
+.attn-absent-chip{
+  display:inline-flex;align-items:center;gap:6px;padding:4px 10px 4px 4px;border-radius:var(--r-full);
+  background:var(--surface-2);font-size:.78rem;color:var(--text-2);
+}
+.attn-absent-more{display:inline-flex;align-items:center;font-size:.78rem;color:var(--text-3);padding:4px 6px}
+
+/* Per-employee monthly analytics */
+.attn-sortable{cursor:pointer;user-select:none;white-space:nowrap}
+.attn-sortable:hover{color:var(--text)}
+.attn-sorted{color:var(--primary)}
+.attn-summary-table td{font-variant-numeric:tabular-nums}
+.attn-emp-row{cursor:pointer}
+.attn-emp-detail>td{padding:0 10px 12px;background:var(--bg-subtle)}
+.attn-badge-absent{background:var(--danger-bg);color:var(--danger);font-size:.68rem;padding:1px 6px;border-radius:var(--r-full);font-weight:500}
+.attn-pct{display:flex;align-items:center;gap:7px}
+.attn-pct-bar{flex:1;min-width:46px;height:5px;border-radius:3px;background:var(--surface-3);overflow:hidden}
+.attn-pct-bar i{display:block;height:100%;border-radius:3px}
+.attn-pct-good{background:var(--success)}
+.attn-pct-mid{background:var(--warn)}
+.attn-pct-bad{background:var(--danger)}
 
 /* ─── Utility ─── */
 .hidden{display:none!important}
@@ -1241,4 +1334,12 @@ html.light .context-menu{box-shadow:0 8px 32px rgba(0,0,0,.1)}
   .files-toolbar-right{flex-wrap:wrap;row-gap:8px}
   .search-box,.search-box input{width:100%!important}
   .files-toolbar-select{font-size:.76rem;padding:5px 24px 5px 8px}
+  /* A 7-column month grid is the one layout that can't drop columns — keep
+     all seven and shrink the cells instead, hiding the per-day count chips
+     (the colour still carries the day's state) so the digits stay legible. */
+  .attn-cal-cell{min-height:44px}
+  .attn-cal-day{padding:4px;align-items:center}
+  .attn-cal-marks{display:none}
+  .attn-cal-dow,.attn-cal-grid{gap:3px}
+  .attn-month-label{min-width:0;flex:1;font-size:.9rem}
 }

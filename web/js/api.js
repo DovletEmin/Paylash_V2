@@ -354,6 +354,10 @@ const API = {
                 const qs = new URLSearchParams(); if (from) qs.set('from', from); if (to) qs.set('to', to);
                 return API._request('GET', `/api/admin/attendance/analytics?${qs}`);
             },
+            summary(from, to) {
+                const qs = new URLSearchParams(); if (from) qs.set('from', from); if (to) qs.set('to', to);
+                return API._request('GET', `/api/admin/attendance/summary?${qs}`);
+            },
             exportURL(from, to) {
                 const qs = new URLSearchParams(); if (from) qs.set('from', from); if (to) qs.set('to', to);
                 return `/api/admin/attendance/export?${qs}`;

@@ -228,6 +228,7 @@ func (s *Server) routes(webFS embed.FS) {
 	// the one write action (correcting a record) stays AdminMiddleware-only.
 	s.mux.Handle("GET /api/admin/attendance", auth(ManagerOrAdminMiddleware(http.HandlerFunc(h.AdminListAttendance))))
 	s.mux.Handle("GET /api/admin/attendance/analytics", auth(ManagerOrAdminMiddleware(http.HandlerFunc(h.AdminAttendanceAnalytics))))
+	s.mux.Handle("GET /api/admin/attendance/summary", auth(ManagerOrAdminMiddleware(http.HandlerFunc(h.AdminAttendanceSummary))))
 	s.mux.Handle("GET /api/admin/attendance/export", auth(ManagerOrAdminMiddleware(http.HandlerFunc(h.AdminExportAttendance))))
 	s.mux.Handle("GET /api/admin/attendance/schedule", auth(ManagerOrAdminMiddleware(http.HandlerFunc(h.AdminGetAttendanceSchedule))))
 	s.mux.Handle("PATCH /api/admin/attendance/schedule", auth(AdminMiddleware(http.HandlerFunc(h.AdminSetAttendanceSchedule))))

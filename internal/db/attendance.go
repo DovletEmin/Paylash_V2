@@ -71,15 +71,29 @@ func computeAttendanceStatus(r *models.AttendanceRecord) {
 	if !r.IsWorkday {
 		return
 	}
-	dayStart := time.Date(r.CheckInAt.Year(), r.CheckInAt.Month(), r.CheckInAt.Day(), 0, 0, 0, 0, r.CheckInAt.Location())
+	// Anchor to midnight in the SERVER's local zone (set via TZ — see the
+	// app service in docker-compose.yml), NOT in whatever zone the timestamp
+	// happens to carry. A timestamptz read back from Postgres arrives in the
+	// connection's zone, which is UTC by default: taking its raw date/hour
+	// parts would measure a 09:00 start against UTC midnight, so in a UTC+5
+	// office every arrival would be judged against 14:00 local.
+	checkIn := r.CheckInAt.In(time.Local)
+	dayStart := time.Date(checkIn.Year(), checkIn.Month(), checkIn.Day(), 0, 0, 0, 0, time.Local)
 	expectedStart := dayStart.Add(time.Duration(r.ExpectedStartMin) * time.Minute)
 	graceDeadline := expectedStart.Add(time.Duration(r.GraceMinutes) * time.Minute)
-	if r.CheckInAt.After(graceDeadline) {
+	if checkIn.After(graceDeadline) {
 		r.IsLate = true
-		r.LateMinutes = int(r.CheckInAt.Sub(expectedStart).Minutes())
+		r.LateMinutes = int(checkIn.Sub(expectedStart).Minutes())
 	}
 	if r.CheckOutAt != nil {
+		// Clamped at zero: a check-out stamped fractionally BEFORE its
+		// check-in is possible if the host clock steps backwards between the
+		// two requests (observed in a container during testing), and a
+		// negative "worked" duration would render as nonsense like "-1h 30m".
 		r.WorkedMinutes = int(r.CheckOutAt.Sub(r.CheckInAt).Minutes())
+		if r.WorkedMinutes < 0 {
+			r.WorkedMinutes = 0
+		}
 		expectedEnd := dayStart.Add(time.Duration(r.ExpectedEndMin) * time.Minute)
 		if r.CheckOutAt.Before(expectedEnd) {
 			r.IsEarlyLeave = true
@@ -249,11 +263,159 @@ func (d *DB) GetAttendanceAnalytics(from, to string) (*models.AttendanceAnalytic
 		if r.IsLate {
 			a.Daily[idx].LateCount++
 		}
+		if r.IsEarlyLeave {
+			a.Daily[idx].EarlyLeaveCount++
+		}
+		if r.NeedsReview {
+			a.Daily[idx].NeedsReviewCount++
+		}
 	}
 	if workedCount > 0 {
 		a.AvgWorkedMinutes = totalWorked / workedCount
 	}
 	return a, rows.Err()
+}
+
+// CountExpectedWorkdays counts days in [from, to] (inclusive, YYYY-MM-DD)
+// whose weekday is in sched's workday set. Uses the CURRENT schedule
+// rather than each record's snapshot on purpose: this answers "how many
+// days SHOULD someone have come this month", which is a property of the
+// range, not of records that may not exist (an absent employee has no
+// snapshot to read).
+func CountExpectedWorkdays(sched models.AttendanceSchedule, from, to string) int {
+	start, err := time.Parse("2006-01-02", from)
+	if err != nil {
+		return 0
+	}
+	end, err := time.Parse("2006-01-02", to)
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
+		if isScheduledWorkday(sched, d.Weekday()) {
+			n++
+		}
+	}
+	return n
+}
+
+// GetAttendanceEmployeeSummaries aggregates [from, to] per employee for the
+// monthly analytics table. LEFT JOIN from users (not from records) so an
+// employee who never checked in still comes back as an all-zero row — that
+// absence is the single most useful thing this table shows. Aggregation
+// happens in Go via computeAttendanceStatus for the same reason
+// GetAttendanceAnalytics does it: one definition of "late", never two.
+func (d *DB) GetAttendanceEmployeeSummaries(from, to string) ([]models.AttendanceEmployeeSummary, error) {
+	sched, err := d.GetAttendanceSchedule()
+	if err != nil {
+		return nil, err
+	}
+	expected := CountExpectedWorkdays(sched, from, to)
+
+	rows, err := d.Query(
+		`SELECT u.id, u.username, COALESCE(u.display_name, u.username, ''), u.avatar_url,
+		        a.work_date::text, a.check_in_at, a.check_out_at,
+		        a.expected_start_min, a.expected_end_min, a.grace_minutes, a.is_workday, a.needs_review
+		 FROM users u
+		 LEFT JOIN attendance_records a
+		   ON a.user_id = u.id AND a.work_date BETWEEN $1 AND $2
+		 ORDER BY u.username, a.work_date`,
+		from, to,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []models.AttendanceEmployeeSummary
+	byUser := make(map[int]int) // user id -> index into list
+	checkInTotals := make(map[int]int)
+	checkInCounts := make(map[int]int)
+	workedCounts := make(map[int]int)
+
+	for rows.Next() {
+		var uid int
+		var username, displayName, avatarURL string
+		var workDate sql.NullString
+		var checkIn, checkOut sql.NullTime
+		var startMin, endMin, grace sql.NullInt64
+		var isWorkday, needsReview sql.NullBool
+		if err := rows.Scan(&uid, &username, &displayName, &avatarURL,
+			&workDate, &checkIn, &checkOut, &startMin, &endMin, &grace, &isWorkday, &needsReview); err != nil {
+			return nil, err
+		}
+
+		idx, ok := byUser[uid]
+		if !ok {
+			idx = len(list)
+			byUser[uid] = idx
+			list = append(list, models.AttendanceEmployeeSummary{
+				UserID: uid, Username: username, DisplayName: displayName, AvatarURL: avatarURL,
+				ExpectedWorkdays: expected, AvgCheckInMinutes: -1, PunctualityPct: -1,
+			})
+		}
+		if !workDate.Valid || !checkIn.Valid {
+			continue // employee with no records in range — the all-zero row above is the answer
+		}
+
+		rec := models.AttendanceRecord{
+			WorkDate:         workDate.String,
+			CheckInAt:        checkIn.Time,
+			ExpectedStartMin: int(startMin.Int64),
+			ExpectedEndMin:   int(endMin.Int64),
+			GraceMinutes:     int(grace.Int64),
+			IsWorkday:        isWorkday.Bool,
+			NeedsReview:      needsReview.Bool,
+		}
+		if checkOut.Valid {
+			t := checkOut.Time
+			rec.CheckOutAt = &t
+		}
+		computeAttendanceStatus(&rec)
+
+		s := &list[idx]
+		s.DaysPresent++
+		if rec.IsLate {
+			s.LateCount++
+			s.TotalLateMinutes += rec.LateMinutes
+		}
+		if rec.IsEarlyLeave {
+			s.EarlyLeaveCount++
+			s.TotalEarlyMinutes += rec.EarlyLeaveMinutes
+		}
+		if rec.NeedsReview {
+			s.NeedsReviewCount++
+		}
+		if rec.WorkedMinutes > 0 {
+			s.TotalWorkedMinutes += rec.WorkedMinutes
+			workedCounts[uid]++
+		}
+		// Local zone for the same reason computeAttendanceStatus uses it —
+		// Hour()/Minute() are zone-dependent, and this average is meant to
+		// read as an office wall-clock time.
+		localIn := rec.CheckInAt.In(time.Local)
+		checkInTotals[uid] += localIn.Hour()*60 + localIn.Minute()
+		checkInCounts[uid]++
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	for i := range list {
+		uid := list[i].UserID
+		if n := workedCounts[uid]; n > 0 {
+			list[i].AvgWorkedMinutes = list[i].TotalWorkedMinutes / n
+		}
+		if n := checkInCounts[uid]; n > 0 {
+			list[i].AvgCheckInMinutes = checkInTotals[uid] / n
+		}
+		if list[i].DaysPresent > 0 {
+			onTime := list[i].DaysPresent - list[i].LateCount
+			list[i].PunctualityPct = onTime * 100 / list[i].DaysPresent
+		}
+	}
+	return list, nil
 }
 
 // UpdateAttendanceRecord is the admin-only correction path (e.g. resolving

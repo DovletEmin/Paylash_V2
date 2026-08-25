@@ -598,8 +598,45 @@ type AttendanceAnalytics struct {
 	Daily           []AttendanceDailyPoint  `json:"daily"`
 }
 
+// AttendanceDailyPoint is one calendar day's roll-up — feeds both the
+// late-arrivals trend chart and the month calendar grid, where each cell
+// needs enough to colour itself without a per-day round trip.
 type AttendanceDailyPoint struct {
-	Date      string `json:"date"`
-	LateCount int    `json:"late_count"`
-	Total     int    `json:"total"`
+	Date             string `json:"date"`
+	LateCount        int    `json:"late_count"`
+	EarlyLeaveCount  int    `json:"early_leave_count"`
+	NeedsReviewCount int    `json:"needs_review_count"`
+	Total            int    `json:"total"`
+}
+
+// AttendanceEmployeeSummary aggregates ONE employee over a date range —
+// backs the per-employee monthly analytics table. Employees with no
+// records at all in the range are still returned (all-zero), since "never
+// showed up this month" is exactly what that table exists to surface.
+type AttendanceEmployeeSummary struct {
+	UserID      int    `json:"user_id"`
+	Username    string `json:"username"`
+	DisplayName string `json:"full_name"`
+	AvatarURL   string `json:"avatar_url"`
+
+	DaysPresent int `json:"days_present"`
+	// ExpectedWorkdays counts days in the range whose weekday is in the
+	// CURRENT schedule's workday set — same for every employee, included
+	// per-row so the client can render "18/22" without recomputing it.
+	ExpectedWorkdays   int `json:"expected_workdays"`
+	LateCount          int `json:"late_count"`
+	TotalLateMinutes   int `json:"total_late_minutes"`
+	EarlyLeaveCount    int `json:"early_leave_count"`
+	TotalEarlyMinutes  int `json:"total_early_minutes"`
+	NeedsReviewCount   int `json:"needs_review_count"`
+	TotalWorkedMinutes int `json:"total_worked_minutes"`
+	AvgWorkedMinutes   int `json:"avg_worked_minutes"`
+	// AvgCheckInMinutes is the mean arrival time as minutes since midnight
+	// (e.g. 552 = 09:12) — separates "habitually five minutes late" from
+	// "on time except one disastrous morning", which a bare late count
+	// can't distinguish. -1 when there are no records to average.
+	AvgCheckInMinutes int `json:"avg_check_in_minutes"`
+	// PunctualityPct is on-time days as a percentage of days present
+	// (100 when present with zero late days, -1 when never present).
+	PunctualityPct int `json:"punctuality_pct"`
 }

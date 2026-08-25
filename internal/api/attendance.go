@@ -117,6 +117,23 @@ func (h *Handler) AdminAttendanceAnalytics(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, a)
 }
 
+// AdminAttendanceSummary returns one aggregated row per employee for the
+// range — backs the per-employee monthly analytics table. Read-only, so
+// ManagerOrAdminMiddleware gates it like the other listing endpoints.
+func (h *Handler) AdminAttendanceSummary(w http.ResponseWriter, r *http.Request) {
+	from, to, err := parseAttendanceRange(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry senä aralygy")
+		return
+	}
+	list, err := h.db.GetAttendanceEmployeeSummaries(from, to)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk ýüze çykdy")
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
 // AdminExportAttendance streams the same range AdminListAttendance would
 // return as CSV — same streaming-writer pattern as AdminExportAuditLog.
 func (h *Handler) AdminExportAttendance(w http.ResponseWriter, r *http.Request) {
