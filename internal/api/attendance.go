@@ -232,6 +232,14 @@ func (h *Handler) AdminSetAttendanceSchedule(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "nädogry rugsat wagty")
 		return
 	}
+	// At least one working day is required: GetAttendanceSchedule treats an
+	// empty set as "unset" and falls back to the Mon-Fri default, so saving
+	// zero days would appear to succeed and then silently read back as
+	// Mon-Fri — worse than refusing it.
+	if len(req.Workdays) == 0 {
+		writeError(w, http.StatusBadRequest, "azyndan bir iş güni saýlanmaly")
+		return
+	}
 	for _, wd := range req.Workdays {
 		if wd < 0 || wd > 6 {
 			writeError(w, http.StatusBadRequest, "nädogry iş güni")

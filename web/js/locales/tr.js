@@ -601,6 +601,7 @@ window.PAYLASH_LOCALE_TR = {
     'attendance.day_fri': 'Cum',
     'attendance.day_sat': 'Cmt',
     'attendance.day_sun': 'Paz',
+    'attendance.no_workdays_selected': 'En az bir çalışma günü seçin',
     'attendance.invalid_schedule': 'Programı kontrol edin — bitiş saati başlangıçtan sonra olmalı',
     'attendance.check_in_button': 'Giriş yap',
     'attendance.check_out_button': 'Çıkış yap',

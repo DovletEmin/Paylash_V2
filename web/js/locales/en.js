@@ -601,6 +601,7 @@ window.PAYLASH_LOCALE_EN = {
     'attendance.day_fri': 'Fri',
     'attendance.day_sat': 'Sat',
     'attendance.day_sun': 'Sun',
+    'attendance.no_workdays_selected': 'Select at least one working day',
     'attendance.invalid_schedule': 'Check the schedule — end time must be after start time',
     'attendance.check_in_button': 'Check in',
     'attendance.check_out_button': 'Check out',

@@ -321,7 +321,7 @@ const AdminPage = {
             if (p && p.needs_review_count) marks.push(`<span class="attn-cal-mark attn-cal-mark-review" title="${I18N.t('attendance.needs_review')}">⚠${p.needs_review_count}</span>`);
 
             cells.push(`<button class="attn-cal-cell attn-cal-day ${state} ${this._attnSelectedDate === date ? 'attn-cal-selected' : ''} ${date === today ? 'attn-cal-today' : ''}"
-                onclick="AdminPage.selectAttendanceDay(${UI.escJson(date)})" aria-label="${UI.esc(date)}">
+                data-date="${UI.esc(date)}" onclick="AdminPage.selectAttendanceDay(${UI.escJson(date)})" aria-label="${UI.esc(date)}">
                 <span class="attn-cal-num">${d}</span>
                 <span class="attn-cal-marks">${marks.join('')}</span>
             </button>`);
@@ -344,7 +344,7 @@ const AdminPage = {
     selectAttendanceDay(date) {
         this._attnSelectedDate = date;
         document.querySelectorAll('.attn-cal-day').forEach(el => {
-            el.classList.toggle('attn-cal-selected', el.getAttribute('onclick').includes(`"${date}"`));
+            el.classList.toggle('attn-cal-selected', el.dataset.date === date);
         });
         this.loadAttendanceDay(date);
     },
@@ -554,7 +554,7 @@ const AdminPage = {
     editAttendanceRecord(id) {
         const r = this._attnRecords[id];
         if (!r) return;
-        const toInput = (iso) => iso ? new Date(iso).toISOString().slice(0, 16) : '';
+        const toInput = (iso) => UI.toDatetimeLocalValue(iso);
         UI.showModal(I18N.t('attendance.edit_title'), `
             <div class="form-group"><label>${I18N.t('attendance.col_check_in')}</label><input type="datetime-local" id="attn-edit-in" class="form-control" value="${toInput(r.check_in_at)}"></div>
             <div class="form-group"><label>${I18N.t('attendance.col_check_out')}</label><input type="datetime-local" id="attn-edit-out" class="form-control" value="${toInput(r.check_out_at)}"></div>
@@ -601,6 +601,7 @@ const AdminPage = {
         const grace = parseInt(document.getElementById('attn-sched-grace').value, 10) || 0;
         const workdays = Array.from(document.querySelectorAll('.attn-workdays input:checked')).map(el => parseInt(el.value, 10));
         if (startMin === null || endMin === null || startMin >= endMin) { UI.toast(I18N.t('attendance.invalid_schedule'), 'error'); return; }
+        if (!workdays.length) { UI.toast(I18N.t('attendance.no_workdays_selected'), 'error'); return; }
         try {
             await API.admin.attendance.schedule.set({ start_min: startMin, end_min: endMin, grace_minutes: grace, workdays });
             UI.toast(I18N.t('admin.updated'), 'success');

@@ -445,9 +445,17 @@ func (d *DB) GetAttendanceRecordByID(id int) (*models.AttendanceRecord, error) {
 // this only raises a flag for an admin to resolve via UpdateAttendanceRecord.
 // Run nightly by internal/janitor.
 func (d *DB) FlagMissingCheckouts() (int, error) {
+	// "Today" comes from the APP's local zone, not Postgres's CURRENT_DATE:
+	// work_date is written from time.Now() here, so comparing it against a
+	// date the database computes in whatever zone its own config happens to
+	// use would disagree for a few hours around midnight whenever the two
+	// differ (an existing data volume keeps the timezone it was initialised
+	// with, regardless of what the container's TZ says today).
+	today := time.Now().Format("2006-01-02")
 	res, err := d.Exec(
 		`UPDATE attendance_records SET needs_review = TRUE, updated_at = NOW()
-		 WHERE check_out_at IS NULL AND needs_review = FALSE AND work_date < CURRENT_DATE`,
+		 WHERE check_out_at IS NULL AND needs_review = FALSE AND work_date < $1`,
+		today,
 	)
 	if err != nil {
 		return 0, err

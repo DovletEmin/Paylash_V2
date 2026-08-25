@@ -604,6 +604,7 @@ window.PAYLASH_LOCALE_TK = {
     'attendance.day_fri': 'Anna',
     'attendance.day_sat': 'Şen',
     'attendance.day_sun': 'Ýek',
+    'attendance.no_workdays_selected': 'Azyndan bir iş güni saýlaň',
     'attendance.invalid_schedule': 'Grafigi barlaň — gutarnykly wagt başlangyçdan soň bolmaly',
     'attendance.check_in_button': 'Gelendigimi belle',
     'attendance.check_out_button': 'Gidendigimi belle',

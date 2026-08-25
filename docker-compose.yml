@@ -33,11 +33,14 @@ services:
     container_name: paylash-db
     restart: unless-stopped
     environment:
-      # Same zone as the app: the janitor's missing-checkout sweep compares
-      # work_date against Postgres's CURRENT_DATE, so a mismatch between the
-      # two would make that comparison wrong for a few hours around midnight.
-      TZ: "${PAYLASH_TZ:-UTC}"
-      PGTZ: "${PAYLASH_TZ:-UTC}"
+      # Container clock/logs in the studio's zone, and psql inside the
+      # container reports local times. NOT load-bearing for attendance: the
+      # server's own `timezone` GUC is fixed at initdb time and stays UTC on
+      # an existing data volume regardless of this, so nothing in the app is
+      # allowed to depend on it — every date decision is made in Go (see
+      # FlagMissingCheckouts and computeAttendanceStatus).
+      TZ: "${PAYLASH_TZ:-Asia/Ashgabat}"
+      PGTZ: "${PAYLASH_TZ:-Asia/Ashgabat}"
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -113,7 +116,7 @@ services:
       # default UTC would judge a UTC+5 office's 09:00 arrival against 09:00
       # UTC — i.e. 14:00 local — so every lateness figure would be shifted by
       # the UTC offset. Go reads TZ for time.Local; tzdata is in the image.
-      TZ: "${PAYLASH_TZ:-UTC}"
+      TZ: "${PAYLASH_TZ:-Asia/Ashgabat}"
       PAYLASH_PORT: "${PAYLASH_PORT}"
       PAYLASH_DB_URL: "${PAYLASH_DB_URL}"
       PAYLASH_MINIO_ENDPOINT: "${PAYLASH_MINIO_ENDPOINT}"

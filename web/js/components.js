@@ -376,10 +376,26 @@ const UI = {
 
     // YYYY-MM-DD for "n days ago" (n=0 is today) — backs the default date
     // range on the attendance filter bar and personal history.
+    //
+    // Built from LOCAL date parts, not toISOString(): the latter is UTC, so
+    // east of Greenwich it returns yesterday's date for the first hours of
+    // every day (in UTC+5, from midnight until 05:00) — which would put the
+    // calendar on the wrong month and mis-mark "today" and "future".
     dateDaysAgo(n) {
         const d = new Date();
         d.setDate(d.getDate() - n);
-        return d.toISOString().slice(0, 10);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    },
+
+    // Formats an ISO instant for a <input type="datetime-local">, whose value
+    // is always LOCAL wall-clock time. toISOString() would hand it UTC, and
+    // since the browser parses the field back as local on save, every
+    // open-and-save would silently shift the record by the UTC offset.
+    toDatetimeLocalValue(iso) {
+        if (!iso) return '';
+        const d = new Date(iso);
+        const p = (n) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
     },
 
     formatAttnDuration(min) {

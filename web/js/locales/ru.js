@@ -609,6 +609,7 @@ window.PAYLASH_LOCALE_RU = {
     'attendance.day_fri': 'Пт',
     'attendance.day_sat': 'Сб',
     'attendance.day_sun': 'Вс',
+    'attendance.no_workdays_selected': 'Выберите хотя бы один рабочий день',
     'attendance.invalid_schedule': 'Проверьте график — время окончания должно быть позже начала',
     'attendance.check_in_button': 'Отметить приход',
     'attendance.check_out_button': 'Отметить уход',
