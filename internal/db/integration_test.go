@@ -175,3 +175,89 @@ func TestIntegrationBlockedUsersAreSymmetric(t *testing.T) {
 		t.Errorf("IsEitherBlocked(bob, alice) = false, want true (block must be checked symmetrically)")
 	}
 }
+
+// TestIntegrationAttendanceTrackingFilter is the one assertion that can only
+// be made against real SQL: that switching attendance_tracked off actually
+// removes an employee from every admin-facing query (listing, analytics,
+// per-employee summary) without touching the rows themselves, and that
+// switching it back on restores all three.
+func TestIntegrationAttendanceTrackingFilter(t *testing.T) {
+	database := connectTestDB(t)
+	user := createTestUser(t, database, "user")
+	sched, err := database.GetAttendanceSchedule()
+	if err != nil {
+		t.Fatalf("GetAttendanceSchedule: %v", err)
+	}
+
+	rec, err := database.CheckIn(user.ID, sched)
+	if err != nil {
+		t.Fatalf("CheckIn: %v", err)
+	}
+	today := rec.WorkDate
+
+	countsFor := func(when string) (records, analytics, summaries int) {
+		t.Helper()
+		list, err := database.ListAttendance(today, today, nil)
+		if err != nil {
+			t.Fatalf("%s ListAttendance: %v", when, err)
+		}
+		a, err := database.GetAttendanceAnalytics(today, today)
+		if err != nil {
+			t.Fatalf("%s GetAttendanceAnalytics: %v", when, err)
+		}
+		sums, err := database.GetAttendanceEmployeeSummaries(today, today)
+		if err != nil {
+			t.Fatalf("%s GetAttendanceEmployeeSummaries: %v", when, err)
+		}
+		for _, v := range list {
+			if v.UserID == user.ID {
+				records++
+			}
+		}
+		for _, s := range sums {
+			if s.UserID == user.ID {
+				summaries++
+			}
+		}
+		return records, a.TotalRecords, summaries
+	}
+
+	if r, _, s := countsFor("tracked"); r != 1 || s != 1 {
+		t.Fatalf("tracked employee: %d records, %d summary rows; want 1 and 1", r, s)
+	}
+	_, analyticsBefore, _ := countsFor("tracked")
+
+	if err := database.SetAttendanceTracked(user.ID, false); err != nil {
+		t.Fatalf("SetAttendanceTracked(false): %v", err)
+	}
+	r, analyticsAfter, s := countsFor("untracked")
+	if r != 0 || s != 0 {
+		t.Errorf("untracked employee still visible: %d records, %d summary rows; want 0 and 0", r, s)
+	}
+	if analyticsAfter != analyticsBefore-1 {
+		t.Errorf("analytics total = %d after untracking, want %d", analyticsAfter, analyticsBefore-1)
+	}
+	if tracked, err := database.IsAttendanceTracked(user.ID); err != nil || tracked {
+		t.Errorf("IsAttendanceTracked = %v, %v; want false, nil", tracked, err)
+	}
+
+	// The row itself must survive: this is a visibility switch, not a delete.
+	var stillThere int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM attendance_records WHERE user_id = $1`, user.ID).Scan(&stillThere); err != nil {
+		t.Fatalf("count records: %v", err)
+	}
+	if stillThere != 1 {
+		t.Errorf("untracking deleted history: %d records left, want 1", stillThere)
+	}
+	// ...and the employee still sees their own history.
+	if mine, err := database.ListMyAttendance(user.ID, today, today); err != nil || len(mine) != 1 {
+		t.Errorf("ListMyAttendance = %d rows, %v; want 1, nil", len(mine), err)
+	}
+
+	if err := database.SetAttendanceTracked(user.ID, true); err != nil {
+		t.Fatalf("SetAttendanceTracked(true): %v", err)
+	}
+	if r, _, s := countsFor("re-tracked"); r != 1 || s != 1 {
+		t.Errorf("re-tracked employee: %d records, %d summary rows; want 1 and 1", r, s)
+	}
+}

@@ -392,13 +392,18 @@ const App = {
         const u = this.user;
         const isAdmin = u && u.role === 'admin';
         const isManager = u && u.role === 'manager';
+        // An account an admin has taken off the clock gets neither the
+        // check-in widget nor the nav entry — see AttendanceWidget.tracked().
+        // The page itself still answers on a direct link, showing whatever
+        // history the account already built up.
+        const attnTracked = !u || u.attendance_tracked !== false;
         return `
         <div class="app-layout">
             <aside class="sidebar" id="sidebar">
                 <div class="sidebar-header">
                     <div class="sidebar-logo">${UI.icons.cloud} Paýlaş</div>
                 </div>
-                <div class="attn-widget" id="attendance-widget"></div>
+                ${attnTracked ? '<div class="attn-widget" id="attendance-widget"></div>' : ''}
                 <nav class="sidebar-nav">
                     <div class="sidebar-section">${I18N.t('app.nav_main')}</div>
                     <a class="nav-item ${page === 'files' ? 'active' : ''}" onclick="App.navigate('files')">
@@ -425,9 +430,10 @@ const App = {
                     <a class="nav-item ${page === 'trash' ? 'active' : ''}" onclick="App.navigate('trash')">
                         ${UI.icons.trash} <span>${I18N.t('app.nav_trash')}</span>
                     </a>
+                    ${attnTracked ? `
                     <a class="nav-item ${page === 'attendance' ? 'active' : ''}" onclick="App.navigate('attendance')">
                         🕐 <span>${I18N.t('app.nav_attendance')}</span>
-                    </a>
+                    </a>` : ''}
                     ${(isAdmin || isManager) ? `
                     <div class="sidebar-section">${I18N.t('app.nav_admin_section')}</div>
                     <a class="nav-item admin-item ${page === 'admin' ? 'active' : ''}" onclick="App.navigate('admin')">

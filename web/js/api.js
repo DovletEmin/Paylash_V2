@@ -369,6 +369,12 @@ const API = {
                 get() { return API._request('GET', '/api/admin/attendance/schedule'); },
                 set(sched) { return API._request('PATCH', '/api/admin/attendance/schedule', sched); },
             },
+            // Who takes part in the attendance system at all. Reading the
+            // roster is manager-readable; setTracked is admin-only server-side.
+            tracking: {
+                list() { return API._request('GET', '/api/admin/attendance/tracking'); },
+                set(userId, tracked) { return API._request('PATCH', `/api/admin/attendance/tracking/${userId}`, { tracked }); },
+            },
         },
         projects: {
             list() { return API._request('GET', '/api/admin/projects'); },

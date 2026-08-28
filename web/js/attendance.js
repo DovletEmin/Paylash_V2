@@ -9,14 +9,20 @@ const AttendanceWidget = {
     _today: null,
     _busy: false,
 
+    // An account an admin has taken off the clock (users.attendance_tracked)
+    // gets no widget at all — a check-in button the server would refuse is
+    // worse than no button. The server enforces it too; this is presentation.
+    tracked() { return !App.user || App.user.attendance_tracked !== false; },
+
     async init() {
+        if (!this.tracked()) { this._today = null; this.renderInto(); return; }
         try { this._today = await API.attendance.today(); } catch { this._today = null; }
         this.renderInto();
     },
 
     renderInto() {
         const el = document.getElementById('attendance-widget');
-        if (el) el.innerHTML = this.html();
+        if (el) el.innerHTML = this.tracked() ? this.html() : '';
     },
 
     html() {
@@ -81,6 +87,20 @@ const AttendancePage = {
     async load() {
         const todayCard = document.getElementById('attn-today-card');
         const histEl = document.getElementById('attn-history');
+        // Untracked: past records (if any) still belong to the person and
+        // stay readable — only the check-in controls go away.
+        if (!AttendanceWidget.tracked()) {
+            this.stopClock();
+            if (todayCard) todayCard.innerHTML = `<div class="attn-today-inner"><div class="attn-today-line attn-not-tracked">${I18N.t('attendance.not_tracked')}</div><div class="attn-today-worked">${I18N.t('attendance.not_tracked_hint')}</div></div>`;
+            try {
+                this._history = await API.attendance.myHistory(UI.dateDaysAgo(30)) || [];
+                this.renderSummary();
+                if (histEl) histEl.innerHTML = this.historyHTML();
+            } catch (e) {
+                if (histEl) histEl.innerHTML = `<div class="empty-state"><p>${UI.esc(e.message)}</p></div>`;
+            }
+            return;
+        }
         try {
             const [today, history] = await Promise.all([
                 API.attendance.today(),

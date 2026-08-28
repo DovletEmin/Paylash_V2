@@ -23,8 +23,17 @@ type User struct {
 	// OnboardingCompleted gates the first-login welcome tour — false only
 	// for accounts CreateUser inserted after the tour shipped; every
 	// pre-existing account was backfilled TRUE by the migration itself.
-	OnboardingCompleted bool      `json:"onboarding_completed"`
-	CreatedAt           time.Time `json:"created_at"`
+	OnboardingCompleted bool `json:"onboarding_completed"`
+	// AttendanceTracked is whether this account takes part in the
+	// check-in/check-out system at all. Admins can switch it off for people
+	// who simply don't clock in (the owner, an external contractor, a
+	// service account) — they then get no check-in widget, are refused by
+	// the check-in endpoints, and are left out of the "who was absent"
+	// analytics instead of showing up as absent every single working day.
+	// Defaults TRUE, including for every account that existed before the
+	// column did.
+	AttendanceTracked bool      `json:"attendance_tracked"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 // Project is an admin-created folder with an explicit member list (ACL).
@@ -639,4 +648,18 @@ type AttendanceEmployeeSummary struct {
 	// PunctualityPct is on-time days as a percentage of days present
 	// (100 when present with zero late days, -1 when never present).
 	PunctualityPct int `json:"punctuality_pct"`
+}
+
+// AttendanceTrackingEntry is one account on the admin's "who is on the
+// clock" list — the roster behind the include/exclude switches. RecordCount
+// is how many attendance records the account already has, so the admin can
+// see that excluding someone doesn't erase the history they built up.
+type AttendanceTrackingEntry struct {
+	UserID      int    `json:"user_id"`
+	Username    string `json:"username"`
+	DisplayName string `json:"full_name"`
+	AvatarURL   string `json:"avatar_url"`
+	Role        string `json:"role"`
+	Tracked     bool   `json:"tracked"`
+	RecordCount int    `json:"record_count"`
 }

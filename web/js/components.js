@@ -398,6 +398,16 @@ const UI = {
         return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
     },
 
+    // Splits "report.docx" into { base: 'report', ext: '.docx' }. A dot that
+    // starts the name (".gitignore"), ends it, or is absent means there is no
+    // extension — it's part of the name. Mirrors splitFileExt in
+    // internal/api/files.go, which enforces the same rule server-side.
+    splitExt(name) {
+        const i = (name || '').lastIndexOf('.');
+        if (i <= 0 || i === name.length - 1) return { base: name || '', ext: '' };
+        return { base: name.slice(0, i), ext: name.slice(i) };
+    },
+
     formatAttnDuration(min) {
         if (min === undefined || min === null) return '—';
         const h = Math.floor(min / 60), m = min % 60;

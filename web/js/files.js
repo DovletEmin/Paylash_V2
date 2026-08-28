@@ -928,14 +928,33 @@ const FilesPage = {
         document.body.appendChild(a); a.click(); document.body.removeChild(a);
     },
 
+    // Only the NAME is editable — the extension sits beside the field as a
+    // fixed suffix and is re-attached on save. It decides the icon, the
+    // preview, whether Collabora will open the file and what a download
+    // announces itself as, so a typo in ".docx" breaks the file rather than
+    // renaming it. The server enforces the same rule (keepFileExt in
+    // internal/api/files.go); this is what makes it visible.
     renameFile(item) {
-        UI.showModal(I18N.t('files.rename_file_title'), `<div class="form-group"><label>${I18N.t('common.new_name_label')}</label><input type="text" id="rename-input" value="${UI.esc(item.name)}" class="form-control"></div>`,
+        const { base, ext } = UI.splitExt(item.name);
+        UI.showModal(I18N.t('files.rename_file_title'), `
+            <div class="form-group">
+                <label>${I18N.t('common.new_name_label')}</label>
+                <div class="rename-field">
+                    <input type="text" id="rename-input" value="${UI.esc(base)}" class="form-control" data-ext="${UI.esc(ext)}">
+                    ${ext ? `<span class="rename-ext" title="${I18N.t('files.rename_ext_kept', { ext: UI.esc(ext) })}">${UI.esc(ext)}</span>` : ''}
+                </div>
+                ${ext ? `<p class="rename-hint">${I18N.t('files.rename_ext_kept', { ext: UI.esc(ext) })}</p>` : ''}
+            </div>`,
             `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="UI.busyClick(this,()=>FilesPage.doRenameFile(${item.id}))">${I18N.t('common.rename')}</button>`);
         setTimeout(() => { const i = document.getElementById('rename-input'); if (i) { i.focus(); i.select(); } }, 100);
     },
     async doRenameFile(id) {
-        const n = document.getElementById('rename-input').value.trim();
-        if (!n) { UI.toast(I18N.t('files.name_required'), 'error'); return; }
+        const input = document.getElementById('rename-input');
+        // Validate the BASE, not the joined name: with an extension attached
+        // an empty field would produce ".docx" and pass a bare !n check.
+        const base = input.value.trim();
+        if (!base) { UI.toast(I18N.t('files.name_required'), 'error'); return; }
+        const n = base + (input.dataset.ext || '');
         try { await API.files.rename(id, n); UI.closeModal(); UI.toast(I18N.t('files.rename_done'), 'success'); this.loadFiles(); } catch (e) { UI.toast(e.message, 'error'); }
     },
 

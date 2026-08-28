@@ -41,6 +41,41 @@ func uniqueFileName(store *db.DB, name string, ownerID int, scope string, folder
 	return fmt.Sprintf("%s (%d)%s", base, time.Now().Unix(), ext)
 }
 
+// splitFileExt splits "report.docx" into ("report", ".docx"). A dot that
+// starts the name (".gitignore"), ends it ("report.") or is absent yields an
+// empty extension — those are part of the name, not a type suffix.
+// filepath.Ext would call the whole of ".gitignore" the extension.
+func splitFileExt(name string) (base, ext string) {
+	i := strings.LastIndex(name, ".")
+	if i <= 0 || i == len(name)-1 {
+		return name, ""
+	}
+	return name[:i], name[i:]
+}
+
+// keepFileExt forces newName to end in oldName's extension. Renaming is for
+// the NAME — the extension decides the icon, the preview, whether Collabora
+// will open it and what MIME type a download announces, so letting a rename
+// change ".docx" to ".txt" silently breaks the file for everyone. The UI
+// doesn't even offer the extension for editing (see FilesPage.renameFile);
+// this is the enforcement behind it, for anything calling the API directly.
+//
+// A name that already carries the right extension is left alone; anything
+// else simply gets the original appended, which is what a file manager with
+// hidden extensions does — "report.pdf" typed over a .docx becomes
+// "report.pdf.docx" rather than losing a dotted part of a deliberate name
+// like "Смета 2.5".
+func keepFileExt(oldName, newName string) string {
+	_, oldExt := splitFileExt(oldName)
+	if oldExt == "" {
+		return newName
+	}
+	if _, newExt := splitFileExt(newName); strings.EqualFold(newExt, oldExt) {
+		return newName
+	}
+	return newName + oldExt
+}
+
 // intPtrEqual compares two nullable IDs (folder_id, project_id) for
 // equality, treating nil as its own distinct value rather than 0.
 func intPtrEqual(a, b *int) bool {
@@ -590,7 +625,7 @@ func (h *Handler) RenameFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	newName := strings.TrimSpace(req.Name)
+	newName := keepFileExt(f.Name, strings.TrimSpace(req.Name))
 	if newName != f.Name {
 		newName = uniqueFileName(h.db, newName, f.OwnerID, f.Scope, f.FolderID, f.ProjectID)
 	}

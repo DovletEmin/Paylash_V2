@@ -230,6 +230,8 @@ func (s *Server) routes(webFS embed.FS) {
 	s.mux.Handle("GET /api/admin/attendance/analytics", auth(ManagerOrAdminMiddleware(http.HandlerFunc(h.AdminAttendanceAnalytics))))
 	s.mux.Handle("GET /api/admin/attendance/summary", auth(ManagerOrAdminMiddleware(http.HandlerFunc(h.AdminAttendanceSummary))))
 	s.mux.Handle("GET /api/admin/attendance/export", auth(ManagerOrAdminMiddleware(http.HandlerFunc(h.AdminExportAttendance))))
+	s.mux.Handle("GET /api/admin/attendance/tracking", auth(ManagerOrAdminMiddleware(http.HandlerFunc(h.AdminListAttendanceTracking))))
+	s.mux.Handle("PATCH /api/admin/attendance/tracking/{id}", auth(AdminMiddleware(http.HandlerFunc(h.AdminSetAttendanceTracking))))
 	s.mux.Handle("GET /api/admin/attendance/schedule", auth(ManagerOrAdminMiddleware(http.HandlerFunc(h.AdminGetAttendanceSchedule))))
 	s.mux.Handle("PATCH /api/admin/attendance/schedule", auth(AdminMiddleware(http.HandlerFunc(h.AdminSetAttendanceSchedule))))
 	s.mux.Handle("PATCH /api/admin/attendance/{id}", auth(AdminMiddleware(http.HandlerFunc(h.AdminUpdateAttendanceRecord))))

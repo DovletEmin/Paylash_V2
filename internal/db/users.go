@@ -40,9 +40,9 @@ func (d *DB) CountAdmins() (int, error) {
 func (d *DB) GetUserByUsername(username string) (*models.User, error) {
 	u := &models.User{}
 	err := d.QueryRow(
-		`SELECT id, username, password_hash, display_name, role, quota_bytes, avatar_url, must_change_password, chat_notify_level, chat_notify_sound, onboarding_completed, created_at
+		`SELECT id, username, password_hash, display_name, role, quota_bytes, avatar_url, must_change_password, chat_notify_level, chat_notify_sound, onboarding_completed, attendance_tracked, created_at
 		 FROM users WHERE username = $1`, username,
-	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.QuotaBytes, &u.AvatarURL, &u.MustChangePassword, &u.ChatNotifyLevel, &u.ChatNotifySound, &u.OnboardingCompleted, &u.CreatedAt)
+	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.QuotaBytes, &u.AvatarURL, &u.MustChangePassword, &u.ChatNotifyLevel, &u.ChatNotifySound, &u.OnboardingCompleted, &u.AttendanceTracked, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -52,9 +52,9 @@ func (d *DB) GetUserByUsername(username string) (*models.User, error) {
 func (d *DB) GetUserByID(id int) (*models.User, error) {
 	u := &models.User{}
 	err := d.QueryRow(
-		`SELECT id, username, password_hash, display_name, role, quota_bytes, avatar_url, must_change_password, chat_notify_level, chat_notify_sound, onboarding_completed, created_at
+		`SELECT id, username, password_hash, display_name, role, quota_bytes, avatar_url, must_change_password, chat_notify_level, chat_notify_sound, onboarding_completed, attendance_tracked, created_at
 		 FROM users WHERE id = $1`, id,
-	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.QuotaBytes, &u.AvatarURL, &u.MustChangePassword, &u.ChatNotifyLevel, &u.ChatNotifySound, &u.OnboardingCompleted, &u.CreatedAt)
+	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.QuotaBytes, &u.AvatarURL, &u.MustChangePassword, &u.ChatNotifyLevel, &u.ChatNotifySound, &u.OnboardingCompleted, &u.AttendanceTracked, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -101,7 +101,7 @@ func (d *DB) SearchUsers(query string, limit int) ([]models.UserSearchResult, er
 
 func (d *DB) ListUsers(limit, offset int) ([]models.User, error) {
 	rows, err := d.Query(
-		`SELECT id, username, display_name, role, quota_bytes, avatar_url, must_change_password, chat_notify_level, chat_notify_sound, created_at
+		`SELECT id, username, display_name, role, quota_bytes, avatar_url, must_change_password, chat_notify_level, chat_notify_sound, attendance_tracked, created_at
 		 FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2`, limit, offset,
 	)
 	if err != nil {
@@ -111,7 +111,7 @@ func (d *DB) ListUsers(limit, offset int) ([]models.User, error) {
 	var users []models.User
 	for rows.Next() {
 		var u models.User
-		if err := rows.Scan(&u.ID, &u.Username, &u.DisplayName, &u.Role, &u.QuotaBytes, &u.AvatarURL, &u.MustChangePassword, &u.ChatNotifyLevel, &u.ChatNotifySound, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.DisplayName, &u.Role, &u.QuotaBytes, &u.AvatarURL, &u.MustChangePassword, &u.ChatNotifyLevel, &u.ChatNotifySound, &u.AttendanceTracked, &u.CreatedAt); err != nil {
 			return nil, err
 		}
 		users = append(users, u)

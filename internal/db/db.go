@@ -469,6 +469,16 @@ func (d *DB) Migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_attendance_records_user ON attendance_records(user_id, work_date DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_attendance_records_date ON attendance_records(work_date DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_attendance_records_needs_review ON attendance_records(needs_review) WHERE needs_review`,
+
+		// Opt-out switch for people who are simply not on the clock (the
+		// owner, a contractor, a service account). DEFAULT TRUE so every
+		// existing account keeps being tracked when this column lands — the
+		// safe direction, since a wrongly-tracked person is visible and
+		// fixable while a wrongly-untracked one silently vanishes from the
+		// absence analytics. Records already written for someone who is
+		// later untracked are kept: they happened, and deleting history to
+		// tidy up a report would be the worse surprise.
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS attendance_tracked BOOLEAN NOT NULL DEFAULT TRUE`,
 	}
 
 	for _, m := range migrations {

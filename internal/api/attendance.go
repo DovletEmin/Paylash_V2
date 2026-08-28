@@ -1,9 +1,10 @@
 package api
 
 import (
-	"encoding/csv"
+	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -17,6 +18,17 @@ import (
 // recorded.
 func (h *Handler) CheckIn(w http.ResponseWriter, r *http.Request) {
 	user := authutil.GetUser(r)
+	// The widget is hidden for an untracked account, but hiding a button is
+	// presentation, not enforcement — the endpoint refuses it too.
+	tracked, err := h.db.IsAttendanceTracked(user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk ýüze çykdy")
+		return
+	}
+	if !tracked {
+		writeError(w, http.StatusForbidden, "siz gelim-gidim hasabatyna goşulmaýarsyňyz")
+		return
+	}
 	sched, err := h.db.GetAttendanceSchedule()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "ýalňyşlyk ýüze çykdy")
@@ -32,7 +44,10 @@ func (h *Handler) CheckIn(w http.ResponseWriter, r *http.Request) {
 }
 
 // CheckOut records the caller's departure for today — same server-time-only
-// rule as CheckIn.
+// rule as CheckIn. Deliberately NOT gated on attendance_tracked: if someone
+// is taken off the clock mid-day they must still be able to close the record
+// they already opened, or it hangs open and the nightly sweep flags it for
+// review over an admin's own action.
 func (h *Handler) CheckOut(w http.ResponseWriter, r *http.Request) {
 	user := authutil.GetUser(r)
 	rec, err := h.db.CheckOut(user.ID)
@@ -134,39 +149,85 @@ func (h *Handler) AdminAttendanceSummary(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, list)
 }
 
-// AdminExportAttendance streams the same range AdminListAttendance would
-// return as CSV — same streaming-writer pattern as AdminExportAuditLog.
+// AdminExportAttendance returns the range as a formatted Excel workbook
+// (see attendance_report.go) rather than a CSV: the recipients open this in
+// Excel, and a CSV of RFC3339 timestamps was neither readable nor sortable
+// once it got there.
 func (h *Handler) AdminExportAttendance(w http.ResponseWriter, r *http.Request) {
 	from, to, err := parseAttendanceRange(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "nädogry senä aralygy")
 		return
 	}
-	list, err := h.db.ListAttendance(from, to, nil)
+	records, err := h.db.ListAttendance(from, to, nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk ýüze çykdy")
+		return
+	}
+	summaries, err := h.db.GetAttendanceEmployeeSummaries(from, to)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk ýüze çykdy")
+		return
+	}
+	sched, err := h.db.GetAttendanceSchedule()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "ýalňyşlyk ýüze çykdy")
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-	w.Header().Set("Content-Disposition", `attachment; filename="paylash-attendance.csv"`)
-	cw := csv.NewWriter(w)
-	cw.Write([]string{"date", "employee", "username", "check_in", "check_out", "late_minutes", "early_leave_minutes", "worked_minutes", "needs_review", "notes"})
-	for _, v := range list {
-		checkOut := ""
-		if v.CheckOutAt != nil {
-			checkOut = v.CheckOutAt.Format(time.RFC3339)
-		}
-		cw.Write([]string{
-			v.WorkDate, v.DisplayName, v.Username, v.CheckInAt.Format(time.RFC3339), checkOut,
-			strconv.Itoa(v.LateMinutes), strconv.Itoa(v.EarlyLeaveMinutes), strconv.Itoa(v.WorkedMinutes),
-			strconv.FormatBool(v.NeedsReview), v.Notes,
-		})
+	f, err := buildAttendanceWorkbook(from, to, sched, records, summaries)
+	if err != nil {
+		log.Printf("export attendance: build workbook: %v", err)
+		writeError(w, http.StatusInternalServerError, "hasabat döredip bolmady")
+		return
 	}
-	cw.Flush()
-	if err := cw.Error(); err != nil {
-		log.Printf("export attendance: %v", err)
+	defer f.Close()
+
+	// Cyrillic can't go in a bare filename= parameter, so send both: an
+	// ASCII fallback for anything old, and the RFC 5987 form every current
+	// browser actually uses.
+	name := fmt.Sprintf("Посещаемость %s — %s.xlsx", ruDate(from), ruDate(to))
+	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="attendance-%s_%s.xlsx"; filename*=UTF-8''%s`,
+		from, to, url.PathEscape(name)))
+	h.logAction(r, "attendance.export", "attendance", 0, "", map[string]any{"from": from, "to": to, "rows": len(records)})
+	if err := f.Write(w); err != nil {
+		log.Printf("export attendance: write: %v", err)
 	}
+}
+
+// AdminListAttendanceTracking / AdminSetAttendanceTracking manage which
+// accounts take part in the attendance system at all. Reading the roster is
+// ManagerOrAdmin (a manager should be able to tell "not tracked" apart from
+// "never came in"); changing it is admin-only.
+func (h *Handler) AdminListAttendanceTracking(w http.ResponseWriter, r *http.Request) {
+	list, err := h.db.ListAttendanceTracking()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk ýüze çykdy")
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+func (h *Handler) AdminSetAttendanceTracking(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry ID")
+		return
+	}
+	var req struct {
+		Tracked *bool `json:"tracked"`
+	}
+	if err := readJSON(r, &req); err != nil || req.Tracked == nil {
+		writeError(w, http.StatusBadRequest, "nädogry maglumat")
+		return
+	}
+	if err := h.db.SetAttendanceTracked(id, *req.Tracked); err != nil {
+		writeError(w, http.StatusNotFound, "ulanyjy tapylmady")
+		return
+	}
+	h.logAction(r, "attendance.tracking_update", "user", id, "", map[string]any{"tracked": *req.Tracked})
+	writeJSON(w, http.StatusOK, map[string]any{"user_id": id, "tracked": *req.Tracked})
 }
 
 // AdminUpdateAttendanceRecord is the admin-only correction path (fixing a

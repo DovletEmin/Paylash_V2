@@ -134,3 +134,48 @@ func TestCanEditFolderWith(t *testing.T) {
 		})
 	}
 }
+
+// Renaming must never change a file's extension: it drives the icon, the
+// preview, whether Collabora opens it, and the MIME type a download
+// announces. The UI doesn't offer the extension for editing at all — these
+// cover the server-side enforcement behind that.
+func TestKeepFileExt(t *testing.T) {
+	cases := []struct {
+		name, oldName, newName, want string
+	}{
+		{"plain rename keeps extension", "report.docx", "Отчёт за август", "Отчёт за август.docx"},
+		{"client sending the full name is left alone", "report.docx", "Отчёт.docx", "Отчёт.docx"},
+		{"extension casing is not a change", "report.DOCX", "Отчёт.docx", "Отчёт.docx"},
+		{"a different extension is appended, not swapped", "report.docx", "Отчёт.pdf", "Отчёт.pdf.docx"},
+		{"a dotted name keeps its dots and gains the extension", "smeta.xlsx", "Смета 2.5", "Смета 2.5.xlsx"},
+		{"extensionless file is renamed freely", "LICENSE", "ЛИЦЕНЗИЯ", "ЛИЦЕНЗИЯ"},
+		{"extensionless file can gain an extension", "LICENSE", "license.txt", "license.txt"},
+		{"a dotfile's leading dot is part of the name", ".gitignore", "ignore-rules", "ignore-rules"},
+		{"a trailing dot is not an extension", "report.", "Отчёт", "Отчёт"},
+		{"double extension keeps only the last part", "archive.tar.gz", "Архив", "Архив.gz"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := keepFileExt(c.oldName, c.newName); got != c.want {
+				t.Errorf("keepFileExt(%q, %q) = %q, want %q", c.oldName, c.newName, got, c.want)
+			}
+		})
+	}
+}
+
+func TestSplitFileExt(t *testing.T) {
+	cases := []struct{ in, base, ext string }{
+		{"report.docx", "report", ".docx"},
+		{"archive.tar.gz", "archive.tar", ".gz"},
+		{"LICENSE", "LICENSE", ""},
+		{".gitignore", ".gitignore", ""},
+		{"report.", "report.", ""},
+		{"", "", ""},
+	}
+	for _, c := range cases {
+		base, ext := splitFileExt(c.in)
+		if base != c.base || ext != c.ext {
+			t.Errorf("splitFileExt(%q) = (%q, %q), want (%q, %q)", c.in, base, ext, c.base, c.ext)
+		}
+	}
+}

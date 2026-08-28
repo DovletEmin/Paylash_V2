@@ -50,6 +50,10 @@ func isScheduledWorkday(s models.AttendanceSchedule, weekday time.Weekday) bool 
 
 const attendanceRecordCols = `id, user_id, work_date::text, check_in_at, check_out_at, expected_start_min, expected_end_min, grace_minutes, is_workday, needs_review, notes, created_at, updated_at`
 
+// Same column list qualified for queries that join users — every
+// admin-facing query does, to filter out accounts taken off the clock.
+const attendanceRecordColsA = `a.id, a.user_id, a.work_date::text, a.check_in_at, a.check_out_at, a.expected_start_min, a.expected_end_min, a.grace_minutes, a.is_workday, a.needs_review, a.notes, a.created_at, a.updated_at`
+
 func scanAttendanceRecord(row scanner) (*models.AttendanceRecord, error) {
 	var r models.AttendanceRecord
 	var checkOut sql.NullTime
@@ -182,14 +186,19 @@ func (d *DB) ListMyAttendance(userID int, from, to string) ([]models.AttendanceR
 	return list, rows.Err()
 }
 
-// ListAttendance returns every employee's records in [from, to], newest
-// first, joined with display info — backs the admin/manager table and CSV
-// export. userID narrows to one employee when non-nil.
+// ListAttendance returns every tracked employee's records in [from, to],
+// newest first, joined with display info — backs the admin/manager table
+// and the Excel export. userID narrows to one employee when non-nil.
+//
+// Records belonging to an untracked account are hidden rather than deleted:
+// switching that account back on brings its whole history back, and every
+// admin-facing view agrees on who is in the report. The employee still sees
+// their own history on their personal page (ListMyAttendance, unfiltered).
 func (d *DB) ListAttendance(from, to string, userID *int) ([]models.AttendanceView, error) {
 	query := `SELECT a.id, a.user_id, a.work_date::text, a.check_in_at, a.check_out_at, a.expected_start_min, a.expected_end_min, a.grace_minutes, a.is_workday, a.needs_review, a.notes, a.created_at, a.updated_at,
 	                  u.username, COALESCE(u.display_name, u.username, ''), u.avatar_url
 	           FROM attendance_records a JOIN users u ON u.id = a.user_id
-	           WHERE a.work_date BETWEEN $1 AND $2`
+	           WHERE u.attendance_tracked AND a.work_date BETWEEN $1 AND $2`
 	args := []any{from, to}
 	if userID != nil {
 		query += ` AND a.user_id = $3`
@@ -225,7 +234,11 @@ func (d *DB) ListAttendance(from, to string, userID *int) ([]models.AttendanceVi
 // than reimplemented in SQL, so the two can never disagree — fine at this
 // app's scale (one company's employees × workdays, never a huge row count).
 func (d *DB) GetAttendanceAnalytics(from, to string) (*models.AttendanceAnalytics, error) {
-	rows, err := d.Query(`SELECT `+attendanceRecordCols+` FROM attendance_records WHERE work_date BETWEEN $1 AND $2 ORDER BY work_date`, from, to)
+	rows, err := d.Query(
+		`SELECT `+attendanceRecordColsA+`
+		 FROM attendance_records a JOIN users u ON u.id = a.user_id
+		 WHERE u.attendance_tracked AND a.work_date BETWEEN $1 AND $2
+		 ORDER BY a.work_date`, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -313,6 +326,10 @@ func (d *DB) GetAttendanceEmployeeSummaries(from, to string) ([]models.Attendanc
 	}
 	expected := CountExpectedWorkdays(sched, from, to)
 
+	// Untracked accounts are excluded outright rather than returned with a
+	// zero row: this table's whole job is "who should have been here and
+	// wasn't", and someone deliberately taken off the clock would otherwise
+	// sit at the top of every absence list for the rest of time.
 	rows, err := d.Query(
 		`SELECT u.id, u.username, COALESCE(u.display_name, u.username, ''), u.avatar_url,
 		        a.work_date::text, a.check_in_at, a.check_out_at,
@@ -320,6 +337,7 @@ func (d *DB) GetAttendanceEmployeeSummaries(from, to string) ([]models.Attendanc
 		 FROM users u
 		 LEFT JOIN attendance_records a
 		   ON a.user_id = u.id AND a.work_date BETWEEN $1 AND $2
+		 WHERE u.attendance_tracked
 		 ORDER BY u.username, a.work_date`,
 		from, to,
 	)
@@ -462,4 +480,58 @@ func (d *DB) FlagMissingCheckouts() (int, error) {
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
+}
+
+// IsAttendanceTracked reports whether userID takes part in the
+// check-in/check-out system — the gate CheckIn/CheckOut consult so an
+// excluded account can't clock in even if it reaches the endpoint directly
+// (the widget is hidden client-side, which is presentation, not enforcement).
+func (d *DB) IsAttendanceTracked(userID int) (bool, error) {
+	var tracked bool
+	err := d.QueryRow(`SELECT attendance_tracked FROM users WHERE id = $1`, userID).Scan(&tracked)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return tracked, err
+}
+
+// ListAttendanceTracking returns every account with its tracked flag and
+// how many attendance records it already has — backs the admin's roster of
+// include/exclude switches.
+func (d *DB) ListAttendanceTracking() ([]models.AttendanceTrackingEntry, error) {
+	rows, err := d.Query(
+		`SELECT u.id, u.username, COALESCE(u.display_name, u.username, ''), u.avatar_url, u.role,
+		        u.attendance_tracked, COUNT(a.id)
+		 FROM users u
+		 LEFT JOIN attendance_records a ON a.user_id = u.id
+		 GROUP BY u.id, u.username, u.display_name, u.avatar_url, u.role, u.attendance_tracked
+		 ORDER BY u.attendance_tracked DESC, COALESCE(u.display_name, u.username)`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []models.AttendanceTrackingEntry
+	for rows.Next() {
+		var e models.AttendanceTrackingEntry
+		if err := rows.Scan(&e.UserID, &e.Username, &e.DisplayName, &e.AvatarURL, &e.Role, &e.Tracked, &e.RecordCount); err != nil {
+			return nil, err
+		}
+		list = append(list, e)
+	}
+	return list, rows.Err()
+}
+
+// SetAttendanceTracked switches one account in or out of the attendance
+// system. Existing records are deliberately left alone — see the column's
+// comment in db.go.
+func (d *DB) SetAttendanceTracked(userID int, tracked bool) error {
+	res, err := d.Exec(`UPDATE users SET attendance_tracked = $2 WHERE id = $1`, userID, tracked)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }

@@ -1288,6 +1288,40 @@ html.light .context-menu{box-shadow:0 8px 32px rgba(0,0,0,.1)}
 .attn-pct-mid{background:var(--warn)}
 .attn-pct-bad{background:var(--danger)}
 
+/* Tracking roster (admin → attendance → schedule tab). Rows are labels so
+   the whole strip is a hit target for its switch, not just the 34px box. */
+.attn-roster-list{
+  display:flex;flex-direction:column;border:1px solid var(--border);border-radius:var(--r);
+  background:var(--surface);overflow:hidden;max-width:720px;
+}
+.attn-roster-row{
+  display:flex;align-items:center;gap:10px;padding:9px 14px;cursor:pointer;
+  border-bottom:1px solid var(--border);font-size:.85rem;
+}
+.attn-roster-row:last-child{border-bottom:none}
+.attn-roster-row:hover{background:var(--surface-2)}
+.attn-roster-name{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.attn-roster-meta{flex:1;min-width:0;color:var(--text-3);font-size:.76rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.attn-roster-count{font-size:.78rem;color:var(--text-2);align-self:center;font-variant-numeric:tabular-nums}
+/* An excluded row is dimmed rather than hidden — the point of this list is
+   seeing who ISN'T being tracked as readily as who is. */
+.attn-roster-off{background:var(--bg-subtle)}
+.attn-roster-off .attn-roster-name{color:var(--text-3);font-weight:400}
+.attn-roster-off:hover{background:var(--surface-2)}
+.attn-roster-switch{width:34px;height:19px;flex:none;accent-color:var(--primary);cursor:pointer}
+.attn-not-tracked{color:var(--text-2);font-weight:500}
+
+/* Rename dialog: the extension is shown but not editable, so what you type
+   is only ever the name (see FilesPage.renameFile). */
+.rename-field{display:flex;align-items:stretch;gap:0}
+.rename-field .form-control{border-top-right-radius:0;border-bottom-right-radius:0;min-width:0;flex:1}
+.rename-ext{
+  display:flex;align-items:center;padding:0 11px;border:1px solid var(--border);border-left:none;
+  border-radius:0 var(--r) var(--r) 0;background:var(--surface-2);color:var(--text-3);
+  font-size:.85rem;font-family:var(--font-mono,monospace);white-space:nowrap;user-select:none;
+}
+.rename-hint{margin-top:6px;font-size:.74rem;color:var(--text-3)}
+
 /* ─── Utility ─── */
 .hidden{display:none!important}
 .flex{display:flex}

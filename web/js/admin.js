@@ -173,6 +173,8 @@ const AdminPage = {
     _attnSortDir: 1,
     _attnRecords: {},          // id -> record, so an edit can find its row from any view
     _attnExpandedUser: null,
+    _attnRoster: [],           // tracking roster (settings view)
+    _attnRosterQuery: '',
 
     attnMonth() {
         if (!this._attnMonth) this._attnMonth = UI.dateDaysAgo(0).slice(0, 7);
@@ -207,7 +209,7 @@ const AdminPage = {
         ];
         el.innerHTML = `
         <div class="admin-header"><h2>${I18N.t('admin.nav_attendance')}</h2><div style="display:flex;gap:8px">
-            <button class="btn btn-ghost btn-sm" onclick="AdminPage.exportAttendance()">${UI.icons.download} ${I18N.t('admin.export_csv')}</button>
+            <button class="btn btn-ghost btn-sm" onclick="AdminPage.exportAttendance()">${UI.icons.download} ${I18N.t('attendance.export_excel')}</button>
         </div></div>
         <div class="attn-subnav">
             ${views.map(([v, icon, label]) => `<button class="attn-subnav-btn ${this._attnView === v ? 'active' : ''}" onclick="AdminPage.setAttendanceView('${v}')">${icon} ${label}</button>`).join('')}
@@ -504,11 +506,82 @@ const AdminPage = {
         <div class="table-responsive">${this.attendanceTableHTML(list, this.isManager())}</div>`;
     },
 
-    /* ── Schedule settings (admin only) ── */
+    /* ── Schedule settings + tracking roster (admin only) ── */
     async renderAttendanceSettings(body) {
-        const sched = await API.admin.attendance.schedule.get();
+        const [sched, roster] = await Promise.all([
+            API.admin.attendance.schedule.get(),
+            API.admin.attendance.tracking.list(),
+        ]);
         this._attnSchedule = sched;
-        body.innerHTML = this.scheduleFormHTML(sched);
+        this._attnRoster = roster || [];
+        body.innerHTML = this.scheduleFormHTML(sched) + this.trackingSectionHTML();
+    },
+
+    // Who is on the clock at all. Switching someone off doesn't delete their
+    // records — it hides them from every admin view and stops counting the
+    // person as absent — so the row keeps showing the record count as proof
+    // that turning the switch back on restores the history.
+    trackingSectionHTML() {
+        const total = this._attnRoster.length;
+        const on = this._attnRoster.filter(e => e.tracked).length;
+        return `
+        <h3 style="font-size:1rem;font-weight:600;margin:26px 0 8px">${I18N.t('attendance.tracking_title')}</h3>
+        <p class="text-muted" style="font-size:.8rem;margin-bottom:12px">${I18N.t('attendance.tracking_hint')}</p>
+        <div class="attn-filter-bar" style="margin-bottom:12px">
+            <input type="search" id="attn-roster-search" class="form-control" style="min-width:220px"
+                placeholder="${I18N.t('attendance.search_employee')}" value="${UI.esc(this._attnRosterQuery || '')}"
+                oninput="AdminPage.filterTrackingRoster()">
+            <span class="attn-roster-count">${I18N.t('attendance.tracking_count', { on, total })}</span>
+        </div>
+        <div id="attn-roster-list" class="attn-roster-list">${this.trackingRosterHTML()}</div>`;
+    },
+
+    trackingRosterHTML() {
+        const q = (this._attnRosterQuery || '').trim().toLowerCase();
+        const rows = q
+            ? this._attnRoster.filter(e => (`${e.full_name || ''} ${e.username}`).toLowerCase().includes(q))
+            : this._attnRoster;
+        if (!rows.length) return `<p class="text-muted text-center">${I18N.t('attendance.no_matching_employees')}</p>`;
+        const roleLabel = { admin: I18N.t('app.role_admin'), manager: I18N.t('app.role_manager') };
+        return rows.map(e => `
+        <label class="attn-roster-row ${e.tracked ? '' : 'attn-roster-off'}">
+            ${UI.avatarHTML(e.user_id, e.full_name, 'share-user-avatar-sm', e.avatar_url)}
+            <span class="attn-roster-name">${UI.esc(e.full_name || e.username)}</span>
+            <span class="attn-roster-meta">@${UI.esc(e.username)}${roleLabel[e.role] ? ` · ${roleLabel[e.role]}` : ''}${e.record_count ? ` · ${I18N.tn('attendance.tracking_records_n', e.record_count, { count: e.record_count })}` : ''}</span>
+            <input type="checkbox" class="attn-roster-switch" ${e.tracked ? 'checked' : ''}
+                onchange="AdminPage.setAttendanceTracked(${e.user_id}, this.checked)"
+                aria-label="${I18N.t('attendance.tracking_title')}">
+        </label>`).join('');
+    },
+
+    // Re-renders only the list, so typing doesn't refetch the roster or
+    // bounce focus out of the search box (same reason filterEmployeeSummary
+    // does it this way).
+    filterTrackingRoster() {
+        this._attnRosterQuery = (document.getElementById('attn-roster-search') || {}).value || '';
+        const el = document.getElementById('attn-roster-list');
+        if (el) el.innerHTML = this.trackingRosterHTML();
+    },
+
+    async setAttendanceTracked(userId, tracked) {
+        const entry = (this._attnRoster || []).find(e => e.user_id === userId);
+        try {
+            await API.admin.attendance.tracking.set(userId, tracked);
+            if (entry) entry.tracked = tracked;
+            UI.toast(I18N.t(tracked ? 'attendance.tracking_on_toast' : 'attendance.tracking_off_toast'), 'success');
+        } catch (e) {
+            UI.toast(e.message, 'error');
+        }
+        // Re-render either way: on failure this snaps the switch back to what
+        // the server actually holds instead of leaving a lie on screen.
+        const el = document.getElementById('attn-roster-list');
+        if (el) el.innerHTML = this.trackingRosterHTML();
+        const count = document.querySelector('.attn-roster-count');
+        if (count) {
+            count.textContent = I18N.t('attendance.tracking_count', {
+                on: this._attnRoster.filter(e => e.tracked).length, total: this._attnRoster.length,
+            });
+        }
     },
 
     applyAttendanceFilter() {
@@ -523,7 +596,7 @@ const AdminPage = {
         const { from, to } = this.attnRange();
         const a = document.createElement('a');
         a.href = API.admin.attendance.exportURL(from, to);
-        a.download = `paylash-attendance-${from}_${to}.csv`;
+        a.download = `paylash-attendance-${from}_${to}.xlsx`;
         document.body.appendChild(a); a.click(); document.body.removeChild(a);
     },
 
