@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/url"
 	"strconv"
 	"time"
 
@@ -188,8 +187,7 @@ func (h *Handler) AdminExportAttendance(w http.ResponseWriter, r *http.Request) 
 	// browser actually uses.
 	name := fmt.Sprintf("Посещаемость %s — %s.xlsx", ruDate(from), ruDate(to))
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="attendance-%s_%s.xlsx"; filename*=UTF-8''%s`,
-		from, to, url.PathEscape(name)))
+	setContentDisposition(w, "attachment", name)
 	h.logAction(r, "attendance.export", "attendance", 0, "", map[string]any{"from": from, "to": to, "rows": len(records)})
 	if err := f.Write(w); err != nil {
 		log.Printf("export attendance: write: %v", err)

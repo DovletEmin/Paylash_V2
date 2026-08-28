@@ -1,7 +1,6 @@
 package api
 
 import (
-	"fmt"
 	"net/http"
 	"paylash/internal/authutil"
 	"strconv"
@@ -112,6 +111,6 @@ func (h *Handler) DownloadFileVersion(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", f.MimeType)
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, f.Name))
+	setContentDisposition(w, "attachment", f.Name)
 	http.ServeContent(w, r, f.Name, lastModified, obj)
 }

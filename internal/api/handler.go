@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"paylash/internal/authutil"
@@ -73,6 +74,53 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// setContentDisposition names a download correctly whatever the file is
+// called. A bare filename="…" parameter is ISO-8859-1 by RFC 6266, so the raw
+// UTF-8 bytes of a Cyrillic or Turkmen name are undefined there: browsers
+// variously guess right, show mojibake, or give up and save the file as
+// "download" — and this deployment names nearly everything in Russian or
+// Turkmen. An unescaped quote in the name breaks the header outright. So we
+// send both forms: an ASCII-only fallback for anything that ignores the
+// second, and the RFC 5987 filename* that every current browser prefers.
+func setContentDisposition(w http.ResponseWriter, disposition, name string) {
+	w.Header().Set("Content-Disposition",
+		fmt.Sprintf(`%s; filename="%s"; filename*=UTF-8''%s`, disposition, asciiFilename(name), rfc5987Escape(name)))
+}
+
+// asciiFilename replaces everything outside printable ASCII — and the quote
+// and backslash that would end the quoted string early — with an underscore.
+func asciiFilename(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		if r < 0x20 || r > 0x7e || r == '"' || r == '\\' {
+			b.WriteByte('_')
+			continue
+		}
+		b.WriteRune(r)
+	}
+	out := strings.TrimSpace(b.String())
+	if strings.Trim(out, "_.") == "" {
+		return "download" // a name with nothing ASCII in it at all
+	}
+	return out
+}
+
+// rfc5987Escape percent-encodes for an ext-value. Deliberately stricter than
+// url.PathEscape, which leaves ";" "," "=" and ":" alone — any of those would
+// terminate or corrupt the header parameter it sits in.
+func rfc5987Escape(s string) string {
+	var b strings.Builder
+	for _, c := range []byte(s) {
+		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+			c == '-' || c == '.' || c == '_' || c == '~' {
+			b.WriteByte(c)
+			continue
+		}
+		fmt.Fprintf(&b, "%%%02X", c)
+	}
+	return b.String()
 }
 
 // maxJSONBodyBytes caps every plain-JSON request body this app accepts —

@@ -472,7 +472,7 @@ func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`%s; filename="%s"`, disposition, f.Name))
+	setContentDisposition(w, disposition, f.Name)
 	// obj is an io.ReadSeeker backed by MinIO — ServeContent seeks/streams
 	// directly against it (Range requests included) instead of us buffering
 	// the whole object in the process' memory first.
@@ -1243,7 +1243,7 @@ func (h *Handler) ExportScope(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="paylash-%s.zip"`, sanitizeZipName(label)))
+	setContentDisposition(w, "attachment", "paylash-"+label+".zip")
 	zw := zip.NewWriter(w)
 	defer zw.Close()
 
@@ -1289,22 +1289,6 @@ func (h *Handler) ExportScope(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// sanitizeZipName strips characters that would break a Content-Disposition
-// filename or a filesystem path out of a zip name.
-func sanitizeZipName(s string) string {
-	s = strings.Map(func(r rune) rune {
-		switch r {
-		case '"', '\\', '/', '\n', '\r', 0:
-			return '_'
-		}
-		return r
-	}, s)
-	if s == "" {
-		return "export"
-	}
-	return s
-}
-
 func (h *Handler) DownloadFolder(w http.ResponseWriter, r *http.Request) {
 	user := authutil.GetUser(r)
 	id, err := strconv.Atoi(r.PathValue("id"))
@@ -1325,7 +1309,7 @@ func (h *Handler) DownloadFolder(w http.ResponseWriter, r *http.Request) {
 
 	zipName := folder.Name + ".zip"
 	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, zipName))
+	setContentDisposition(w, "attachment", zipName)
 
 	zw := zip.NewWriter(w)
 	defer zw.Close()

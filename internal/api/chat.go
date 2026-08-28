@@ -1278,7 +1278,7 @@ func (h *Handler) DownloadChatAttachment(w http.ResponseWriter, r *http.Request)
 	defer obj.Close()
 
 	w.Header().Set("Content-Type", att.ContentType)
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, att.FileName))
+	setContentDisposition(w, "attachment", att.FileName)
 	http.ServeContent(w, r, att.FileName, att.CreatedAt, obj)
 }
 

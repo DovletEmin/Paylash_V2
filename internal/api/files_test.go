@@ -2,7 +2,9 @@ package api
 
 import (
 	"errors"
+	"net/http/httptest"
 	"paylash/internal/models"
+	"strings"
 	"testing"
 )
 
@@ -177,5 +179,58 @@ func TestSplitFileExt(t *testing.T) {
 		if base != c.base || ext != c.ext {
 			t.Errorf("splitFileExt(%q) = (%q, %q), want (%q, %q)", c.in, base, ext, c.base, c.ext)
 		}
+	}
+}
+
+// Content-Disposition has to survive names this deployment actually uses:
+// Russian and Turkmen ones, which are the majority here. A bare filename="…"
+// is ISO-8859-1 by RFC 6266, so those need the RFC 5987 filename* form or the
+// browser saves them as mojibake — or as "download".
+func TestAsciiFilename(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"report.pdf", "report.pdf"},
+		{"Отчёт по проекту.xlsx", "_____ __ _______.xlsx"}, // one underscore per rune, extension preserved
+		{`quote".txt`, "quote_.txt"},
+		{`back\slash.txt`, "back_slash.txt"},
+		{"Отчёт", "download"}, // all underscores is useless; filename* still carries the real name
+		{"Смета.xlsx", "_____.xlsx"},
+		{"", "download"},
+		{"tab\there.txt", "tab_here.txt"},
+	}
+	for _, c := range cases {
+		if got := asciiFilename(c.in); got != c.want {
+			t.Errorf("asciiFilename(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestRFC5987Escape(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"report.pdf", "report.pdf"},
+		{"a b", "a%20b"},
+		// The characters url.PathEscape would have left alone, every one of
+		// which would corrupt the header parameter it sits in.
+		{"a;b,c=d:e", "a%3Bb%2Cc%3Dd%3Ae"},
+		{`a"b`, "a%22b"},
+		{"Отчёт", "%D0%9E%D1%82%D1%87%D1%91%D1%82"},
+	}
+	for _, c := range cases {
+		if got := rfc5987Escape(c.in); got != c.want {
+			t.Errorf("rfc5987Escape(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// A name that breaks out of the quoted string would let an attacker-controlled
+// filename append header parameters of their own.
+func TestSetContentDispositionIsUnbreakable(t *testing.T) {
+	rec := httptest.NewRecorder()
+	setContentDisposition(rec, "attachment", `evil"; filename="passwd`)
+	got := rec.Header().Get("Content-Disposition")
+	if strings.Count(got, `filename="`) != 1 {
+		t.Errorf("a quote in the name escaped the quoted string: %q", got)
+	}
+	if !strings.Contains(got, "filename*=UTF-8''") {
+		t.Errorf("missing RFC 5987 parameter: %q", got)
 	}
 }
