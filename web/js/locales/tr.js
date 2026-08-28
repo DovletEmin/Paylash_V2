@@ -15,6 +15,7 @@ window.PAYLASH_LOCALE_TR = {
     'common.undo': 'Geri al',
     'common.loading': 'Yükleniyor…',
     'common.error_generic': 'Bir hata oluştu',
+    'common.error_server': 'Sunucuya ulaşılamıyor ({status} hatası). Lütfen tekrar deneyin.',
     'common.error_short': 'Hata',
     'common.session_expired': 'Oturum süresi doldu',
     'common.upload_failed': 'Yüklenemedi',

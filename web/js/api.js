@@ -12,7 +12,16 @@ const API = {
             if (typeof App !== 'undefined') App.navigate('login');
             throw new Error(I18N.t('common.session_expired'));
         }
-        const data = await res.json();
+        // Not every response on this path is JSON: a 502/504 from Caddy while
+        // the app restarts, or anything else the reverse proxy answers by
+        // itself, arrives as HTML. Parsing that blindly used to throw a raw
+        // SyntaxError ("Unexpected token '<'"), which told the user nothing.
+        let data;
+        try {
+            data = await res.json();
+        } catch {
+            throw new Error(res.ok ? I18N.t('common.error_generic') : I18N.t('common.error_server', { status: res.status }));
+        }
         if (!res.ok) throw new Error(data.error || I18N.t('common.error_generic'));
         return data;
     },

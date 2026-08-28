@@ -18,6 +18,7 @@ window.PAYLASH_LOCALE_TK = {
     'common.undo': 'Yzyna al',
     'common.loading': 'Ýüklenýär…',
     'common.error_generic': 'Näsazlyk ýüze çykdy',
+    'common.error_server': 'Server elýeterli däl ({status} ýalňyşlyk). Täzeden synanyşyň.',
     'common.error_short': 'Ýalňyşlyk',
     'common.session_expired': 'Sessiýa gutardy',
     'common.upload_failed': 'Ýükläp bolmady',

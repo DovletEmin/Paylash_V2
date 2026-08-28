@@ -15,6 +15,7 @@ window.PAYLASH_LOCALE_EN = {
     'common.undo': 'Undo',
     'common.loading': 'Loading…',
     'common.error_generic': 'Something went wrong',
+    'common.error_server': 'The server is unavailable (error {status}). Please try again.',
     'common.error_short': 'Error',
     'common.session_expired': 'Session expired',
     'common.upload_failed': "Couldn't upload",

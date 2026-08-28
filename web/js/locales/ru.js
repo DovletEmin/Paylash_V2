@@ -15,6 +15,7 @@ window.PAYLASH_LOCALE_RU = {
     'common.undo': 'Отменить',
     'common.loading': 'Загрузка…',
     'common.error_generic': 'Произошла ошибка',
+    'common.error_server': 'Сервер недоступен (ошибка {status}). Попробуйте ещё раз.',
     'common.error_short': 'Ошибка',
     'common.session_expired': 'Сессия истекла',
     'common.upload_failed': 'Не удалось загрузить',

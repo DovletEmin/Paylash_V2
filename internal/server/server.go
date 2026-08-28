@@ -15,6 +15,7 @@ import (
 	"paylash/internal/db"
 	"paylash/internal/storage"
 	"paylash/internal/wopi"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -248,6 +249,18 @@ func (s *Server) routes(webFS embed.FS) {
 	}
 	fileServer := http.FileServer(http.FS(webSub))
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// An unmatched /api/ or /wopi/ path must NOT fall through to the SPA.
+		// It used to: a mistyped or removed endpoint answered 200 with
+		// index.html, so the client's res.ok was true and the failure only
+		// surfaced later as a JSON parse error on HTML — and the access log
+		// and metrics recorded a success. The same applied to the right path
+		// with the wrong method, which ServeMux also routes here.
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/wopi/") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{"error": "not found"})
+			return
+		}
 		// SPA: serve index.html for non-file paths
 		if r.URL.Path != "/" {
 			// Check if file exists
