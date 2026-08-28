@@ -34,12 +34,12 @@ type Config struct {
 
 func Load() *Config {
 	return &Config{
-		Port:          getEnvInt("PAYLASH_PORT", 8080),
-		DBURL:         getEnv("PAYLASH_DB_URL", "postgres://paylash:paylash_secret@localhost:5432/paylash?sslmode=disable"),
-		MinioEndpoint: getEnv("PAYLASH_MINIO_ENDPOINT", "localhost:9000"),
+		Port:           getEnvInt("PAYLASH_PORT", 8080),
+		DBURL:          getEnv("PAYLASH_DB_URL", "postgres://paylash:paylash_secret@localhost:5432/paylash?sslmode=disable"),
+		MinioEndpoint:  getEnv("PAYLASH_MINIO_ENDPOINT", "localhost:9000"),
 		MinioAccessKey: getEnv("PAYLASH_MINIO_ACCESS_KEY", "paylash"),
 		MinioSecretKey: getEnv("PAYLASH_MINIO_SECRET_KEY", "paylash_secret"),
-		MinioUseSSL:   getEnvBool("PAYLASH_MINIO_USE_SSL", false),
+		MinioUseSSL:    getEnvBool("PAYLASH_MINIO_USE_SSL", false),
 		// Host:port the BROWSER can reach MinIO's S3 API on directly, used only
 		// to sign presigned URLs for large resumable uploads (bulk bytes flow
 		// straight from the browser to MinIO, bypassing the app entirely). Empty

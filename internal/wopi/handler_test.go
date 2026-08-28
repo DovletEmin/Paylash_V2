@@ -9,11 +9,11 @@ import (
 
 func TestDerivePostMessageOrigin(t *testing.T) {
 	tests := []struct {
-		name        string
-		host        string
+		name           string
+		host           string
 		forwardedProto string
-		tls         bool
-		want        string
+		tls            bool
+		want           string
 	}{
 		{"behind Caddy over https, X-Forwarded-Proto set", "paylash.local", "https", false, "https://paylash.local"},
 		{"behind a proxy terminating http", "paylash.local", "http", false, "http://paylash.local"},

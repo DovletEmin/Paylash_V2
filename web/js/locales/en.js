@@ -209,7 +209,6 @@ window.PAYLASH_LOCALE_EN = {
     'files.file_create_failed': "Couldn't create file",
     'files.file_name_required': 'Enter a file name',
     'files.name_required': 'Enter a name',
-    'files.download_folder_title': 'Download folder',
     'files.folder_zip_preparing': 'Preparing "{name}.zip"…',
     'files.bulk_zip_preparing': 'Preparing your zip…',
     'files.export_scope': 'Export everything (zip)',
@@ -218,7 +217,6 @@ window.PAYLASH_LOCALE_EN = {
     // upload engine (upload.js)
     'upload.part_failed': 'Part {n} failed to upload (HTTP {status})',
     'upload.part_no_etag': 'Part {n}: no ETag received',
-    'upload.folder_progress': 'Uploading folder "{name}"…',
 
     // editor page (Collabora)
     'editor.back': '← Back',
@@ -379,7 +377,6 @@ window.PAYLASH_LOCALE_EN = {
     'shares.tab_by_me': 'My shares',
     'shares.empty_by_me': "You haven't shared any files yet",
     'shares.empty_with_me': "No one has shared any files with you yet",
-    'shares.recipients_count': { other: '{count} users' },
     'shares.back_to_users': 'Back to people',
     'shares.file_count': { other: '{count} files' },
     'shares.shared_with_count': 'Shared with {count} users',
@@ -543,9 +540,6 @@ window.PAYLASH_LOCALE_EN = {
     'admin.upload_cancel_confirm_title': 'Cancel upload',
     'admin.upload_cancel_confirm_body': '<p>Cancel this upload?</p>',
     'admin.upload_cancelled': 'Cancelled',
-    'admin.select_placeholder': 'Select…',
-    'admin.choose_project_hint': 'Select a project',
-    'admin.upload_file_button': 'Upload file',
 
     // attendance
     'attendance.filter_from': 'From',

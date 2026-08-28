@@ -58,12 +58,6 @@ func (l *keyedLimiter) record(key string) {
 	l.events[key] = append(l.prune(key), time.Now())
 }
 
-func (l *keyedLimiter) reset(key string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	delete(l.events, key)
-}
-
 // prune must be called with mu held. It drops attempts outside the window,
 // stores the survivors back into the map, and returns them.
 func (l *keyedLimiter) prune(key string) []time.Time {

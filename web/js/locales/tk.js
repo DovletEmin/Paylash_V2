@@ -212,7 +212,6 @@ window.PAYLASH_LOCALE_TK = {
     'files.file_create_failed': 'Faýl döredip bolmady',
     'files.file_name_required': 'Faýl adyny giriziň',
     'files.name_required': 'At giriziň',
-    'files.download_folder_title': 'Papkany ýükläp al',
     'files.folder_zip_preparing': '"{name}.zip" taýýarlanýar…',
     'files.bulk_zip_preparing': 'Arhiw taýýarlanýar…',
     'files.export_scope': 'Hemmesini eksport et (zip)',
@@ -221,7 +220,6 @@ window.PAYLASH_LOCALE_TK = {
     // ýükleme ulgamy (upload.js)
     'upload.part_failed': 'Bölek {n} ýüklenmedi (HTTP {status})',
     'upload.part_no_etag': 'Bölek {n}: ETag alynmady',
-    'upload.folder_progress': '"{name}" papkasy ýüklenýär…',
 
     // redaktor (Collabora)
     'editor.back': '← Yza',
@@ -382,7 +380,6 @@ window.PAYLASH_LOCALE_TK = {
     'shares.tab_by_me': 'Meniň paýlaşanlarym',
     'shares.empty_by_me': 'Heniz hiç kime faýl paýlaşmadyňyz',
     'shares.empty_with_me': 'Heniz hiç kim size faýl paýlaşmady',
-    'shares.recipients_count': { other: '{count} ulanyjy' },
     'shares.back_to_users': 'Adamlara gaýt',
     'shares.file_count': { other: '{count} faýl' },
     'shares.shared_with_count': 'Rugsatly ulanyjylaryň sany: {count}',
@@ -546,9 +543,6 @@ window.PAYLASH_LOCALE_TK = {
     'admin.upload_cancel_confirm_title': 'Ýüklemäni ýatyrmak',
     'admin.upload_cancel_confirm_body': '<p>Bu ýüklemäni ýatyrmak isleýärsiňizmi?</p>',
     'admin.upload_cancelled': 'Ýatyryldy',
-    'admin.select_placeholder': 'Saýlaň…',
-    'admin.choose_project_hint': 'Taslamany saýlaň',
-    'admin.upload_file_button': 'Faýl ýükle',
 
     // gatnaşyk
     'attendance.filter_from': 'Başlangyç',

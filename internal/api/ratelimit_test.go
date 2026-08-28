@@ -29,10 +29,6 @@ func TestKeyedLimiter(t *testing.T) {
 		t.Fatalf("must be blocked after %d attempts", max)
 	}
 
-	l.reset(key)
-	if l.blocked(key) {
-		t.Fatal("reset must clear the block")
-	}
 }
 
 func TestKeyedLimiterKeysAreIndependent(t *testing.T) {

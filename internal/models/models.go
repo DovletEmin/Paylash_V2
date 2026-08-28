@@ -6,20 +6,20 @@ import (
 )
 
 type User struct {
-	ID                 int       `json:"id"`
-	Username           string    `json:"username"`
-	PasswordHash       string    `json:"-"`
-	DisplayName        string    `json:"full_name"`
-	Role               string    `json:"role"`
-	QuotaBytes         int64     `json:"quota_bytes"`
-	AvatarURL          string    `json:"avatar_url"`
-	MustChangePassword bool      `json:"must_change_password"`
+	ID                 int    `json:"id"`
+	Username           string `json:"username"`
+	PasswordHash       string `json:"-"`
+	DisplayName        string `json:"full_name"`
+	Role               string `json:"role"`
+	QuotaBytes         int64  `json:"quota_bytes"`
+	AvatarURL          string `json:"avatar_url"`
+	MustChangePassword bool   `json:"must_change_password"`
 	// ChatNotifyLevel controls how much a chat notification reveals:
 	// "full" (sender + text), "sender_only" (sender, generic text), or
 	// "hidden" (generic title + text) — mirrors Telegram's notification
 	// privacy options.
-	ChatNotifyLevel string    `json:"chat_notify_level"`
-	ChatNotifySound bool      `json:"chat_notify_sound"`
+	ChatNotifyLevel string `json:"chat_notify_level"`
+	ChatNotifySound bool   `json:"chat_notify_sound"`
 	// OnboardingCompleted gates the first-login welcome tour — false only
 	// for accounts CreateUser inserted after the tour shipped; every
 	// pre-existing account was backfilled TRUE by the migration itself.
@@ -336,13 +336,13 @@ type PushSubscription struct {
 // prefill-only convenience (pre-populates the participant picker at
 // creation time) — it has no ongoing effect on membership or access.
 type Conversation struct {
-	ID             int       `json:"id"`
-	Type           string    `json:"type"` // "direct" | "group"
-	Name           *string   `json:"name,omitempty"`
-	ProjectID      *int      `json:"project_id,omitempty"`
-	CreatedBy      *int      `json:"created_by"`
-	DirectUserLow  *int      `json:"-"`
-	DirectUserHigh *int      `json:"-"`
+	ID             int     `json:"id"`
+	Type           string  `json:"type"` // "direct" | "group"
+	Name           *string `json:"name,omitempty"`
+	ProjectID      *int    `json:"project_id,omitempty"`
+	CreatedBy      *int    `json:"created_by"`
+	DirectUserLow  *int    `json:"-"`
+	DirectUserHigh *int    `json:"-"`
 	// AvatarURL is the object key inside storage.ChatAttachmentsBucket for a
 	// group's photo ("" = none, direct conversations never have one) —
 	// json:"-" like MessageAttachment.MinioKey, since it's only ever
@@ -367,8 +367,8 @@ type Conversation struct {
 // joined with enough to show a preview without a second round-trip.
 type ConversationView struct {
 	Conversation
-	UnreadCount     int     `json:"unread_count"`
-	LastMessageBody string  `json:"last_message_body,omitempty"`
+	UnreadCount     int        `json:"unread_count"`
+	LastMessageBody string     `json:"last_message_body,omitempty"`
 	LastMessageAt   *time.Time `json:"last_message_preview_at,omitempty"`
 	// OtherParticipant is set only for type="direct" — the one other person
 	// in the DM, so the client never needs a second call to know who it's
@@ -385,11 +385,11 @@ type ConversationView struct {
 }
 
 type ParticipantView struct {
-	UserID      int        `json:"user_id"`
-	Username    string     `json:"username"`
-	DisplayName string     `json:"full_name"`
-	AvatarURL   string     `json:"avatar_url"`
-	LastReadAt  time.Time  `json:"last_read_at"`
+	UserID      int       `json:"user_id"`
+	Username    string    `json:"username"`
+	DisplayName string    `json:"full_name"`
+	AvatarURL   string    `json:"avatar_url"`
+	LastReadAt  time.Time `json:"last_read_at"`
 	// Online is filled from the in-memory WS hub (never the DB) by the handler
 	// that returns participants; LastSeenAt is the persisted timestamp of their
 	// last disconnect, used to render "last seen X" when they're offline.
@@ -435,10 +435,10 @@ type MessageReplyPreview struct {
 // resolved attachments — what the client actually renders.
 type MessageView struct {
 	Message
-	SenderName   string                `json:"sender_name"`
-	SenderAvatar string                `json:"sender_avatar"`
-	Attachments  []MessageAttachment   `json:"attachments,omitempty"`
-	ReplyTo      *MessageReplyPreview  `json:"reply_to,omitempty"`
+	SenderName   string               `json:"sender_name"`
+	SenderAvatar string               `json:"sender_avatar"`
+	Attachments  []MessageAttachment  `json:"attachments,omitempty"`
+	ReplyTo      *MessageReplyPreview `json:"reply_to,omitempty"`
 	// Status is computed, not stored — "sent" or "read", meaningful only for
 	// the requester's own messages in direct conversations (group read
 	// receipts are out of scope; group messages are always "sent").
@@ -599,12 +599,12 @@ type AttendanceView struct {
 // dashboard — total counts plus a per-day breakdown for the trend chart
 // (same SVG trend-chart pattern already used by AdminStorageTrend).
 type AttendanceAnalytics struct {
-	TotalRecords    int                     `json:"total_records"`
-	LateCount       int                     `json:"late_count"`
-	EarlyLeaveCount int                     `json:"early_leave_count"`
+	TotalRecords     int                    `json:"total_records"`
+	LateCount        int                    `json:"late_count"`
+	EarlyLeaveCount  int                    `json:"early_leave_count"`
 	NeedsReviewCount int                    `json:"needs_review_count"`
 	AvgWorkedMinutes int                    `json:"avg_worked_minutes"`
-	Daily           []AttendanceDailyPoint  `json:"daily"`
+	Daily            []AttendanceDailyPoint `json:"daily"`
 }
 
 // AttendanceDailyPoint is one calendar day's roll-up — feeds both the

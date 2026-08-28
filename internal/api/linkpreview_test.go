@@ -65,15 +65,15 @@ func TestParseOpenGraphNoUsableTitle(t *testing.T) {
 
 func TestIsDisallowedIP(t *testing.T) {
 	disallowed := []string{
-		"127.0.0.1",     // loopback
-		"10.0.0.1",      // RFC1918
-		"172.17.0.5",    // Docker default bridge
-		"192.168.1.1",   // RFC1918
+		"127.0.0.1",       // loopback
+		"10.0.0.1",        // RFC1918
+		"172.17.0.5",      // Docker default bridge
+		"192.168.1.1",     // RFC1918
 		"169.254.169.254", // cloud metadata endpoint
 		"0.0.0.0",
-		"::1",          // IPv6 loopback
-		"fc00::1",      // IPv6 unique local
-		"fe80::1",      // IPv6 link-local
+		"::1",     // IPv6 loopback
+		"fc00::1", // IPv6 unique local
+		"fe80::1", // IPv6 link-local
 	}
 	for _, s := range disallowed {
 		ip := net.ParseIP(s)

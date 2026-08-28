@@ -19,9 +19,9 @@ func TestIsValidSticker(t *testing.T) {
 		"hello",
 		"<svg onload=alert(1)>",
 		"<img src=x onerror=alert(document.cookie)>",
-		"😀😀",       // two stickers, not one
+		"😀😀",        // two stickers, not one
 		"😀 ",        // trailing space
-		"&lt;b&gt;",  // pre-escaped markup
+		"&lt;b&gt;", // pre-escaped markup
 		"👀",         // a real emoji, but not in the curated set
 	}
 	for _, s := range invalid {

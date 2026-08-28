@@ -16,9 +16,9 @@ import (
 func TestComputeAttendanceStatusOnTime(t *testing.T) {
 	day := time.Date(2026, 3, 2, 0, 0, 0, 0, time.Local) // a Monday
 	r := models.AttendanceRecord{
-		CheckInAt: day.Add(9 * time.Hour), // 09:00, exactly on time
-		WorkDate:  "2026-03-02",
-		ExpectedStartMin: 540, // 09:00
+		CheckInAt:        day.Add(9 * time.Hour), // 09:00, exactly on time
+		WorkDate:         "2026-03-02",
+		ExpectedStartMin: 540,  // 09:00
 		ExpectedEndMin:   1080, // 18:00
 		GraceMinutes:     10,
 		IsWorkday:        true,

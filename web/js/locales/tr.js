@@ -209,7 +209,6 @@ window.PAYLASH_LOCALE_TR = {
     'files.file_create_failed': 'Dosya oluşturulamadı',
     'files.file_name_required': 'Bir dosya adı girin',
     'files.name_required': 'Bir ad girin',
-    'files.download_folder_title': 'Klasörü indir',
     'files.folder_zip_preparing': '"{name}.zip" hazırlanıyor…',
     'files.bulk_zip_preparing': 'Arşiv hazırlanıyor…',
     'files.export_scope': 'Her şeyi dışa aktar (zip)',
@@ -218,7 +217,6 @@ window.PAYLASH_LOCALE_TR = {
     // yükleme motoru (upload.js)
     'upload.part_failed': '{n}. parça yüklenemedi (HTTP {status})',
     'upload.part_no_etag': '{n}. parça: ETag alınamadı',
-    'upload.folder_progress': '"{name}" klasörü yükleniyor…',
 
     // düzenleyici (Collabora)
     'editor.back': '← Geri',
@@ -379,7 +377,6 @@ window.PAYLASH_LOCALE_TR = {
     'shares.tab_by_me': 'Paylaşımlarım',
     'shares.empty_by_me': 'Henüz kimseyle dosya paylaşmadınız',
     'shares.empty_with_me': 'Henüz kimse sizinle dosya paylaşmadı',
-    'shares.recipients_count': { other: '{count} kullanıcı' },
     'shares.back_to_users': 'Kişilere dön',
     'shares.file_count': { other: '{count} dosya' },
     'shares.shared_with_count': 'Erişimi olan kullanıcı sayısı: {count}',
@@ -543,9 +540,6 @@ window.PAYLASH_LOCALE_TR = {
     'admin.upload_cancel_confirm_title': 'Yüklemeyi iptal et',
     'admin.upload_cancel_confirm_body': '<p>Bu yükleme iptal edilsin mi?</p>',
     'admin.upload_cancelled': 'İptal edildi',
-    'admin.select_placeholder': 'Seçin…',
-    'admin.choose_project_hint': 'Bir proje seçin',
-    'admin.upload_file_button': 'Dosya yükle',
 
     // devam durumu
     'attendance.filter_from': 'Başlangıç',

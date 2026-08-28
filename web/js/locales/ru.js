@@ -209,7 +209,6 @@ window.PAYLASH_LOCALE_RU = {
     'files.file_create_failed': 'Не удалось создать файл',
     'files.file_name_required': 'Введите имя файла',
     'files.name_required': 'Введите название',
-    'files.download_folder_title': 'Скачать папку',
     'files.folder_zip_preparing': 'Подготовка «{name}.zip»…',
     'files.bulk_zip_preparing': 'Подготовка архива…',
     'files.export_scope': 'Экспорт всего (zip)',
@@ -218,7 +217,6 @@ window.PAYLASH_LOCALE_RU = {
     // движок загрузки (upload.js)
     'upload.part_failed': 'Не удалось загрузить часть {n} (HTTP {status})',
     'upload.part_no_etag': 'Часть {n}: ETag не получен',
-    'upload.folder_progress': 'Загрузка папки «{name}»…',
 
     // редактор (Collabora)
     'editor.back': '← Назад',
@@ -387,7 +385,6 @@ window.PAYLASH_LOCALE_RU = {
     'shares.tab_by_me': 'Мои расшаривания',
     'shares.empty_by_me': 'Вы пока ни с кем не поделились файлами',
     'shares.empty_with_me': 'С вами пока никто не поделился файлами',
-    'shares.recipients_count': { one: '{count} пользователь', few: '{count} пользователя', many: '{count} пользователей' },
     'shares.back_to_users': 'Назад к людям',
     'shares.file_count': { one: '{count} файл', few: '{count} файла', many: '{count} файлов' },
     'shares.shared_with_count': 'Пользователей с доступом: {count}',
@@ -551,9 +548,6 @@ window.PAYLASH_LOCALE_RU = {
     'admin.upload_cancel_confirm_title': 'Отмена загрузки',
     'admin.upload_cancel_confirm_body': '<p>Отменить эту загрузку?</p>',
     'admin.upload_cancelled': 'Отменено',
-    'admin.select_placeholder': 'Выберите…',
-    'admin.choose_project_hint': 'Выберите проект',
-    'admin.upload_file_button': 'Загрузить файл',
 
     // посещаемость
     'attendance.filter_from': 'С',
