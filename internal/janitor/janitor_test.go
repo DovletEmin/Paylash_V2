@@ -152,3 +152,17 @@ func TestIntegrationPurgeExpiredTrashDeletesFileAndObject(t *testing.T) {
 		t.Errorf("thumbnail %s/%s still exists in MinIO after purge", storage.ThumbnailBucket, thumbKey)
 	}
 }
+
+// A panic inside the sweep must not escape: Run's goroutine is the whole
+// process's, so an unrecovered panic there would crash the file server and,
+// since the first thing Run does is sweep, crash it again on every restart.
+func TestSafeRunOnceContainsPanics(t *testing.T) {
+	defer func() {
+		if p := recover(); p != nil {
+			t.Fatalf("panic escaped safeRunOnce: %v", p)
+		}
+	}()
+	// nil DB: the first thing runOnce touches dereferences it, which is as
+	// good a stand-in for "some future bug panics mid-sweep" as any.
+	safeRunOnce(nil, nil)
+}

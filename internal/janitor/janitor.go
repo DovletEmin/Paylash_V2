@@ -6,6 +6,7 @@ package janitor
 import (
 	"context"
 	"log"
+	"runtime/debug"
 	"time"
 
 	"paylash/internal/db"
@@ -22,12 +23,27 @@ const (
 // Run performs an immediate cleanup pass and then repeats it once a day.
 // It blocks, so callers should invoke it in its own goroutine.
 func Run(database *db.DB, minioClient *storage.MinioClient) {
-	runOnce(database, minioClient)
+	safeRunOnce(database, minioClient)
 	ticker := time.NewTicker(24 * time.Hour)
 	defer ticker.Stop()
 	for range ticker.C {
-		runOnce(database, minioClient)
+		safeRunOnce(database, minioClient)
 	}
+}
+
+// safeRunOnce keeps a panic inside the sweep from taking the whole server
+// down with it. This runs in its own goroutine (see main.go), and an
+// unrecovered panic there kills the process — so a bug reachable only by,
+// say, one malformed row would crash the file server on every boot, since
+// the first thing Run does is sweep. Losing one night's cleanup is
+// recoverable; a crash loop is not.
+func safeRunOnce(database *db.DB, minioClient *storage.MinioClient) {
+	defer func() {
+		if p := recover(); p != nil {
+			log.Printf("janitor: sweep panicked, skipping this pass: %v\n%s", p, debug.Stack())
+		}
+	}()
+	runOnce(database, minioClient)
 }
 
 func runOnce(database *db.DB, minioClient *storage.MinioClient) {
