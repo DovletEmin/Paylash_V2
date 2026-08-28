@@ -48,7 +48,7 @@ const AttendanceWidget = {
         try {
             this._today = await API.attendance.checkIn();
             UI.toast(I18N.t('attendance.check_in_toast', { time: UI.formatTime(this._today.check_in_at) }), 'success');
-            if (this._today.is_late) UI.toast(I18N.tn('attendance.late_by', this._today.late_minutes), 'info');
+            if (this._today.is_late) UI.toast(I18N.t('attendance.late_by', { duration: UI.formatAttnDurationPhrase(this._today.late_minutes) }), 'info');
             AttendancePage.refreshIfOpen();
         } catch (e) { UI.toast(e.message, 'error'); }
         finally { this._busy = false; this.renderInto(); }
@@ -60,7 +60,7 @@ const AttendanceWidget = {
         try {
             this._today = await API.attendance.checkOut();
             UI.toast(I18N.t('attendance.check_out_toast', { time: UI.formatTime(this._today.check_out_at) }), 'success');
-            if (this._today.is_early_leave) UI.toast(I18N.tn('attendance.early_by', this._today.early_leave_minutes), 'info');
+            if (this._today.is_early_leave) UI.toast(I18N.t('attendance.early_by', { duration: UI.formatAttnDurationPhrase(this._today.early_leave_minutes) }), 'info');
             AttendancePage.refreshIfOpen();
         } catch (e) { UI.toast(e.message, 'error'); }
         finally { this._busy = false; this.renderInto(); }

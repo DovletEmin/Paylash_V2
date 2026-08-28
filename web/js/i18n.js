@@ -87,6 +87,11 @@ const I18N = {
     },
 
     _pluralForm(n) {
+        // English distinguishes one/other; Turkmen and Turkish take the bare
+        // singular after a numeral, so 'other' is the only form they need.
+        // tn() falls back to entry.other whenever the chosen form is absent,
+        // so an entry that only defines 'other' keeps working unchanged.
+        if (this.lang === 'en') return Math.abs(n) === 1 ? 'one' : 'other';
         if (this.lang !== 'ru') return 'other';
         n = Math.abs(n);
         const mod10 = n % 10, mod100 = n % 100;

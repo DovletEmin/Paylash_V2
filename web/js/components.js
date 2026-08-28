@@ -408,9 +408,28 @@ const UI = {
         return { base: name.slice(0, i), ext: name.slice(i) };
     },
 
+    // Compact duration for table cells, said the way a person would: under an
+    // hour it stays in minutes, past that it becomes hours + minutes, and a
+    // whole number of hours drops the "0 мин" tail.
     formatAttnDuration(min) {
         if (min === undefined || min === null) return '—';
         const h = Math.floor(min / 60), m = min % 60;
+        if (h === 0) return I18N.t('attendance.duration_m', { m });
+        if (m === 0) return I18N.t('attendance.duration_h', { h });
+        return I18N.t('attendance.duration_short', { h, m });
+    },
+
+    // Same rule, for the sentences the status badges and toasts build around
+    // it ("Опоздание на …"). Under an hour the unit is spelled out and needs a
+    // real plural, so that branch goes through tn(); from an hour up it uses
+    // the abbreviated forms, so "2 ч" and "2 ч 5 мин" read alike rather than
+    // switching between "2 часа" and "2 ч 5 мин".
+    // NOTE: dur_minutes_acc is ACCUSATIVE — every caller embeds it after
+    // "на", so don't reuse that key in a differently-shaped sentence.
+    formatAttnDurationPhrase(min) {
+        const h = Math.floor(min / 60), m = min % 60;
+        if (h === 0) return I18N.tn('attendance.dur_minutes_acc', m);
+        if (m === 0) return I18N.t('attendance.duration_h', { h });
         return I18N.t('attendance.duration_short', { h, m });
     },
 
@@ -449,8 +468,8 @@ const UI = {
     attendanceStatusBadges(r) {
         const badges = [];
         if (r.needs_review) badges.push(`<span class="attn-badge attn-badge-review">${this.esc(I18N.t('attendance.needs_review'))}</span>`);
-        if (r.is_late) badges.push(`<span class="attn-badge attn-badge-late">${this.esc(I18N.tn('attendance.late_by', r.late_minutes))}</span>`);
-        if (r.is_early_leave) badges.push(`<span class="attn-badge attn-badge-early">${this.esc(I18N.tn('attendance.early_by', r.early_leave_minutes))}</span>`);
+        if (r.is_late) badges.push(`<span class="attn-badge attn-badge-late">${this.esc(I18N.t('attendance.late_by', { duration: this.formatAttnDurationPhrase(r.late_minutes) }))}</span>`);
+        if (r.is_early_leave) badges.push(`<span class="attn-badge attn-badge-early">${this.esc(I18N.t('attendance.early_by', { duration: this.formatAttnDurationPhrase(r.early_leave_minutes) }))}</span>`);
         if (!badges.length) badges.push(`<span class="attn-badge attn-badge-ontime">${this.esc(I18N.t('attendance.on_time'))}</span>`);
         return badges.join(' ');
     },
