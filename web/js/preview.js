@@ -12,7 +12,7 @@ const PreviewPage = {
         return `
         <div class="editor-page">
             <div class="editor-toolbar">
-                <button class="btn btn-ghost btn-sm" onclick="App.navigate('files')">${I18N.t('editor.back')}</button>
+                <button class="btn btn-ghost btn-sm" onclick="App.closeFileView()">${I18N.t('editor.back')}</button>
                 <span class="editor-filename" id="preview-filename">${UI.esc(this.currentFileName)}</span>
                 <div class="editor-toolbar-right">
                     <button class="btn btn-ghost btn-sm" id="comments-toggle-btn" onclick="PreviewPage.toggleComments()">💬 ${I18N.t('comments.toggle')}</button>
@@ -34,7 +34,7 @@ const PreviewPage = {
         this.currentFileName = fileName;
         this.currentFileSize = size || 0;
         this._pendingPin = null;
-        App.navigate('preview');
+        App.openFileView('preview');
     },
 
     // Finds whichever currently-loaded file list contains the file being
@@ -106,7 +106,7 @@ const PreviewPage = {
     },
 
     async init() {
-        if (!this.currentFileId) { App.navigate('files'); return; }
+        if (!this.currentFileId) { App.closeFileView(); return; }
         this._bindKeyNav();
         this._bindVisibilityRefresh();
         const nameEl = document.getElementById('preview-filename');

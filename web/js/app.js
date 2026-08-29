@@ -344,6 +344,35 @@ const App = {
         history[method]({ page: this.currentPage }, '', url);
     },
 
+    // Preview and the Collabora editor are full-page views opened ON TOP of
+    // whatever list the user was browsing, so their Back button has to return
+    // to that exact list — the Common scope, the folder they had open, or the
+    // Shared page they came from — not to the default personal file list.
+    // Recording the URL we are leaving is enough: it already carries all of
+    // that state, which is what FilesPage.applyURLParams reads back.
+    _cameFrom: null,
+
+    openFileView(page) {
+        this._cameFrom = location.pathname + location.search;
+        this.navigate(page);
+    },
+
+    // Steps BACK through history rather than navigating forward to the
+    // recorded URL: closing then doesn't add an entry every time, and this
+    // button and the browser's own Back stay in agreement about what
+    // "back" means. _cameFrom is only ever set by openFileView, so a null
+    // means we never pushed this view's entry (opened by a direct link, or
+    // the page was refreshed while open) and there is nothing to step back
+    // to — hence the replace, which keeps that dead entry out of history.
+    closeFileView() {
+        if (this._cameFrom) {
+            this._cameFrom = null;
+            history.back();
+            return;
+        }
+        this.navigate('files', true);
+    },
+
     route() {
         const path = location.pathname.replace(/^\/+/, '') || '';
         const page = path.split('/')[0] || 'files';

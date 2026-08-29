@@ -7,7 +7,7 @@ const EditorPage = {
         return `
         <div class="editor-page">
             <div class="editor-toolbar">
-                <button class="btn btn-ghost btn-sm" onclick="App.navigate('files')">${I18N.t('editor.back')}</button>
+                <button class="btn btn-ghost btn-sm" onclick="App.closeFileView()">${I18N.t('editor.back')}</button>
                 <span class="editor-filename">${UI.esc(this.currentFileName)}</span>
                 <div class="editor-toolbar-right">
                     <button class="btn btn-ghost btn-sm" onclick="EditorPage.download()">${UI.icons.download} ${I18N.t('files.action_download')}</button>
@@ -24,11 +24,11 @@ const EditorPage = {
     async open(fileId, fileName) {
         this.currentFileId = fileId;
         this.currentFileName = fileName;
-        App.navigate('editor');
+        App.openFileView('editor');
     },
 
     async init() {
-        if (!this.currentFileId) { App.navigate('files'); return; }
+        if (!this.currentFileId) { App.closeFileView(); return; }
         const c = document.getElementById('editor-container');
         try {
             const data = await API.collabora.editorURL(this.currentFileId);
