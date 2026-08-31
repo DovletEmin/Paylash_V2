@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"paylash/internal/api"
 	"paylash/internal/config"
+	"paylash/internal/dav"
 	"paylash/internal/db"
 	"paylash/internal/storage"
 	"paylash/internal/wopi"
@@ -245,6 +246,21 @@ func (s *Server) routes(webFS embed.FS) {
 	s.mux.Handle("PATCH /api/admin/attendance/schedule", auth(AdminMiddleware(http.HandlerFunc(h.AdminSetAttendanceSchedule))))
 	s.mux.Handle("PATCH /api/admin/attendance/{id}", auth(AdminMiddleware(http.HandlerFunc(h.AdminUpdateAttendanceRecord))))
 
+	// Device credentials for the network drive (see internal/dav).
+	s.mux.Handle("GET /api/app-passwords", auth(http.HandlerFunc(h.ListAppPasswords)))
+	s.mux.Handle("POST /api/app-passwords", auth(http.HandlerFunc(h.CreateAppPassword)))
+	s.mux.Handle("DELETE /api/app-passwords/{id}", auth(http.HandlerFunc(h.DeleteAppPassword)))
+
+	// WebDAV. Deliberately NOT behind AuthMiddleware: a drive mapping has
+	// no session cookie, it presents HTTP Basic on every request, so the
+	// handler does its own authentication against a device credential.
+	// Registered as a bare prefix because WebDAV uses methods ServeMux does
+	// not know (PROPFIND, MKCOL, LOCK…), which a "METHOD /path" pattern
+	// could never match.
+	davH := dav.NewHandler(s.db, s.minio, "/dav")
+	s.mux.Handle("/dav/", davH)
+	s.mux.Handle("/dav", davH)
+
 	// WOPI endpoints (accessed by Collabora, token-based auth)
 	s.mux.HandleFunc("GET /wopi/files/{id}", wopiH.CheckFileInfo)
 	s.mux.HandleFunc("GET /wopi/files/{id}/contents", wopiH.GetFile)
@@ -266,7 +282,8 @@ func (s *Server) routes(webFS embed.FS) {
 		// surfaced later as a JSON parse error on HTML — and the access log
 		// and metrics recorded a success. The same applied to the right path
 		// with the wrong method, which ServeMux also routes here.
-		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/wopi/") {
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/wopi/") ||
+			strings.HasPrefix(r.URL.Path, "/dav/") {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotFound)
 			json.NewEncoder(w).Encode(map[string]string{"error": "not found"})
