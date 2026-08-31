@@ -298,6 +298,45 @@ const App = {
     // filter, search) everyone else uses, rather than a separate, more
     // limited "admin file browser" — see the project's audit notes on why
     // that duplicate implementation was retired in favor of this.
+    // How long a cached project list may be reused before it is refreshed.
+    // Only ever stale for someone else's edit made in another browser — an
+    // edit made here invalidates immediately (see invalidateProjects).
+    PROJECTS_TTL: 30000,
+    _projectsLoadedAt: 0,
+    // Which account the cached list belongs to. Logging out is a plain SPA
+    // transition with no page reload, so without this a cache filled for one
+    // employee would still be sitting there when the next one signs in on
+    // the same machine — and they would see a sidebar of projects they have
+    // no access to. Keying the cache by user makes that impossible by
+    // construction rather than by remembering to clear it on every path
+    // that can change who is signed in.
+    _projectsUserId: null,
+
+    // Every navigation used to block on loadProjects before a single pixel
+    // could be redrawn — one request, or two for an admin, whose results
+    // are almost always identical to the ones fetched a moment earlier.
+    // Only the very first load has to wait; after that the cached list
+    // renders immediately and a refresh runs behind it, so a change shows
+    // up on the next navigation at the latest.
+    async ensureProjects() {
+        const uid = this.user ? this.user.id : null;
+        if (this._projectsUserId !== uid) {
+            this._projectsUserId = uid;
+            this.projects = [];
+            this._projectsLoadedAt = 0;
+        }
+        if (!this._projectsLoadedAt) {
+            await this.loadProjects();
+            return;
+        }
+        if (Date.now() - this._projectsLoadedAt >= this.PROJECTS_TTL) this.loadProjects();
+    },
+
+    // Called by anything that edits projects or their membership, so the
+    // sidebar reflects the change on the very next render rather than
+    // whenever the TTL happens to lapse.
+    invalidateProjects() { this._projectsLoadedAt = 0; },
+
     async loadProjects() {
         try { this.projects = await API.projects.list(); } catch { this.projects = []; }
         if (this.user && this.user.role === 'admin') {
@@ -310,6 +349,7 @@ const App = {
                 this.projects.sort((a, b) => a.name.localeCompare(b.name));
             } catch { /* best-effort — worst case an admin only sees their own memberships this load */ }
         }
+        this._projectsLoadedAt = Date.now();
     },
 
     // params (a plain object of query-string key/values) becomes the new
@@ -409,7 +449,7 @@ const App = {
             return;
         }
 
-        await this.loadProjects();
+        await this.ensureProjects();
         app.innerHTML = this.renderShell(page);
         this._syncSidebarToggle();
         this.initPage(page, params);

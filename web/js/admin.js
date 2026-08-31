@@ -722,12 +722,13 @@ const AdminPage = {
         if (!n) { UI.toast(I18N.t('app.name_required'), 'error'); return; }
         try {
             if (id) await API.admin.projects.update(id, n, quotaBytes); else await API.admin.projects.create(n, quotaBytes);
+            App.invalidateProjects();
             UI.closeModal(); UI.toast(id ? I18N.t('admin.updated') : I18N.t('admin.created'), 'success'); this.switchTab('projects');
         } catch (e) { UI.toast(e.message, 'error'); }
     },
     deleteProject(id) {
         UI.confirmAction(I18N.t('admin.delete_project_confirm_title'), I18N.t('admin.delete_project_confirm_body'), I18N.t('common.delete'), async () => {
-            try { await API.admin.projects.delete(id); UI.toast(I18N.t('admin.deleted'), 'success'); this.switchTab('projects'); } catch (e) { UI.toast(e.message, 'error'); }
+            try { await API.admin.projects.delete(id); App.invalidateProjects(); UI.toast(I18N.t('admin.deleted'), 'success'); this.switchTab('projects'); } catch (e) { UI.toast(e.message, 'error'); }
         });
     },
 
@@ -808,6 +809,7 @@ const AdminPage = {
         const permission = document.getElementById('member-permission').value;
         try {
             await API.admin.projects.members.add(projectId, userId, permission);
+            App.invalidateProjects();
             document.getElementById('member-search').value = '';
             document.getElementById('member-search-results').innerHTML = '';
             UI.toast(I18N.t('admin.member_added'), 'success');
@@ -815,11 +817,11 @@ const AdminPage = {
         } catch (e) { UI.toast(e.message, 'error'); }
     },
     async changeMemberPermission(projectId, userId, permission) {
-        try { await API.admin.projects.members.update(projectId, userId, permission); UI.toast(I18N.t('admin.updated'), 'success'); } catch (e) { UI.toast(e.message, 'error'); }
+        try { await API.admin.projects.members.update(projectId, userId, permission); App.invalidateProjects(); UI.toast(I18N.t('admin.updated'), 'success'); } catch (e) { UI.toast(e.message, 'error'); }
     },
     removeMember(projectId, userId, name) {
         UI.confirmAction(I18N.t('admin.remove_member_title'), I18N.t('admin.remove_member_confirm_body', { name: UI.esc(name || '') }), I18N.t('common.remove'), async () => {
-            try { await API.admin.projects.members.remove(projectId, userId); UI.toast(I18N.t('admin.member_removed'), 'success'); this._loadMembers(projectId); } catch (e) { UI.toast(e.message, 'error'); }
+            try { await API.admin.projects.members.remove(projectId, userId); App.invalidateProjects(); UI.toast(I18N.t('admin.member_removed'), 'success'); this._loadMembers(projectId); } catch (e) { UI.toast(e.message, 'error'); }
         });
     },
 
