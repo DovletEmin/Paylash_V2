@@ -73,7 +73,30 @@ input,select,textarea{font-family:var(--font);outline:none}
   width:240px;background:var(--surface);border-right:1px solid var(--border);
   display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;z-index:100;
   transition:transform .2s ease;
+  /* Which of the two layouts the sidebar is in at the current window width,
+     read back by App.toggleSidebar with getComputedStyle. The breakpoint
+     therefore lives in exactly one place — the media query at the bottom of
+     this file — instead of being repeated as a number in the JS, where it
+     would silently desync the first time either side is adjusted.
+       push    — sits beside the content; the toggle collapses it away and
+                 the choice is remembered.
+       overlay — off-canvas above the content; the toggle slides it in via
+                 .open, and that is deliberately transient. */
+  --sb-mode:push;
 }
+/* Collapsed. visibility flips only after the slide-out has finished, and
+   back immediately on the way in (0s delay), so the animation stays visible
+   in both directions while a collapsed sidebar's links stay out of the
+   keyboard tab order rather than lurking off-screen. */
+html.sidebar-collapsed .sidebar{
+  transform:translateX(-100%);visibility:hidden;
+  transition:transform .2s ease,visibility 0s linear .2s;
+}
+html.sidebar-collapsed .main-content{margin-left:0}
+/* An explicitly opened sidebar always wins over a stored collapse: in
+   overlay mode the toggle works through .open, and a collapse chosen
+   earlier at a wider window must not leave that overlay invisible. */
+html.sidebar-collapsed .sidebar.open{transform:translateX(0);visibility:visible;transition:transform .2s ease}
 .sidebar-header{padding:20px;display:flex;align-items:center;gap:10px}
 .sidebar-logo{font-size:1.1rem;font-weight:700;color:var(--text);display:flex;align-items:center;gap:8px;letter-spacing:-.025em}
 .sidebar-logo svg{width:22px;height:22px;color:var(--primary)}
@@ -133,7 +156,7 @@ input,select,textarea{font-family:var(--font);outline:none}
 .theme-icon-light{display:none}
 html.light .theme-icon-dark{display:none}
 html.light .theme-icon-light{display:inline}
-.sidebar-toggle{display:none;color:var(--text-2);padding:6px;border-radius:var(--r)}
+.sidebar-toggle{display:flex;align-items:center;color:var(--text-2);padding:6px;border-radius:var(--r)}
 .sidebar-toggle:hover{background:var(--surface-2)}
 .sidebar-toggle svg{width:18px;height:18px}
 .page-content{flex:1;padding:24px}
@@ -1340,10 +1363,13 @@ html.light .context-menu{box-shadow:0 8px 32px rgba(0,0,0,.1)}
   .search-box input:focus{width:180px}
 }
 @media(max-width:768px){
-  .sidebar{transform:translateX(-100%)}
+  /* Off-canvas: the sidebar covers the content instead of sitting beside it,
+     and the toggle opens it transiently. See --sb-mode on .sidebar above —
+     this declaration is what App.toggleSidebar reads to tell the two modes
+     apart, so the 768px above is the only place the breakpoint is written. */
+  .sidebar{transform:translateX(-100%);--sb-mode:overlay}
   .sidebar.open{transform:translateX(0)}
   .main-content{margin-left:0}
-  .sidebar-toggle{display:flex!important}
   .file-grid{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}
   .stat-cards{grid-template-columns:1fr 1fr}
   .admin-page{flex-direction:column}

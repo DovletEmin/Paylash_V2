@@ -7,6 +7,7 @@ const App = {
 
     async start() {
         this.initTheme();
+        this.initSidebar();
         // Public config (incl. the VAPID push key) loads BEFORE checkAuth so
         // that Push.init(), fired from checkAuth, already has the key it needs.
         try { this.config = await API.public.config(); } catch {}
@@ -410,6 +411,7 @@ const App = {
 
         await this.loadProjects();
         app.innerHTML = this.renderShell(page);
+        this._syncSidebarToggle();
         this.initPage(page, params);
         this.loadStorageUsage();
         this.renderNotifBadge(this._lastNotifCount);
@@ -487,7 +489,7 @@ const App = {
                     <button class="btn btn-sm" onclick="App.exitImpersonation()">${I18N.t('admin.exit_impersonation')}</button>
                 </div>` : ''}
                 <header class="topbar">
-                    <button class="sidebar-toggle" onclick="document.getElementById('sidebar').classList.toggle('open')" aria-label="${I18N.t('app.menu_label')}">${UI.icons.menu}</button>
+                    <button class="sidebar-toggle" onclick="App.toggleSidebar()" title="${I18N.t('app.menu_label')}" aria-label="${I18N.t('app.menu_label')}" aria-controls="sidebar" aria-expanded="true">${UI.icons.menu}</button>
                     <div class="topbar-title">${this.pageTitle(page)}</div>
                     <div class="topbar-right">
                         ${UI.langSwitcher()}
@@ -569,6 +571,59 @@ const App = {
     toggleTheme() {
         const isLight = document.documentElement.classList.toggle('light');
         localStorage.setItem('paylash-theme', isLight ? 'light' : 'dark');
+    },
+
+    // Like the theme, whether the sidebar is collapsed is a per-browser
+    // preference the server knows nothing about. It has to live on <html>
+    // rather than on the sidebar element itself: renderShell rebuilds the
+    // entire shell on every navigation, so a class set on .sidebar would be
+    // thrown away by the first click on a nav item.
+    initSidebar() {
+        if (localStorage.getItem('paylash-sidebar') === 'collapsed') {
+            document.documentElement.classList.add('sidebar-collapsed');
+        }
+    },
+
+    // Which layout the sidebar is in right now, straight from the CSS that
+    // decides it — see the --sb-mode comment in style.css. Asking the
+    // stylesheet instead of re-testing the breakpoint here means there is
+    // only ever one number to keep correct.
+    _sidebarOverlay(sb) {
+        return getComputedStyle(sb).getPropertyValue('--sb-mode').trim() === 'overlay';
+    },
+
+    // One button, two behaviours, matching the two layouts:
+    //   push    — collapse it away to give the page the full width, and
+    //             remember that until the user says otherwise.
+    //   overlay — slide it in over the content. Deliberately NOT remembered:
+    //             it closes again by itself on the next navigation (the
+    //             rebuilt shell simply has no .open), which is what you want
+    //             from a menu opened to tap a single item.
+    toggleSidebar() {
+        const sb = document.getElementById('sidebar');
+        if (!sb) return;
+        if (this._sidebarOverlay(sb)) {
+            sb.classList.toggle('open');
+        } else {
+            const collapsed = document.documentElement.classList.toggle('sidebar-collapsed');
+            localStorage.setItem('paylash-sidebar', collapsed ? 'collapsed' : 'expanded');
+        }
+        this._syncSidebarToggle();
+    },
+
+    // Keeps the button's aria-expanded honest. It can't be settled inside
+    // renderShell's template because the answer depends on the layout the
+    // sidebar lands in, which only the stylesheet knows — and in overlay
+    // mode a freshly rendered shell always starts closed, whatever is
+    // stored for the push layout.
+    _syncSidebarToggle() {
+        const sb = document.getElementById('sidebar');
+        const btn = document.querySelector('.sidebar-toggle');
+        if (!sb || !btn) return;
+        const shown = this._sidebarOverlay(sb)
+            ? sb.classList.contains('open')
+            : !document.documentElement.classList.contains('sidebar-collapsed');
+        btn.setAttribute('aria-expanded', String(shown));
     },
 
     showProfileModal() {
