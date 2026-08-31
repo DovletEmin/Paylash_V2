@@ -261,3 +261,103 @@ func TestIntegrationAttendanceTrackingFilter(t *testing.T) {
 		t.Errorf("re-tracked employee: %d records, %d summary rows; want 1 and 1", r, s)
 	}
 }
+
+// GetSessionUser replaced a GetSession + GetUserByID pair in AuthMiddleware,
+// which runs on every authenticated request. A join with eighteen columns
+// scanned positionally is exactly the kind of change that stays silent in a
+// unit test and logs the whole studio out in production, so this pins it
+// against real SQL: every field the middleware and the handlers behind it
+// depend on must come back with the same value the two-query path produced.
+func TestIntegrationGetSessionUser(t *testing.T) {
+	database := connectTestDB(t)
+	user := createTestUser(t, database, "manager")
+
+	session, err := database.CreateSession(user.ID, models.DefaultSessionTTL)
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	gotSession, gotUser, err := database.GetSessionUser(session.ID)
+	if err != nil {
+		t.Fatalf("GetSessionUser: %v", err)
+	}
+	if gotSession == nil || gotUser == nil {
+		t.Fatalf("GetSessionUser returned nil for a live session")
+	}
+
+	// The join must agree with the two queries it replaced, field for field.
+	wantSession, err := database.GetSession(session.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	wantUser, err := database.GetUserByID(user.ID)
+	if err != nil || wantUser == nil {
+		t.Fatalf("GetUserByID: %v", err)
+	}
+
+	if gotSession.ID != wantSession.ID || gotSession.UserID != wantSession.UserID {
+		t.Errorf("session identity differs: got %+v, want %+v", gotSession, wantSession)
+	}
+	if !gotSession.ExpiresAt.Equal(wantSession.ExpiresAt) {
+		t.Errorf("ExpiresAt = %v, want %v", gotSession.ExpiresAt, wantSession.ExpiresAt)
+	}
+	if gotSession.ImpersonatorID != nil {
+		t.Errorf("a normal session must not carry ImpersonatorID, got %v", *gotSession.ImpersonatorID)
+	}
+
+	// Role and MustChangePassword gate authorisation in the middleware
+	// itself; the rest is what handlers read straight off the context.
+	if gotUser.ID != wantUser.ID || gotUser.Username != wantUser.Username {
+		t.Errorf("user identity differs: got %d/%s, want %d/%s", gotUser.ID, gotUser.Username, wantUser.ID, wantUser.Username)
+	}
+	if gotUser.Role != wantUser.Role {
+		t.Errorf("Role = %q, want %q — a wrong column here is a privilege bug", gotUser.Role, wantUser.Role)
+	}
+	if gotUser.MustChangePassword != wantUser.MustChangePassword {
+		t.Errorf("MustChangePassword = %v, want %v", gotUser.MustChangePassword, wantUser.MustChangePassword)
+	}
+	if gotUser.DisplayName != wantUser.DisplayName || gotUser.QuotaBytes != wantUser.QuotaBytes ||
+		gotUser.AvatarURL != wantUser.AvatarURL || gotUser.ChatNotifyLevel != wantUser.ChatNotifyLevel ||
+		gotUser.ChatNotifySound != wantUser.ChatNotifySound || gotUser.OnboardingCompleted != wantUser.OnboardingCompleted ||
+		gotUser.AttendanceTracked != wantUser.AttendanceTracked {
+		t.Errorf("user fields differ:\n got %+v\nwant %+v", gotUser, wantUser)
+	}
+
+	// An impersonation session has to carry the admin through the join too,
+	// or the "viewing as" banner and the audit trail both lose the real actor.
+	admin := createTestUser(t, database, "admin")
+	imp, err := database.CreateImpersonationSession(user.ID, admin.ID)
+	if err != nil {
+		t.Fatalf("CreateImpersonationSession: %v", err)
+	}
+	impSession, impUser, err := database.GetSessionUser(imp.ID)
+	if err != nil || impSession == nil || impUser == nil {
+		t.Fatalf("GetSessionUser on an impersonation session: %v", err)
+	}
+	if impSession.ImpersonatorID == nil || *impSession.ImpersonatorID != admin.ID {
+		t.Errorf("ImpersonatorID = %v, want %d", impSession.ImpersonatorID, admin.ID)
+	}
+	if impUser.ID != user.ID {
+		t.Errorf("an impersonation session must resolve to the target, got %d want %d", impUser.ID, user.ID)
+	}
+
+	// Unknown and expired tokens are "no session", not an error — that is
+	// the signal the middleware branches on.
+	if s, u, err := database.GetSessionUser("does-not-exist"); err != nil || s != nil || u != nil {
+		t.Errorf("unknown token: got (%v, %v, %v), want (nil, nil, nil)", s, u, err)
+	}
+	expired, err := database.CreateSession(user.ID, -time.Hour)
+	if err != nil {
+		t.Fatalf("CreateSession (expired): %v", err)
+	}
+	if s, u, err := database.GetSessionUser(expired.ID); err != nil || s != nil || u != nil {
+		t.Errorf("expired token: got (%v, %v, %v), want (nil, nil, nil)", s, u, err)
+	}
+
+	if err := database.DeleteSession(session.ID); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if s, _, err := database.GetSessionUser(session.ID); err != nil || s != nil {
+		t.Errorf("deleted token: got (%v, %v), want (nil, nil)", s, err)
+	}
+}

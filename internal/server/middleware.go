@@ -25,14 +25,25 @@ func AuthMiddleware(database *db.DB) func(http.Handler) http.Handler {
 				http.Error(w, `{"error":"ulgama giriň"}`, http.StatusUnauthorized)
 				return
 			}
-			session, err := database.GetSession(cookie.Value)
+			// One query, not two: this runs on every authenticated request,
+			// and the app polls in the background, so a second round trip
+			// here was pure overhead on the hottest path in the app. See
+			// db.GetSessionUser.
+			session, user, err := database.GetSessionUser(cookie.Value)
 			if err != nil {
 				http.Error(w, `{"error":"möhleti geçen sessiýa"}`, http.StatusUnauthorized)
 				return
 			}
-			user, err := database.GetUserByID(session.UserID)
-			if err != nil || user == nil {
-				http.Error(w, `{"error":"ulanyjy tapylmady"}`, http.StatusUnauthorized)
+			if session == nil || user == nil {
+				// The join cannot say WHICH half was missing, and the two
+				// cases have different messages. Resolving that costs a
+				// second query — but only here, on a request that has
+				// already failed to authenticate.
+				if s, sErr := database.GetSession(cookie.Value); sErr == nil && s != nil {
+					http.Error(w, `{"error":"ulanyjy tapylmady"}`, http.StatusUnauthorized)
+					return
+				}
+				http.Error(w, `{"error":"möhleti geçen sessiýa"}`, http.StatusUnauthorized)
 				return
 			}
 			ctx := context.WithValue(r.Context(), authutil.UserKey, user)

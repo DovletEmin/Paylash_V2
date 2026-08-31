@@ -60,6 +60,51 @@ func (d *DB) GetSession(token string) (*models.Session, error) {
 	return s, nil
 }
 
+// GetSessionUser resolves a session token AND its owner in one round trip.
+//
+// AuthMiddleware runs on every authenticated request, and it needs both — so
+// doing this as GetSession followed by GetUserByID meant two sequential
+// queries per API call, on the single hottest path in the app. The app also
+// polls in the background (notification and chat-unread counts), so an idle
+// tab was paying that twice a tick for nothing.
+//
+// Both lookups are primary-key hits, so the join costs the same as either
+// half did alone. A nil session with a nil error means "no usable session":
+// either the token is unknown, or it has expired. The user can never be
+// missing for a session that exists — sessions.user_id cascades on delete —
+// but callers that want to tell the two apart can still fall back to
+// GetSession, which is what the middleware does on the failure path.
+func (d *DB) GetSessionUser(token string) (*models.Session, *models.User, error) {
+	s := &models.Session{}
+	u := &models.User{}
+	var impersonatorID sql.NullInt64
+	err := d.QueryRow(
+		`SELECT s.id, s.user_id, s.expires_at, s.created_at, s.impersonator_id,
+		        u.id, u.username, u.password_hash, u.display_name, u.role, u.quota_bytes,
+		        u.avatar_url, u.must_change_password, u.chat_notify_level, u.chat_notify_sound,
+		        u.onboarding_completed, u.attendance_tracked, u.created_at
+		 FROM sessions s
+		 JOIN users u ON u.id = s.user_id
+		 WHERE s.id = $1 AND s.expires_at > NOW()`, token,
+	).Scan(
+		&s.ID, &s.UserID, &s.ExpiresAt, &s.CreatedAt, &impersonatorID,
+		&u.ID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.QuotaBytes,
+		&u.AvatarURL, &u.MustChangePassword, &u.ChatNotifyLevel, &u.ChatNotifySound,
+		&u.OnboardingCompleted, &u.AttendanceTracked, &u.CreatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if impersonatorID.Valid {
+		v := int(impersonatorID.Int64)
+		s.ImpersonatorID = &v
+	}
+	return s, u, nil
+}
+
 func (d *DB) DeleteSession(token string) error {
 	_, err := d.Exec(`DELETE FROM sessions WHERE id = $1`, token)
 	return err
