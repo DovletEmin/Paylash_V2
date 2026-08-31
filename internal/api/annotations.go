@@ -97,16 +97,23 @@ func (h *Handler) SaveFileAnnotation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Shares the comment limiter: both are "a person leaving feedback on a
-	// file", and the client already debounces saves, so a legitimate
-	// session never comes close to the ceiling.
-	userKey := strconv.Itoa(user.ID)
-	if h.commentLimiter.blocked(userKey) {
-		writeError(w, http.StatusTooManyRequests, "köp synanyşyk boldy, birazdan gaýtadan synanyşyň")
-		return
-	}
-	h.commentLimiter.record(userKey)
-
+	// Deliberately NOT rate limited, unlike commenting.
+	//
+	// A comment is a human action — one deliberate act per post — so the
+	// comment limiter's 30 per 10 minutes (3/min) sits far above anything
+	// real. This is an autosave, which is a machine cadence: the client
+	// writes the layer about a second after each change. Measured against a
+	// normal review pass — thirty short strokes with a pause between each —
+	// that comes out at 57 saves/min, nineteen times the comment ceiling.
+	// Borrowing that limiter here meant roughly half a minute of drawing,
+	// then ten solid minutes of 429s with the work stranded in the browser.
+	//
+	// Nothing unbounded is left open by dropping it. The row is an upsert
+	// keyed by (file, author), so repeated writes replace one row instead of
+	// accumulating; its size is capped by maxAnnotationBytes and its parse
+	// cost by validateAnnotationShapes. What remains is an authenticated LAN
+	// user choosing to spend their own bandwidth, which is true of nearly
+	// every endpoint here and is not what a per-action limiter is for.
 	var req struct {
 		Shapes json.RawMessage `json:"shapes"`
 	}
