@@ -255,7 +255,10 @@ func (s *Server) routes(webFS embed.FS) {
 	if err != nil {
 		log.Fatal("cannot load embedded web files:", err)
 	}
-	fileServer := http.FileServer(http.FS(webSub))
+	static, err := newStaticHandler(webSub)
+	if err != nil {
+		log.Fatal("cannot prepare embedded web files:", err)
+	}
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// An unmatched /api/ or /wopi/ path must NOT fall through to the SPA.
 		// It used to: a mistyped or removed endpoint answered 200 with
@@ -269,16 +272,10 @@ func (s *Server) routes(webFS embed.FS) {
 			json.NewEncoder(w).Encode(map[string]string{"error": "not found"})
 			return
 		}
-		// SPA: serve index.html for non-file paths
-		if r.URL.Path != "/" {
-			// Check if file exists
-			f, err := webSub.(fs.ReadFileFS).ReadFile(r.URL.Path[1:])
-			if err != nil || f == nil {
-				// Serve index.html for SPA routing
-				r.URL.Path = "/"
-			}
-		}
-		fileServer.ServeHTTP(w, r)
+		// Everything else is the SPA: a real asset, or a client-side route
+		// that resolves to index.html. staticHandler decides which, and
+		// attaches the caching validators — see static.go.
+		static.ServeHTTP(w, r)
 	})
 }
 
