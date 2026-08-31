@@ -255,6 +255,22 @@ type FileComment struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+// FileAnnotation is one author's markup layer over an image: the shapes
+// they drew, as raw JSON. The server deliberately does not model the shape
+// grammar as Go structs — it validates the JSON's shape and bounds (see
+// validateAnnotationShapes) and stores it verbatim, so adding a tool on the
+// client doesn't require a matching server release. Shapes carries the JSON
+// array itself, already validated, ready to hand to the client untouched.
+type FileAnnotation struct {
+	ID         int             `json:"id"`
+	FileID     int             `json:"file_id"`
+	UserID     int             `json:"user_id"`
+	UserName   string          `json:"user_name"`
+	UserAvatar string          `json:"user_avatar"`
+	Shapes     json.RawMessage `json:"shapes"`
+	UpdatedAt  time.Time       `json:"updated_at"`
+}
+
 type SharedByMeView struct {
 	File
 	SharedWithID     int       `json:"shared_with_id"`

@@ -142,6 +142,14 @@ func (s *Server) routes(webFS embed.FS) {
 	s.mux.Handle("POST /api/files/{id}/comments", auth(http.HandlerFunc(h.CreateFileComment)))
 	s.mux.Handle("DELETE /api/files/{id}/comments/{commentId}", auth(http.HandlerFunc(h.DeleteFileComment)))
 
+	// Freehand markup layers over a previewed image. PUT rather than POST:
+	// a client sends the whole current state of its own layer and the row is
+	// keyed by (file, author), so re-sending is idempotent and a retry after
+	// a dropped connection can never duplicate a drawing.
+	s.mux.Handle("GET /api/files/{id}/annotations", auth(http.HandlerFunc(h.ListFileAnnotations)))
+	s.mux.Handle("PUT /api/files/{id}/annotations", auth(http.HandlerFunc(h.SaveFileAnnotation)))
+	s.mux.Handle("DELETE /api/files/{id}/annotations/{annotationId}", auth(http.HandlerFunc(h.DeleteFileAnnotation)))
+
 	// Chat (direct + group conversations, attachments, real-time via WS)
 	s.mux.Handle("GET /api/chat/users/search", auth(http.HandlerFunc(h.SearchChatUsers)))
 	s.mux.Handle("GET /api/chat/search", auth(http.HandlerFunc(h.SearchChatMessages)))

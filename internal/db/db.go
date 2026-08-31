@@ -479,6 +479,32 @@ func (d *DB) Migrate() error {
 		// later untracked are kept: they happened, and deleting history to
 		// tidy up a report would be the worse surprise.
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS attendance_tracked BOOLEAN NOT NULL DEFAULT TRUE`,
+
+		// Freehand markup drawn over a previewed image — the review layer
+		// that sits alongside the pinned notes in file_comments.
+		//
+		// One row per (file, author) rather than one per shape, for two
+		// reasons. A drawing is edited as a whole (undo, erase, move), so
+		// per-shape rows would mean a diff on every stroke for no gain. And
+		// scoping the row to its author means two people marking up the
+		// same render never write the same row — the layers compose on
+		// screen instead of racing in the database, which is what lets this
+		// work with no locking and no realtime channel.
+		//
+		// Shape coordinates are normalised to the image (0..1), never
+		// pixels: the same layer then lands correctly on a phone, on a 4K
+		// monitor and on the zoomed view, and survives the file being
+		// replaced by a re-render at a different resolution.
+		`CREATE TABLE IF NOT EXISTS file_annotations (
+			id         SERIAL PRIMARY KEY,
+			file_id    INT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+			user_id    INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			shapes     JSONB NOT NULL DEFAULT '[]'::jsonb,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE(file_id, user_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_file_annotations_file ON file_annotations(file_id)`,
 	}
 
 	for _, m := range migrations {
