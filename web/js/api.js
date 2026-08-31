@@ -158,6 +158,15 @@ const API = {
             },
             delete(fileId, commentId) { return API._request('DELETE', `/api/files/${fileId}/comments/${commentId}`); },
         },
+        // Markup layers over an image (see annotate.js). save() is a PUT of
+        // the caller's whole layer, so it is idempotent: a retry after a
+        // dropped connection replays the same state instead of duplicating
+        // the drawing.
+        annotations: {
+            list(fileId) { return API._request('GET', `/api/files/${fileId}/annotations`); },
+            save(fileId, shapes) { return API._request('PUT', `/api/files/${fileId}/annotations`, { shapes }); },
+            delete(fileId, annotationId) { return API._request('DELETE', `/api/files/${fileId}/annotations/${annotationId}`); },
+        },
     },
 
     notifications: {

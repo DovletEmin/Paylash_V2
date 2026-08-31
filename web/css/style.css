@@ -638,8 +638,11 @@ img.share-user-avatar-lg{box-shadow:0 0 0 3px var(--surface),0 0 0 5px var(--acc
   height:44px;background:var(--surface);border-bottom:1px solid var(--border);
   display:flex;align-items:center;padding:0 16px;gap:12px;
 }
-.editor-filename{font-weight:600;font-size:.85rem;flex:1}
-.editor-toolbar-right{display:flex;gap:6px;margin-left:auto}
+/* min-width:0 is what actually lets a long filename shrink: a flex item
+   refuses to go below its content width without it, and the toolbar's
+   buttons get pushed off the right edge instead of the name truncating. */
+.editor-filename{font-weight:600;font-size:.85rem;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.editor-toolbar-right{display:flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0}
 .editor-container{flex:1;position:relative}
 .editor-iframe{width:100%;height:100%;border:none}
 .editor-loading{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--text-3);gap:10px}
@@ -736,6 +739,87 @@ img.share-user-avatar-lg{box-shadow:0 0 0 3px var(--surface),0 0 0 5px var(--acc
 .comment-pin-pending{background:var(--primary);animation:pulse 1.2s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
 .preview-image-inner img.pin-mode{cursor:crosshair}
+
+/* ─── Image markup layer (annotate.js) ─── */
+/* All three canvases sit exactly on the image's rendered box. inset:0 works
+   because .preview-image-inner shrink-wraps the img and has no padding —
+   the same assumption .comment-pins already relies on. */
+.annot-canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;touch-action:none}
+/* The highlighter darkens the photo instead of veiling it, which only works
+   if the blend happens against the image — i.e. on the element, not in a
+   draw call. Isolated to its own canvas so nothing else is affected. */
+.annot-hl{mix-blend-mode:multiply}
+html.light .annot-hl{mix-blend-mode:multiply}
+/* Per-tool cursors: the shape of the pointer is the fastest possible
+   feedback about which tool is armed. */
+.annot-live[data-tool="pen"],.annot-live[data-tool="hl"],
+.annot-live[data-tool="line"],.annot-live[data-tool="arrow"],
+.annot-live[data-tool="rect"],.annot-live[data-tool="ellipse"]{cursor:crosshair}
+.annot-live[data-tool="text"]{cursor:text}
+.annot-live[data-tool="select"]{cursor:default}
+.annot-live[data-tool="eraser"]{cursor:cell}
+.annot-live[data-tool="laser"]{cursor:none}
+
+.annot-text-input{
+  position:absolute;z-index:6;background:rgba(0,0,0,.35);border:1px dashed currentColor;
+  border-radius:4px;padding:1px 6px;font-weight:600;line-height:1.2;min-width:80px;
+  outline:none;font-family:inherit;
+}
+
+.annot-bar{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:8px 14px;border-bottom:1px solid var(--border);background:var(--surface);
+}
+.annot-group{display:flex;align-items:center;gap:4px}
+.annot-sep{width:1px;align-self:stretch;background:var(--border);margin:0 2px}
+.annot-tool{
+  display:flex;align-items:center;justify-content:center;width:30px;height:30px;
+  border-radius:var(--r);color:var(--text-2);transition:all var(--tr);
+}
+.annot-tool svg{width:17px;height:17px}
+.annot-tool:hover:not(:disabled){background:var(--surface-2);color:var(--text)}
+.annot-tool.active{background:var(--primary-bg);color:var(--primary)}
+.annot-tool:disabled{opacity:.35;cursor:default}
+
+.annot-swatch{
+  width:20px;height:20px;border-radius:50%;border:2px solid transparent;
+  box-shadow:0 0 0 1px var(--border) inset;transition:transform var(--tr);
+}
+.annot-swatch:hover{transform:scale(1.12)}
+.annot-swatch.active{border-color:var(--primary);transform:scale(1.12)}
+
+/* The width buttons show the width they set rather than naming it — a bar
+   of the actual thickness is read faster than "thin / medium / thick". */
+.annot-width{
+  display:flex;align-items:center;justify-content:center;width:28px;height:28px;
+  border-radius:var(--r);transition:all var(--tr);
+}
+.annot-width i{display:block;width:16px;border-radius:2px;background:var(--text-2)}
+.annot-width:hover{background:var(--surface-2)}
+.annot-width.active{background:var(--primary-bg)}
+.annot-width.active i{background:var(--primary)}
+
+.annot-status{margin-left:auto;font-size:.72rem;color:var(--text-3);white-space:nowrap}
+.annot-status.is-saved{opacity:.6}
+
+.annot-visible-toggle{
+  display:flex;align-items:center;gap:6px;font-size:.78rem;color:var(--text-2);
+  cursor:pointer;user-select:none;padding:4px 8px;border-radius:var(--r);
+}
+.annot-visible-toggle:hover{background:var(--surface-2);color:var(--text)}
+.annot-visible-toggle input{cursor:pointer;accent-color:var(--primary);margin:0}
+/* The wrapper has to be a flex row of its own: as a plain inline <span>
+   its two children wrap onto separate lines inside the 44px toolbar. */
+.annot-controls{display:flex;align-items:center;gap:6px}
+
+/* Five controls with words on them do not fit a phone's preview toolbar.
+   Below this width they keep their icons and lose their labels — the icons
+   carry the meaning, and every one of them still has a title/aria-label. */
+@media(max-width:820px){
+  .preview-toolbar-compact .tb-label{display:none}
+  .preview-toolbar-compact .btn-sm{padding:5px 7px}
+  .editor-toolbar{padding:0 10px;gap:8px}
+}
 @media (max-width:900px){
   .preview-body{flex-direction:column}
   .comments-panel{width:100%;height:45%;border-left:none;border-top:1px solid var(--border)}

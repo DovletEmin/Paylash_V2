@@ -12,14 +12,16 @@ const PreviewPage = {
         return `
         <div class="editor-page">
             <div class="editor-toolbar">
-                <button class="btn btn-ghost btn-sm" onclick="App.closeFileView()">${I18N.t('editor.back')}</button>
+                <button class="btn btn-ghost btn-sm" onclick="PreviewPage.close()">${I18N.t('editor.back')}</button>
                 <span class="editor-filename" id="preview-filename">${UI.esc(this.currentFileName)}</span>
-                <div class="editor-toolbar-right">
-                    <button class="btn btn-ghost btn-sm" id="comments-toggle-btn" onclick="PreviewPage.toggleComments()">💬 ${I18N.t('comments.toggle')}</button>
-                    <button class="btn btn-ghost btn-sm" onclick="PreviewPage.download()">${UI.icons.download} ${I18N.t('files.action_download')}</button>
-                    <button class="btn btn-ghost btn-sm" onclick="SharesPage.showShareModal({id:PreviewPage.currentFileId,name:PreviewPage.currentFileName})">${UI.icons.share} ${I18N.t('files.action_share')}</button>
+                <div class="editor-toolbar-right preview-toolbar-compact" id="preview-toolbar-right">
+                    <span class="annot-controls" id="annotate-controls"></span>
+                    <button class="btn btn-ghost btn-sm" id="comments-toggle-btn" onclick="PreviewPage.toggleComments()">💬 <span class="tb-label">${I18N.t('comments.toggle')}</span></button>
+                    <button class="btn btn-ghost btn-sm" onclick="PreviewPage.download()">${UI.icons.download} <span class="tb-label">${I18N.t('files.action_download')}</span></button>
+                    <button class="btn btn-ghost btn-sm" onclick="SharesPage.showShareModal({id:PreviewPage.currentFileId,name:PreviewPage.currentFileName})">${UI.icons.share} <span class="tb-label">${I18N.t('files.action_share')}</span></button>
                 </div>
             </div>
+            <div class="annot-bar hidden" id="annot-bar"></div>
             <div class="preview-body">
                 <div class="preview-container" id="preview-container">
                     <div class="editor-loading"><div class="spinner"></div><p>${I18N.t('common.loading')}</p></div>
@@ -114,6 +116,11 @@ const PreviewPage = {
         const c = document.getElementById('preview-container');
         const type = UI.mediaType(this.currentFileName);
         const url = `/api/files/${this.currentFileId}/download`;
+        // Stepping from a photo to a PDF has to tear the markup layer down
+        // too, not just when the next file is another image (where mount()
+        // would have done it) — otherwise the canvases go away with the
+        // container's innerHTML while the module still believes it is live.
+        if (type !== 'image') Annotate.unmount();
 
         if (type === 'image') {
             c.innerHTML = `<div class="preview-media preview-image" id="preview-image-wrap">
@@ -124,6 +131,10 @@ const PreviewPage = {
                 </div>
                 ${this.navArrowHTML('next')}
             </div>`;
+            // The markup layer attaches to this image and detaches (saving
+            // whatever is unsaved) on the way to the next one — mount()
+            // handles both, so there is nothing to unwind here.
+            Annotate.mount(this.currentFileId, c.querySelector('#preview-image-inner img'));
         } else if (type === 'audio') {
             c.innerHTML = `<div class="preview-media preview-audio">
                 <div class="preview-audio-icon">🎵</div>
@@ -149,6 +160,7 @@ const PreviewPage = {
             c.innerHTML = `<div class="empty-state"><p>${I18N.t('preview.unsupported_type')}</p></div>`;
         }
 
+        this.renderAnnotateBar();
         if (this._commentsOpen) this.loadComments();
     },
 
@@ -170,6 +182,11 @@ const PreviewPage = {
     // comment (see togglePinMode), the same click instead records where on
     // the image the pin should sit.
     onImageClick(ev, img) {
+        // While the markup layer is armed the canvas above the image takes
+        // the pointer, so this only fires on the gaps around it — but a
+        // stray zoom mid-drawing would still be jarring, and zooming is
+        // always one click away again once drawing is switched off.
+        if (Annotate.editing) return;
         if (this._pinMode) {
             const rect = img.getBoundingClientRect();
             const xPct = Math.max(0, Math.min(100, ((ev.clientX - rect.left) / rect.width) * 100));
@@ -186,6 +203,85 @@ const PreviewPage = {
     },
 
     download() { if (this.currentFileId) FilesPage.download(this.currentFileId, this.currentFileName); },
+
+    // Leaving the preview by the Back button. Unmounting the markup layer
+    // first is what turns "I drew something and immediately left" into a
+    // saved layer instead of a lost one — the browser's own Back button is
+    // covered separately, by Annotate's popstate listener.
+    close() {
+        Annotate.unmount();
+        App.closeFileView();
+    },
+
+    /* ── Markup layer (see annotate.js) ── */
+
+    // Rebuilt on every state change rather than mutated in place: the bar is
+    // small, and a single render path means the toolbar can never disagree
+    // with the tool that is actually armed.
+    renderAnnotateBar() {
+        const controls = document.getElementById('annotate-controls');
+        const bar = document.getElementById('annot-bar');
+        if (!controls || !bar) return;
+
+        if (UI.mediaType(this.currentFileName) !== 'image' || !Annotate._mounted) {
+            controls.innerHTML = '';
+            bar.classList.add('hidden');
+            return;
+        }
+
+        // The checkbox is offered whenever there is markup to hide OR the
+        // user is drawing; on an unmarked image it would be a switch for
+        // nothing.
+        const showToggle = Annotate.hasAnything() || Annotate.editing;
+        controls.innerHTML = `
+            ${showToggle ? `
+            <label class="annot-visible-toggle" title="${I18N.t('annot.visible_hint')}">
+                <input type="checkbox" ${Annotate.visible ? 'checked' : ''} onchange="Annotate.setVisible(this.checked)">
+                <span class="tb-label">${I18N.t('annot.visible')}</span>
+            </label>` : ''}
+            <button class="btn btn-ghost btn-sm ${Annotate.editing ? 'active' : ''}"
+                    onclick="Annotate.setEditing(${!Annotate.editing})"
+                    title="${I18N.t('annot.draw_hint')}">${Annotate.ICONS.pen} <span class="tb-label">${I18N.t('annot.draw')}</span></button>`;
+
+        bar.classList.toggle('hidden', !Annotate.editing);
+        if (!Annotate.editing) return;
+
+        const tool = (t) => `<button class="annot-tool ${Annotate.tool === t ? 'active' : ''}"
+            onclick="Annotate.setTool('${t}')" title="${I18N.t('annot.tool_' + t)}"
+            aria-label="${I18N.t('annot.tool_' + t)}" aria-pressed="${Annotate.tool === t}">${Annotate.ICONS[t]}</button>`;
+
+        const swatch = (c) => `<button class="annot-swatch ${Annotate.color === c ? 'active' : ''}"
+            style="background:${c}" onclick="Annotate.setColor('${c}')"
+            aria-label="${c}" aria-pressed="${Annotate.color === c}"></button>`;
+
+        const widthBtn = (w, i) => `<button class="annot-width ${Annotate.width === w ? 'active' : ''}"
+            onclick="Annotate.setWidth(${w})" aria-label="${I18N.t('annot.width')} ${i + 1}"
+            aria-pressed="${Annotate.width === w}"><i style="height:${2 + i * 3}px"></i></button>`;
+
+        const status = Annotate.isSaving() ? I18N.t('annot.saving')
+            : Annotate.isDirty() ? I18N.t('annot.unsaved')
+                : I18N.t('annot.saved');
+
+        bar.innerHTML = `
+            <div class="annot-group">${Annotate.TOOLS.map(tool).join('')}</div>
+            <div class="annot-sep"></div>
+            <div class="annot-group">${Annotate.PALETTE.map(swatch).join('')}</div>
+            <div class="annot-sep"></div>
+            <div class="annot-group">
+                ${Annotate.WIDTHS.map(widthBtn).join('')}
+                <button class="annot-tool ${Annotate.dashed ? 'active' : ''}" onclick="Annotate.toggleDashed()"
+                        title="${I18N.t('annot.dashed')}" aria-pressed="${Annotate.dashed}">${Annotate.ICONS.dashed}</button>
+            </div>
+            <div class="annot-sep"></div>
+            <div class="annot-group">
+                <button class="annot-tool" onclick="Annotate.undo()" ${Annotate._history.length ? '' : 'disabled'}
+                        title="${I18N.t('annot.undo')}" aria-label="${I18N.t('annot.undo')}">${Annotate.ICONS.undo}</button>
+                <button class="annot-tool" onclick="Annotate.redo()" ${Annotate._redo.length ? '' : 'disabled'}
+                        title="${I18N.t('annot.redo')}" aria-label="${I18N.t('annot.redo')}">${Annotate.ICONS.redo}</button>
+                <button class="btn btn-ghost btn-sm" onclick="Annotate.clearMine()" ${Annotate.scene.length ? '' : 'disabled'}>${I18N.t('annot.clear')}</button>
+            </div>
+            <div class="annot-status ${Annotate.isDirty() || Annotate.isSaving() ? '' : 'is-saved'}">${status}</div>`;
+    },
 
     /* ── Comments (review notes, optionally pinned to a point on an image) ── */
 
