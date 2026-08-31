@@ -709,10 +709,95 @@ const App = {
                 <div id="prof-blocked-list"><div class="empty-state"><div class="spinner"></div></div></div>
             </div>
             <hr style="border:none;border-top:1px solid var(--border);margin:12px 0">
+            <div class="form-group">
+                <label>${I18N.t('dav.section_label')}</label>
+                <p class="text-muted" style="font-size:.72rem;margin:0 0 8px">${I18N.t('dav.section_hint')}</p>
+                <div id="prof-dav-list"><div class="empty-state"><div class="spinner"></div></div></div>
+                <button type="button" class="btn btn-ghost btn-sm" style="width:100%;margin-top:8px" onclick="App.createAppPassword()">${I18N.t('dav.create')}</button>
+            </div>
+            <hr style="border:none;border-top:1px solid var(--border);margin:12px 0">
             <button type="button" class="btn btn-ghost btn-sm" style="width:100%" onclick="App.logoutOtherDevices()">${I18N.t('app.logout_others_button')}</button>
             <p class="text-muted" style="font-size:.72rem;margin-top:4px">${I18N.t('app.logout_others_hint')}</p>`,
             `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="App.saveProfile()">${I18N.t('common.save')}</button>`);
         this.loadBlockedUsersList();
+        this.loadAppPasswords();
+    },
+
+    /* ── Network-drive credentials (see internal/dav) ── */
+
+    async loadAppPasswords() {
+        const el = document.getElementById('prof-dav-list');
+        if (!el) return;
+        let list;
+        try { list = await API.appPasswords.list() || []; } catch { list = []; }
+        if (!document.getElementById('prof-dav-list')) return; // modal closed meanwhile
+        if (!list.length) {
+            el.innerHTML = `<p class="text-muted" style="font-size:.8rem">${I18N.t('dav.none')}</p>`;
+            return;
+        }
+        el.innerHTML = list.map(p => `<div class="chat-member-row">
+            <span class="chat-member-name">${UI.esc(p.name)}</span>
+            <span class="text-muted" style="font-size:.7rem">${p.last_used_at ? I18N.t('dav.last_used', { when: UI.formatDate(p.last_used_at) }) : I18N.t('dav.never_used')}</span>
+            <button class="btn btn-ghost btn-sm" onclick="App.deleteAppPassword(${p.id})">${I18N.t('common.delete')}</button>
+        </div>`).join('');
+    },
+
+    async createAppPassword() {
+        const name = prompt(I18N.t('dav.name_prompt'), I18N.t('dav.name_default'));
+        if (name === null) return;
+        try {
+            const res = await API.appPasswords.create(name.trim() || I18N.t('dav.name_default'));
+            this.showAppPasswordModal(res);
+        } catch (e) { UI.toast(e.message, 'error'); }
+    },
+
+    // The token exists in exactly one place — this modal — because only its
+    // hash is stored. So the dialog has to carry everything needed to set the
+    // drive up while it is on screen: the address, the login, and the token.
+    showAppPasswordModal(res) {
+        const url = `${location.origin}/dav`;
+        UI.showModal(I18N.t('dav.created_title'), `
+            <p class="text-muted" style="font-size:.8rem">${I18N.t('dav.created_warning')}</p>
+            <div class="form-group"><label>${I18N.t('dav.field_address')}</label>
+                <input class="form-control" readonly value="${UI.esc(url)}" onclick="this.select()"></div>
+            <div class="form-group"><label>${I18N.t('dav.field_login')}</label>
+                <input class="form-control" readonly value="${UI.esc(res.username)}" onclick="this.select()"></div>
+            <div class="form-group"><label>${I18N.t('dav.field_password')}</label>
+                <input class="form-control" id="dav-token" readonly value="${UI.esc(res.token)}" onclick="this.select()"></div>
+            <button type="button" class="btn btn-ghost btn-sm" style="width:100%" onclick="App.copyAppPassword()">${I18N.t('dav.copy')}</button>
+            <hr style="border:none;border-top:1px solid var(--border);margin:12px 0">
+            <p style="font-size:.78rem;line-height:1.5">${I18N.t('dav.howto')}</p>`,
+            // Straight back to the profile, WITHOUT closeModal() first:
+            // closeModal blanks the overlay on a 200ms timer for its fade,
+            // so closing and immediately reopening would draw the profile
+            // and then wipe it a fifth of a second later. showModal already
+            // replaces the overlay's contents, which is all that is wanted.
+            `<button class="btn btn-primary" onclick="App.showProfileModal()">${I18N.t('common.close')}</button>`);
+    },
+
+    async copyAppPassword() {
+        const el = document.getElementById('dav-token');
+        if (!el) return;
+        try {
+            await navigator.clipboard.writeText(el.value);
+            UI.toast(I18N.t('dav.copied'), 'success');
+        } catch {
+            // Clipboard access can be refused (an insecure origin, or the
+            // user declined) — selecting the text still lets them copy it
+            // by hand rather than leaving them stuck.
+            el.select();
+            UI.toast(I18N.t('dav.copy_manual'), 'info');
+        }
+    },
+
+    deleteAppPassword(id) {
+        UI.confirmAction(I18N.t('dav.delete_title'), I18N.t('dav.delete_body'), I18N.t('common.delete'), async () => {
+            try {
+                await API.appPasswords.delete(id);
+                UI.toast(I18N.t('dav.deleted'), 'success');
+                this.loadAppPasswords();
+            } catch (e) { UI.toast(e.message, 'error'); }
+        });
     },
 
     async loadBlockedUsersList() {

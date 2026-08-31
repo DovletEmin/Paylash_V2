@@ -283,6 +283,28 @@ window.PAYLASH_LOCALE_TR = {
     'annot.duplicate': 'Çoğalt',
     'annot.selected': { other: '{n} seçildi' },
 
+    // network drive (internal/dav)
+    'dav.section_label': 'Ağ sürücüsü',
+    'dav.section_hint': 'Depolamayı ağ sürücüsü olarak bağlamak için cihaz anahtarları. Her bilgisayar için ayrı anahtar.',
+    'dav.none': 'Henüz anahtar yok.',
+    'dav.create': 'Cihaz anahtarı oluştur',
+    'dav.name_prompt': 'Cihaza bir ad verin, sonradan hangi anahtarı iptal edeceğinizi bilin:',
+    'dav.name_default': 'Bilgisayarım',
+    'dav.last_used': 'kullanıldı {when}',
+    'dav.never_used': 'hiç kullanılmadı',
+    'dav.created_title': 'Cihaz anahtarı oluşturuldu',
+    'dav.created_warning': 'Bu anahtar yalnızca şimdi gösterilir — sunucuda sadece izi saklanır. Pencereyi kapatmadan önce kopyalayın.',
+    'dav.field_address': 'Adres',
+    'dav.field_login': 'Kullanıcı adı',
+    'dav.field_password': 'Parola (cihaz anahtarı)',
+    'dav.copy': 'Anahtarı kopyala',
+    'dav.copied': 'Anahtar kopyalandı',
+    'dav.copy_manual': 'Seçili metni elle kopyalayın',
+    'dav.howto': 'Windows: Bu bilgisayar → Ağ sürücüsü bağla → yukarıdaki adres. İlk bağlantıdan önce scripts/WEBDAV_SETUP.ps1 dosyasını yönetici olarak çalıştırın. macOS: Finder → Git → Sunucuya Bağlan.',
+    'dav.delete_title': 'Cihaz anahtarını iptal et',
+    'dav.delete_body': 'O bilgisayardaki sürücü açılmayı bırakacak. Devam edilsin mi?',
+    'dav.deleted': 'Anahtar iptal edildi',
+
     // chat
     'chat.title': 'Sohbet',
     'chat.new_dm': 'Yeni mesaj',

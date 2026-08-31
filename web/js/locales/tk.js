@@ -286,6 +286,28 @@ window.PAYLASH_LOCALE_TK = {
     'annot.duplicate': 'Nusgalamak',
     'annot.selected': { other: '{n} saýlandy' },
 
+    // network drive (internal/dav)
+    'dav.section_label': 'Tor diski',
+    'dav.section_hint': 'Ammary tor diski hökmünde birikdirmek üçin enjam açarlary. Her kompýuter üçin aýratyn açar.',
+    'dav.none': 'Heniz açar ýok.',
+    'dav.create': 'Enjam açaryny döretmek',
+    'dav.name_prompt': 'Enjamyň ady — soň haýsy açary yzyna almalydygy düşnükli bolar ýaly:',
+    'dav.name_default': 'Meniň kompýuterim',
+    'dav.last_used': 'ulanyldy {when}',
+    'dav.never_used': 'hiç ulanylmady',
+    'dav.created_title': 'Enjam açary döredildi',
+    'dav.created_warning': 'Açar diňe şu wagt görkezilýär — serwerde diňe onuň yzy saklanýar. Penjiräni ýapmazdan öň göçüriň.',
+    'dav.field_address': 'Salgy',
+    'dav.field_login': 'Ulanyjy ady',
+    'dav.field_password': 'Parol (enjam açary)',
+    'dav.copy': 'Açary göçürmek',
+    'dav.copied': 'Açar göçürildi',
+    'dav.copy_manual': 'Bellenen teksti elden göçüriň',
+    'dav.howto': 'Windows: «Bu kompýuter» → «Tor diskini birikdirmek» → ýokardaky salgy. Ilkinji birikmezden öň scripts/WEBDAV_SETUP.ps1 administrator hökmünde işlediň. macOS: Finder → «Geçmek» → «Serwere birikmek».',
+    'dav.delete_title': 'Enjam açaryny yzyna almak',
+    'dav.delete_body': 'Ol kompýuterde disk açylmagyny bes eder. Dowam edilsinmi?',
+    'dav.deleted': 'Açar yzyna alyndy',
+
     // chat
     'chat.title': 'Söhbetdeşlik',
     'chat.new_dm': 'Täze habar',

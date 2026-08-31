@@ -283,6 +283,28 @@ window.PAYLASH_LOCALE_EN = {
     'annot.duplicate': 'Duplicate',
     'annot.selected': { one: '{n} selected', other: '{n} selected' },
 
+    // network drive (internal/dav)
+    'dav.section_label': 'Network drive',
+    'dav.section_hint': 'Device keys for mounting the storage as a network drive. One key per computer.',
+    'dav.none': 'No keys yet.',
+    'dav.create': 'Create a device key',
+    'dav.name_prompt': 'Name this device, so you know which key to revoke later:',
+    'dav.name_default': 'My computer',
+    'dav.last_used': 'used {when}',
+    'dav.never_used': 'never used',
+    'dav.created_title': 'Device key created',
+    'dav.created_warning': 'This key is shown only now — the server keeps just its fingerprint. Copy it before closing this window.',
+    'dav.field_address': 'Address',
+    'dav.field_login': 'Login',
+    'dav.field_password': 'Password (device key)',
+    'dav.copy': 'Copy the key',
+    'dav.copied': 'Key copied',
+    'dav.copy_manual': 'Copy the selected text by hand',
+    'dav.howto': 'Windows: This PC → Map network drive → the address above. Run scripts/WEBDAV_SETUP.ps1 as administrator once before the first connection. macOS: Finder → Go → Connect to Server.',
+    'dav.delete_title': 'Revoke the device key',
+    'dav.delete_body': 'The drive on that computer will stop opening. Continue?',
+    'dav.deleted': 'Key revoked',
+
     // chat
     'chat.title': 'Chat',
     'chat.new_dm': 'New message',

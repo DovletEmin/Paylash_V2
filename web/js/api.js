@@ -169,6 +169,14 @@ const API = {
         },
     },
 
+    // Per-device credentials for the network drive (see internal/dav). The
+    // token comes back only from create() — the server keeps just its hash.
+    appPasswords: {
+        list() { return API._request('GET', '/api/app-passwords'); },
+        create(name) { return API._request('POST', '/api/app-passwords', { name }); },
+        delete(id) { return API._request('DELETE', `/api/app-passwords/${id}`); },
+    },
+
     notifications: {
         unreadCount() { return API._request('GET', '/api/notifications/unread-count'); },
         markSeen() { return API._request('POST', '/api/notifications/mark-seen'); },
