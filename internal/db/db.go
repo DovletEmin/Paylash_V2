@@ -505,6 +505,28 @@ func (d *DB) Migrate() error {
 			UNIQUE(file_id, user_id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_file_annotations_file ON file_annotations(file_id)`,
+
+		// Per-device credentials for mounting the storage as a network drive
+		// (see internal/dav). WebDAV authenticates with HTTP Basic on every
+		// request, and a drive mapping is remembered by the operating system
+		// forever — so it must not be the account password: that would leave
+		// a copy of it in Windows Credential Manager on every machine, and
+		// changing the password would silently break every mount.
+		//
+		// The stored value is a plain SHA-256 of a 160-bit random token,
+		// deliberately not bcrypt. bcrypt exists to make GUESSING feasible
+		// passwords expensive; this token is generated here with full
+		// entropy and cannot be guessed, while WebDAV is chatty enough that
+		// a deliberately slow hash on every request would be felt.
+		`CREATE TABLE IF NOT EXISTS app_passwords (
+			id           SERIAL PRIMARY KEY,
+			user_id      INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			name         VARCHAR(100) NOT NULL,
+			token_hash   CHAR(64) NOT NULL UNIQUE,
+			created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			last_used_at TIMESTAMPTZ
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_app_passwords_user ON app_passwords(user_id)`,
 	}
 
 	for _, m := range migrations {

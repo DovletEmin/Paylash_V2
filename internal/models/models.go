@@ -271,6 +271,17 @@ type FileAnnotation struct {
 	UpdatedAt  time.Time       `json:"updated_at"`
 }
 
+// AppPassword is one device's credential for mounting the storage as a
+// network drive. The token itself is never modelled here — it exists only
+// in the response to the call that created it.
+type AppPassword struct {
+	ID         int        `json:"id"`
+	UserID     int        `json:"user_id"`
+	Name       string     `json:"name"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+}
+
 type SharedByMeView struct {
 	File
 	SharedWithID     int       `json:"shared_with_id"`
