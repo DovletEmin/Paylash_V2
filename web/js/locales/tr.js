@@ -272,6 +272,16 @@ window.PAYLASH_LOCALE_TR = {
     'annot.saved': 'Kaydedildi',
     'annot.unsaved': 'Kaydedilmemiş değişiklikler',
     'annot.save_failed': 'İşaretleme kaydedilemedi',
+    'annot.you': 'Siz',
+    'annot.authors': 'Yazarlar',
+    'annot.authors_hint': 'Yalnızca seçili yazarların işaretlemesini göster',
+    'annot.export': 'Dışa aktar',
+    'annot.export_hint': 'Görüntüyü işaretlemeyle birlikte indir',
+    'annot.export_suffix': 'isaretleme',
+    'annot.export_done': 'İşaretlemeli görüntü indirildi',
+    'annot.export_failed': 'Görüntü dışa aktarılamadı',
+    'annot.duplicate': 'Çoğalt',
+    'annot.selected': { other: '{n} seçildi' },
 
     // chat
     'chat.title': 'Sohbet',

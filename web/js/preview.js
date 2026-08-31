@@ -90,8 +90,28 @@ const PreviewPage = {
         this._keyNavBound = true;
         document.addEventListener('keydown', ev => {
             if (App.currentPage !== 'preview' || UI.mediaType(PreviewPage.currentFileName) !== 'image') return;
+            // While the markup palette is open the arrows belong to it —
+            // nudging a selected shape, and in any case never yanking the
+            // photo out from under a drawing in progress. This guard has to
+            // live here rather than relying on preventDefault in Annotate:
+            // both handlers sit on document, this one is registered first,
+            // and preventDefault does not stop the other from running.
+            if (typeof Annotate !== 'undefined' && Annotate.editing) return;
             if (ev.key === 'ArrowLeft') { ev.preventDefault(); PreviewPage.navigateSibling(-1); }
             else if (ev.key === 'ArrowRight') { ev.preventDefault(); PreviewPage.navigateSibling(1); }
+        });
+    },
+
+    _authorCloseBound: false,
+    _bindAuthorListClose() {
+        if (this._authorCloseBound) return;
+        this._authorCloseBound = true;
+        // The button and the panel both stopPropagation, so anything that
+        // reaches document is a click somewhere else.
+        document.addEventListener('click', () => {
+            if (!PreviewPage._authorsOpen) return;
+            PreviewPage._authorsOpen = false;
+            PreviewPage.renderAnnotateBar();
         });
     },
 
@@ -111,6 +131,7 @@ const PreviewPage = {
         if (!this.currentFileId) { App.closeFileView(); return; }
         this._bindKeyNav();
         this._bindVisibilityRefresh();
+        this._bindAuthorListClose();
         const nameEl = document.getElementById('preview-filename');
         if (nameEl) nameEl.textContent = this.currentFileName;
         const c = document.getElementById('preview-container');
@@ -215,6 +236,26 @@ const PreviewPage = {
 
     /* ── Markup layer (see annotate.js) ── */
 
+    // Whether the per-author dropdown is open. Closed again by the global
+    // click handler in components.js, same as any other menu here.
+    _authorsOpen: false,
+
+    toggleAuthorList() {
+        this._authorsOpen = !this._authorsOpen;
+        this.renderAnnotateBar();
+    },
+
+    authorListHTML(authors) {
+        return authors.map(a => {
+            const on = !Annotate.hiddenAuthors.has(a.id);
+            return `<label class="annot-author ${on ? '' : 'off'}">
+                <input type="checkbox" ${on ? 'checked' : ''} onchange="Annotate.toggleAuthor(${a.id})">
+                <span class="annot-author-name">${UI.esc(a.name)}${a.mine ? '' : ''}</span>
+                <span class="annot-author-count">${a.count}</span>
+            </label>`;
+        }).join('');
+    },
+
     // Rebuilt on every state change rather than mutated in place: the bar is
     // small, and a single render path means the toolbar can never disagree
     // with the tool that is actually armed.
@@ -233,12 +274,23 @@ const PreviewPage = {
         // user is drawing; on an unmarked image it would be a switch for
         // nothing.
         const showToggle = Annotate.hasAnything() || Annotate.editing;
+        const authors = Annotate.authors();
         controls.innerHTML = `
             ${showToggle ? `
             <label class="annot-visible-toggle" title="${I18N.t('annot.visible_hint')}">
                 <input type="checkbox" ${Annotate.visible ? 'checked' : ''} onchange="Annotate.setVisible(this.checked)">
                 <span class="tb-label">${I18N.t('annot.visible')}</span>
             </label>` : ''}
+            ${authors.length > 1 && Annotate.visible ? `
+            <div class="annot-authors-wrap">
+                <button class="btn btn-ghost btn-sm ${this._authorsOpen ? 'active' : ''}"
+                        onclick="event.stopPropagation();PreviewPage.toggleAuthorList()"
+                        title="${I18N.t('annot.authors_hint')}">👥 <span class="tb-label">${I18N.t('annot.authors')} (${authors.length})</span></button>
+                ${this._authorsOpen ? `<div class="annot-authors" onclick="event.stopPropagation()">${this.authorListHTML(authors)}</div>` : ''}
+            </div>` : ''}
+            ${Annotate.hasAnything() ? `
+            <button class="btn btn-ghost btn-sm" onclick="Annotate.exportPNG()"
+                    title="${I18N.t('annot.export_hint')}">${UI.icons.download} <span class="tb-label">${I18N.t('annot.export')}</span></button>` : ''}
             <button class="btn btn-ghost btn-sm ${Annotate.editing ? 'active' : ''}"
                     onclick="Annotate.setEditing(${!Annotate.editing})"
                     title="${I18N.t('annot.draw_hint')}">${Annotate.ICONS.pen} <span class="tb-label">${I18N.t('annot.draw')}</span></button>`;
@@ -280,6 +332,13 @@ const PreviewPage = {
                         title="${I18N.t('annot.redo')}" aria-label="${I18N.t('annot.redo')}">${Annotate.ICONS.redo}</button>
                 <button class="btn btn-ghost btn-sm" onclick="Annotate.clearMine()" ${Annotate.scene.length ? '' : 'disabled'}>${I18N.t('annot.clear')}</button>
             </div>
+            ${Annotate.selectedIds.size ? `
+            <div class="annot-sep"></div>
+            <div class="annot-group">
+                <span class="annot-selcount">${I18N.tn('annot.selected', Annotate.selectedIds.size)}</span>
+                <button class="btn btn-ghost btn-sm" onclick="Annotate.duplicateSelected()">${I18N.t('annot.duplicate')}</button>
+                <button class="btn btn-ghost btn-sm" onclick="Annotate.deleteSelected()">${I18N.t('common.delete')}</button>
+            </div>` : ''}
             <div class="annot-status ${Annotate.isDirty() || Annotate.isSaving() ? '' : 'is-saved'}">${status}</div>`;
     },
 

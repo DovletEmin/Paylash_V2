@@ -275,6 +275,16 @@ window.PAYLASH_LOCALE_TK = {
     'annot.saved': 'Ýazdyryldy',
     'annot.unsaved': 'Ýazdyrylmadyk üýtgeşmeler bar',
     'annot.save_failed': 'Bellikleri ýazdyryp bolmady',
+    'annot.you': 'Siz',
+    'annot.authors': 'Awtorlar',
+    'annot.authors_hint': 'Diňe saýlanan awtorlaryň belliklerini görkezmek',
+    'annot.export': 'Ýüklemek',
+    'annot.export_hint': 'Suraty bellikler bilen bilelikde ýüklemek',
+    'annot.export_suffix': 'bellikler',
+    'annot.export_done': 'Bellikli surat ýüklendi',
+    'annot.export_failed': 'Suraty ýükläp bolmady',
+    'annot.duplicate': 'Nusgalamak',
+    'annot.selected': { other: '{n} saýlandy' },
 
     // chat
     'chat.title': 'Söhbetdeşlik',

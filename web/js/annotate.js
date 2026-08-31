@@ -62,7 +62,14 @@ const Annotate = {
     color: '#ef4444',
     width: 0.005,
     dashed: false,
-    selectedId: null,
+    // Selection is a set, not one id: a marquee drag and a resize both act
+    // on however many shapes were caught, and moving one of several has to
+    // move all of them.
+    selectedIds: new Set(),
+    // Author ids whose layer is currently hidden. Separate from `visible`,
+    // which is the master switch: with three people marking up one render,
+    // "show me only what Meret asked for" is the question you actually have.
+    hiddenAuthors: new Set(),
 
     _mounted: false,
     _img: null,
@@ -78,6 +85,10 @@ const Annotate = {
     _saveTimer: null,
     _dirty: false,
     _ro: null,
+    // Last pointer position, kept so that pressing or releasing Shift can
+    // re-apply the constraint to a drag already in progress without waiting
+    // for the pointer to move again.
+    _lastPt: null,
 
     // 24×24 stroke icons in the same idiom as UI.icons, so the palette sits
     // beside the rest of the app's chrome instead of looking bolted on.
@@ -112,7 +123,11 @@ const Annotate = {
         this.myAnnotationId = null;
         this._history = [];
         this._redo = [];
-        this.selectedId = null;
+        this.selectedIds.clear();
+        // Author visibility is per image: hiding a colleague's notes on one
+        // render says nothing about the next one.
+        this.hiddenAuthors.clear();
+        PreviewPage._authorsOpen = false;
         this._drawing = null;
         this._laser = [];
         this._dirty = false;
@@ -199,6 +214,7 @@ const Annotate = {
         live.addEventListener('pointerup', e => this._onUp(e));
         live.addEventListener('pointercancel', e => this._onUp(e));
         live.addEventListener('pointerleave', e => this._onLeave(e));
+        live.addEventListener('dblclick', e => this._onDoubleClick(e));
         this._applyInteractivity();
     },
 
@@ -258,7 +274,7 @@ const Annotate = {
         if (this.tool === 'laser') { this._laser = [{ p, t: performance.now() }]; this._startLaser(); return; }
         if (this.tool === 'eraser') { this._eraseAt(p, true); return; }
         if (this.tool === 'text') { this._beginText(p); return; }
-        if (this.tool === 'select') { this._beginSelect(p); return; }
+        if (this.tool === 'select') { this._beginSelect(p, ev.shiftKey || ev.ctrlKey || ev.metaKey); return; }
 
         this._drawing = {
             id: this._newId(), t: this.tool, c: this.color, w: this.width,
@@ -270,13 +286,21 @@ const Annotate = {
     _onMove(ev) {
         if (!this.editing) return;
         const p = this._pt(ev);
+        // Remembered so that pressing or releasing Shift mid-drag can redo
+        // the constraint without waiting for the pointer to move again.
+        this._lastPt = p;
 
         if (this.tool === 'laser' && this._laser.length) {
             this._laser.push({ p, t: performance.now() });
             return;
         }
         if (this.tool === 'eraser' && ev.buttons) { this._eraseAt(p, false); return; }
-        if (this._dragging) { this._moveSelection(p); return; }
+        if (this._dragging) {
+            if (this._dragging.mode === 'move') this._moveSelection(p);
+            else if (this._dragging.mode === 'resize') this._resizeSelection(p, ev.shiftKey);
+            else if (this._dragging.mode === 'marquee') { this._dragging.to = p; this._scheduleLive(); }
+            return;
+        }
         if (!this._drawing) return;
 
         if (this._drawing.t === 'pen' || this._drawing.t === 'hl') {
@@ -286,9 +310,29 @@ const Annotate = {
         } else {
             // Every other tool is defined by two corners; dragging just
             // moves the second one.
-            this._drawing.p[1] = p;
+            this._drawing.p[1] = this._constrain(this._drawing.p[0], p, ev.shiftKey);
         }
         this._scheduleLive();
+    },
+
+    // Shift snaps a drag the way every drawing tool does: lines and arrows
+    // to 15° increments, rectangles and ellipses to a true square or circle.
+    //
+    // The maths runs in SCREEN pixels, not normalised coordinates. The image
+    // is rarely square, so x and y have different scales — constraining in
+    // normalised space would produce a "square" that is visibly a rectangle.
+    _constrain(a, b, on) {
+        if (!on) return b;
+        const { w, h } = this._box();
+        const dx = (b[0] - a[0]) * w, dy = (b[1] - a[1]) * h;
+        if (this.tool === 'line' || this.tool === 'arrow') {
+            const step = Math.PI / 12; // 15°
+            const ang = Math.round(Math.atan2(dy, dx) / step) * step;
+            const len = Math.hypot(dx, dy);
+            return [a[0] + (len * Math.cos(ang)) / w, a[1] + (len * Math.sin(ang)) / h];
+        }
+        const side = Math.max(Math.abs(dx), Math.abs(dy));
+        return [a[0] + (Math.sign(dx || 1) * side) / w, a[1] + (Math.sign(dy || 1) * side) / h];
     },
 
     _onUp(ev) {
@@ -296,8 +340,15 @@ const Annotate = {
         try { this._canvases.live.releasePointerCapture(ev.pointerId); } catch { /* already released */ }
 
         if (this._dragging) {
+            const mode = this._dragging.mode;
+            if (mode === 'marquee') this._finishMarquee();
             this._dragging = null;
-            this._markDirty();
+            this.redrawStatic();
+            this._redrawLive();
+            // A marquee only changed what is selected — nothing about the
+            // drawing itself, so there is nothing to save.
+            if (mode !== 'marquee') this._markDirty();
+            PreviewPage.renderAnnotateBar();
             return;
         }
         if (this.tool === 'laser') { this._laser = []; return; }
@@ -321,6 +372,19 @@ const Annotate = {
         this._markDirty();
     },
 
+    // Double-click re-opens a label for editing, whichever tool is armed —
+    // the gesture is unambiguous and it is the only way back into a typo.
+    _onDoubleClick(ev) {
+        if (!this.editing) return;
+        const hit = this._hitTest(this._pt(ev));
+        if (!hit || hit.t !== 'text') return;
+        ev.preventDefault();
+        this._dragging = null;
+        this.selectedIds.clear();
+        this.redrawStatic();
+        this._beginText(null, hit);
+    },
+
     _onLeave() {
         // Leaving the canvas mid-laser should not freeze the dot on screen.
         if (this.tool === 'laser') this._laser = [];
@@ -328,27 +392,204 @@ const Annotate = {
 
     /* ── Select and move ──────────────────────────────────────────────── */
 
-    _beginSelect(p) {
+    /* ── Selection, moving, resizing ──────────────────────────────────── */
+
+    // Corners first, then edge midpoints — the painter and the hit test
+    // index into the same list, so the order is part of the contract. A
+    // coordinate of 0.5 means "this handle does not move that axis".
+    HANDLES: [[0, 0], [1, 0], [1, 1], [0, 1], [0.5, 0], [1, 0.5], [0.5, 1], [0, 0.5]],
+    HANDLE_PX: 9,
+    // Below this a marquee drag was really just a click on empty space.
+    MARQUEE_MIN: 0.008,
+
+    _selectedShapes() { return this.scene.filter(s => this.selectedIds.has(s.id)); },
+
+    // A shape's bounds in normalised coordinates. Text is the odd one out:
+    // its anchor is the baseline-left of the string, so the box has to be
+    // reconstructed from the measured advance width and the font size.
+    _bbox(s) {
+        if (s.t === 'text') {
+            const { w, h } = this._box();
+            const width = this._textWidth(s) / w;
+            const height = (s.fs || 0.03) * w / h; // fs is normalised to WIDTH
+            return { x0: s.p[0][0], y0: s.p[0][1] - height, x1: s.p[0][0] + width, y1: s.p[0][1] };
+        }
+        const xs = s.p.map(q => q[0]), ys = s.p.map(q => q[1]);
+        return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) };
+    },
+
+    _selectionBox() {
+        const sel = this._selectedShapes();
+        if (!sel.length) return null;
+        return sel.reduce((b, s) => {
+            const q = this._bbox(s);
+            return { x0: Math.min(b.x0, q.x0), y0: Math.min(b.y0, q.y0), x1: Math.max(b.x1, q.x1), y1: Math.max(b.y1, q.y1) };
+        }, this._bbox(sel[0]));
+    },
+
+    // Which resize handle is under the pointer, or null. Measured in screen
+    // pixels so the grab area is the same size however the image is scaled.
+    _handleHit(p) {
+        const box = this._selectionBox();
+        if (!box) return null;
+        const { w, h } = this._box();
+        for (let i = 0; i < this.HANDLES.length; i++) {
+            const [hx, hy] = this.HANDLES[i];
+            const cx = (box.x0 + (box.x1 - box.x0) * hx) * w;
+            const cy = (box.y0 + (box.y1 - box.y0) * hy) * h;
+            if (Math.hypot(p[0] * w - cx, p[1] * h - cy) <= this.HANDLE_PX) return i;
+        }
+        return null;
+    },
+
+    _beginSelect(p, additive) {
+        // A handle takes priority over whatever is underneath it, or a
+        // shape filling its own bounding box would be impossible to resize.
+        const handle = this._handleHit(p);
+        if (handle !== null) { this._beginResize(handle, p); return; }
+
         const hit = this._hitTest(p);
-        this.selectedId = hit ? hit.id : null;
-        if (hit) this._dragging = { id: hit.id, from: p, orig: JSON.parse(JSON.stringify(hit.p)) };
+        if (hit) {
+            if (additive) {
+                if (this.selectedIds.has(hit.id)) this.selectedIds.delete(hit.id);
+                else this.selectedIds.add(hit.id);
+            } else if (!this.selectedIds.has(hit.id)) {
+                // Clicking a shape that is already part of a multi-selection
+                // must not collapse the selection — you are starting a drag
+                // of the whole group.
+                this.selectedIds = new Set([hit.id]);
+            }
+            if (this.selectedIds.size) this._beginMove(p);
+        } else {
+            if (!additive) this.selectedIds.clear();
+            this._dragging = { mode: 'marquee', from: p, to: p };
+        }
         this.redrawStatic();
         this._redrawLive();
     },
 
+    _beginMove(p) {
+        // Pushed here rather than on release: a move used to be the one
+        // edit undo could not take back.
+        this._pushHistory();
+        this._dragging = {
+            mode: 'move', from: p,
+            orig: this._selectedShapes().map(s => ({ id: s.id, p: JSON.parse(JSON.stringify(s.p)) })),
+        };
+    },
+
+    _beginResize(idx, p) {
+        this._pushHistory();
+        this._dragging = {
+            mode: 'resize', idx, from: p, box: this._selectionBox(),
+            orig: this._selectedShapes().map(s => ({ id: s.id, p: JSON.parse(JSON.stringify(s.p)), fs: s.fs })),
+        };
+    },
+
     _moveSelection(p) {
-        const s = this.scene.find(x => x.id === this._dragging.id);
-        if (!s) return;
-        const dx = p[0] - this._dragging.from[0], dy = p[1] - this._dragging.from[1];
-        s.p = this._dragging.orig.map(([x, y]) => [x + dx, y + dy]);
+        const d = this._dragging;
+        const dx = p[0] - d.from[0], dy = p[1] - d.from[1];
+        for (const o of d.orig) {
+            const s = this.scene.find(x => x.id === o.id);
+            if (s) s.p = o.p.map(([x, y]) => [x + dx, y + dy]);
+        }
         this.redrawStatic();
     },
 
+    // Drags one handle and rescales every selected shape's points into the
+    // new box. Working from the ORIGINAL geometry each frame (not the last
+    // one) keeps a long drag from accumulating rounding error, and lets the
+    // box be dragged back through itself and out the other side.
+    _resizeSelection(p, shift) {
+        const d = this._dragging, b = d.box;
+        const [hx, hy] = this.HANDLES[d.idx];
+        let x0 = b.x0, y0 = b.y0, x1 = b.x1, y1 = b.y1;
+        if (hx === 0) x0 = p[0]; else if (hx === 1) x1 = p[0];
+        if (hy === 0) y0 = p[1]; else if (hy === 1) y1 = p[1];
+
+        const ow = b.x1 - b.x0, oh = b.y1 - b.y0;
+        // A perfectly horizontal line has zero height, and a vertical one
+        // zero width. Scaling by 0/0 would produce NaN and erase the shape,
+        // so a collapsed axis is simply carried through unscaled.
+        let sx = ow ? (x1 - x0) / ow : 1;
+        let sy = oh ? (y1 - y0) / oh : 1;
+        if (shift && hx !== 0.5 && hy !== 0.5) {
+            // Corner handle with Shift: keep the aspect ratio by taking
+            // whichever axis the pointer pushed further.
+            const m = Math.max(Math.abs(sx), Math.abs(sy));
+            sx = Math.sign(sx || 1) * m;
+            sy = Math.sign(sy || 1) * m;
+            if (hx === 0) x0 = b.x1 - ow * sx; else x1 = b.x0 + ow * sx;
+            if (hy === 0) y0 = b.y1 - oh * sy; else y1 = b.y0 + oh * sy;
+        }
+        const ax = hx === 0 ? x1 : x0, ay = hy === 0 ? y1 : y0;   // anchored edge
+        const bx = hx === 0 ? b.x1 : b.x0, by = hy === 0 ? b.y1 : b.y0;
+
+        for (const o of d.orig) {
+            const s = this.scene.find(x => x.id === o.id);
+            if (!s) continue;
+            s.p = o.p.map(([x, y]) => [ax + (x - bx) * sx, ay + (y - by) * sy]);
+            // Text has no geometry beyond its anchor, so it is the font that
+            // has to grow. Width drives it, matching how fs is normalised.
+            if (s.t === 'text' && o.fs) s.fs = Math.max(0.004, o.fs * Math.abs(sx || 1));
+        }
+        this.redrawStatic();
+    },
+
+    _finishMarquee() {
+        const d = this._dragging;
+        const x0 = Math.min(d.from[0], d.to[0]), x1 = Math.max(d.from[0], d.to[0]);
+        const y0 = Math.min(d.from[1], d.to[1]), y1 = Math.max(d.from[1], d.to[1]);
+        if (x1 - x0 < this.MARQUEE_MIN && y1 - y0 < this.MARQUEE_MIN) return; // a click, not a drag
+        for (const s of this.scene) {
+            const b = this._bbox(s);
+            // Touching counts, the way it does in most drawing tools —
+            // requiring full containment makes long strokes hard to catch.
+            if (b.x1 >= x0 && b.x0 <= x1 && b.y1 >= y0 && b.y0 <= y1) this.selectedIds.add(s.id);
+        }
+    },
+
+    selectAll() {
+        this.selectedIds = new Set(this.scene.map(s => s.id));
+        this.redrawStatic();
+        PreviewPage.renderAnnotateBar();
+    },
+
     deleteSelected() {
-        if (!this.selectedId) return;
+        if (!this.selectedIds.size) return;
         this._pushHistory();
-        this.scene = this.scene.filter(s => s.id !== this.selectedId);
-        this.selectedId = null;
+        this.scene = this.scene.filter(s => !this.selectedIds.has(s.id));
+        this.selectedIds.clear();
+        this.redrawStatic();
+        this._markDirty();
+        PreviewPage.renderAnnotateBar();
+    },
+
+    duplicateSelected() {
+        const sel = this._selectedShapes();
+        if (!sel.length) return;
+        this._pushHistory();
+        const off = 0.02;
+        const copies = sel.map(s => Object.assign(JSON.parse(JSON.stringify(s)), {
+            id: this._newId(),
+            p: s.p.map(([x, y]) => [x + off, y + off]),
+        }));
+        this.scene.push(...copies);
+        this.selectedIds = new Set(copies.map(c => c.id));
+        this.redrawStatic();
+        this._markDirty();
+    },
+
+    // Arrow-key nudge. A plain press moves by a pixel's worth, Shift by ten
+    // — the same muscle memory as every other drawing tool.
+    nudgeSelected(dx, dy, big) {
+        if (!this.selectedIds.size) return;
+        const { w, h } = this._box();
+        const step = big ? 10 : 1;
+        this._pushHistory();
+        for (const s of this._selectedShapes()) {
+            s.p = s.p.map(([x, y]) => [x + (dx * step) / w, y + (dy * step) / h]);
+        }
         this.redrawStatic();
         this._markDirty();
     },
@@ -419,16 +660,22 @@ const Annotate = {
     // An overlaid input rather than a prompt(): the text has to be typed
     // where it will land, at the size and colour it will have, or placing it
     // accurately is guesswork.
-    _beginText(p) {
+    // `existing` re-opens a text shape that is already on the canvas, so a
+    // typo does not mean deleting it and starting again. Committing then
+    // replaces it in place rather than appending a second one.
+    _beginText(p, existing) {
         this._removeTextInput();
         const { w, h } = this._box();
-        const fs = this.width * 6; // stroke width doubles as the size control
+        const fs = existing ? (existing.fs || 0.03) : this.width * 6; // stroke width doubles as the size control
+        const colour = existing ? existing.c : this.color;
+        if (existing) p = existing.p[0];
         const input = document.createElement('input');
         input.type = 'text';
         input.className = 'annot-text-input';
+        input.value = existing ? (existing.txt || '') : '';
         input.style.left = (p[0] * w) + 'px';
         input.style.top = (p[1] * h - fs * w) + 'px';
-        input.style.color = this.color;
+        input.style.color = colour;
         input.style.fontSize = (fs * w) + 'px';
         input.maxLength = 200;
         this._wrap.appendChild(input);
@@ -447,9 +694,20 @@ const Annotate = {
             done = true;
             const txt = keep ? input.value.trim() : '';
             this._removeTextInput();
+            if (existing) {
+                // Emptying an existing label deletes it — that is what
+                // clearing the box and pressing Enter plainly means.
+                if (txt === (existing.txt || '')) return;
+                this._pushHistory();
+                if (!txt) this.scene = this.scene.filter(x => x.id !== existing.id);
+                else existing.txt = txt;
+                this.redrawStatic();
+                this._markDirty();
+                return;
+            }
             if (!txt) return;
             this._pushHistory();
-            this.scene.push({ id: this._newId(), t: 'text', c: this.color, w: this.width, fs, txt, p: [p] });
+            this.scene.push({ id: this._newId(), t: 'text', c: colour, w: this.width, fs, txt, p: [p] });
             this.redrawStatic();
             this._markDirty();
         };
@@ -505,13 +763,15 @@ const Annotate = {
         if (!this.visible) return;
 
         // Other people's markup sits underneath and is never selectable, so
-        // that your own marks stay legible on top of a busy review.
-        for (const layer of this.others) for (const s of layer.shapes) this._paint(s.t === 'hl' ? hl : base, s, w, h);
-        for (const s of this.scene) this._paint(s.t === 'hl' ? hl : base, s, w, h);
-
-        if (this.selectedId) {
-            const sel = this.scene.find(s => s.id === this.selectedId);
-            if (sel) this._paintSelection(base, sel, w, h);
+        // that your own marks stay legible on top of a busy review. Either
+        // layer can be switched off by author (see hiddenAuthors).
+        for (const layer of this.others) {
+            if (this.hiddenAuthors.has(layer.user_id)) continue;
+            for (const s of layer.shapes) this._paint(s.t === 'hl' ? hl : base, s, w, h);
+        }
+        if (!this.hiddenAuthors.has(this.myId())) {
+            for (const s of this.scene) this._paint(s.t === 'hl' ? hl : base, s, w, h);
+            if (this.selectedIds.size) this._paintSelection(base, w, h);
         }
     },
 
@@ -541,7 +801,30 @@ const Annotate = {
             this._paint(ctx, this._drawing, w, h);
         }
 
+        if (this._dragging && this._dragging.mode === 'marquee') this._paintMarquee(ctx, w, h);
         if (this._laser.length) this._paintLaser(ctx, w, h);
+    },
+
+    // The signed-in user's id, used to key their own layer in the author
+    // list. -1 when there is somehow no user, which simply never matches.
+    myId() { return App.user ? App.user.id : -1; },
+
+    _font(sizePx) {
+        return `600 ${sizePx}px ${getComputedStyle(document.body).fontFamily || 'sans-serif'}`;
+    },
+
+    // Measured, not estimated: a text shape's selection box and its resize
+    // handles have to sit on the glyphs actually painted, and character
+    // counts are hopeless across Cyrillic, Latin and Turkmen diacritics.
+    _textWidth(s) {
+        if (!this._canvases) return 0;
+        const { w } = this._box();
+        const ctx = this._canvases.base.getContext('2d');
+        ctx.save();
+        ctx.font = this._font(Math.max(9, (s.fs || 0.03) * w));
+        const width = ctx.measureText(s.txt || '').width;
+        ctx.restore();
+        return width;
     },
 
     _paint(ctx, s, w, h) {
@@ -596,7 +879,7 @@ const Annotate = {
                 if (!p.length) break;
                 const size = Math.max(9, (s.fs || 0.03) * w);
                 ctx.setLineDash([]);
-                ctx.font = `600 ${size}px ${getComputedStyle(document.body).fontFamily || 'sans-serif'}`;
+                ctx.font = this._font(size);
                 ctx.textBaseline = 'alphabetic';
                 // A dark halo so red-on-red or white-on-white text is still
                 // readable over an arbitrary photo.
@@ -649,15 +932,42 @@ const Annotate = {
         ctx.stroke();
     },
 
-    _paintSelection(ctx, s, w, h) {
-        const xs = s.p.map(q => q[0] * w), ys = s.p.map(q => q[1] * h);
-        const pad = Math.max(8, (s.w || 0.005) * w);
-        const x0 = Math.min(...xs) - pad, y0 = Math.min(...ys) - pad;
-        const x1 = Math.max(...xs) + pad, y1 = Math.max(...ys) + pad;
+    // The selection outline plus the eight handles that resize it. Drawn on
+    // the static canvas because it only changes when the selection does.
+    _paintSelection(ctx, w, h) {
+        const box = this._selectionBox();
+        if (!box) return;
+        const x0 = box.x0 * w, y0 = box.y0 * h, x1 = box.x1 * w, y1 = box.y1 * h;
         ctx.save();
         ctx.strokeStyle = '#3b82f6';
         ctx.lineWidth = 1.5;
         ctx.setLineDash([5, 4]);
+        ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+
+        ctx.setLineDash([]);
+        const r = this.HANDLE_PX / 2;
+        for (const [hx, hy] of this.HANDLES) {
+            const cx = x0 + (x1 - x0) * hx, cy = y0 + (y1 - y0) * hy;
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(cx - r, cy - r, r * 2, r * 2);
+        }
+        ctx.restore();
+    },
+
+    // The rubber band, on the live canvas: it follows the pointer every
+    // frame and vanishes on release, so it never belongs with the scene.
+    _paintMarquee(ctx, w, h) {
+        const d = this._dragging;
+        const x0 = Math.min(d.from[0], d.to[0]) * w, x1 = Math.max(d.from[0], d.to[0]) * w;
+        const y0 = Math.min(d.from[1], d.to[1]) * h, y1 = Math.max(d.from[1], d.to[1]) * h;
+        ctx.save();
+        ctx.fillStyle = 'rgba(59,130,246,.12)';
+        ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+        ctx.strokeStyle = '#3b82f6';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 3]);
         ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
         ctx.restore();
     },
@@ -701,7 +1011,7 @@ const Annotate = {
     setTool(t) {
         if (!this.TOOLS.includes(t)) return;
         this.tool = t;
-        this.selectedId = null;
+        this.selectedIds.clear();
         this._removeTextInput();
         this._applyInteractivity();
         this.redrawStatic();
@@ -717,7 +1027,7 @@ const Annotate = {
         // Drawing on markup you can't see makes no sense, so entering edit
         // mode turns visibility back on rather than silently doing nothing.
         if (on && !this.visible) this.visible = true;
-        this.selectedId = null;
+        this.selectedIds.clear();
         this._removeTextInput();
         this._applyInteractivity();
         this.redrawStatic();
@@ -739,7 +1049,7 @@ const Annotate = {
         if (!this._history.length) return;
         this._redo.push(JSON.parse(JSON.stringify(this.scene)));
         this.scene = this._history.pop();
-        this.selectedId = null;
+        this.selectedIds.clear();
         this.redrawStatic();
         this._markDirty();
         PreviewPage.renderAnnotateBar();
@@ -749,7 +1059,7 @@ const Annotate = {
         if (!this._redo.length) return;
         this._history.push(JSON.parse(JSON.stringify(this.scene)));
         this.scene = this._redo.pop();
-        this.selectedId = null;
+        this.selectedIds.clear();
         this.redrawStatic();
         this._markDirty();
         PreviewPage.renderAnnotateBar();
@@ -760,7 +1070,7 @@ const Annotate = {
         UI.confirmAction(I18N.t('annot.clear_title'), I18N.t('annot.clear_body'), I18N.t('common.delete'), () => {
             this._pushHistory();
             this.scene = [];
-            this.selectedId = null;
+            this.selectedIds.clear();
             this.redrawStatic();
             this._markDirty();
             PreviewPage.renderAnnotateBar();
@@ -857,10 +1167,23 @@ const Annotate = {
             } else if (mod && ev.key.toLowerCase() === 'y') {
                 ev.preventDefault();
                 this.redo();
+            } else if (mod && ev.key.toLowerCase() === 'd') {
+                ev.preventDefault();
+                this.duplicateSelected();
+            } else if (mod && ev.key.toLowerCase() === 'a') {
+                ev.preventDefault();
+                this.setTool('select');
+                this.selectAll();
             } else if (ev.key === 'Delete' || ev.key === 'Backspace') {
-                if (this.selectedId) { ev.preventDefault(); this.deleteSelected(); }
+                if (this.selectedIds.size) { ev.preventDefault(); this.deleteSelected(); }
+            } else if (ev.key.startsWith('Arrow') && this.selectedIds.size) {
+                // Only claimed while something is selected — otherwise the
+                // arrows still step between photos, as they always have.
+                ev.preventDefault();
+                const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[ev.key];
+                if (d) this.nudgeSelected(d[0], d[1], ev.shiftKey);
             } else if (ev.key === 'Escape') {
-                this.selectedId = null;
+                this.selectedIds.clear();
                 this.redrawStatic();
             } else {
                 // Excalidraw's single-key tool shortcuts, same letters where
@@ -870,5 +1193,94 @@ const Annotate = {
                 if (t && !mod) { ev.preventDefault(); this.setTool(t); }
             }
         });
+
+        // Shift changes what the current drag means, so pressing or
+        // releasing it has to re-evaluate immediately — otherwise the shape
+        // only snaps once the pointer happens to move again.
+        const reapply = ev => {
+            if (!this._mounted || !this._drawing || !this._lastPt) return;
+            if (ev.key !== 'Shift') return;
+            if (this._drawing.t === 'pen' || this._drawing.t === 'hl') return;
+            this._drawing.p[1] = this._constrain(this._drawing.p[0], this._lastPt, ev.type === 'keydown');
+            this._scheduleLive();
+        };
+        document.addEventListener('keydown', reapply);
+        document.addEventListener('keyup', reapply);
+    },
+
+    /* ── Authors ──────────────────────────────────────────────────────── */
+
+    // Everyone with markup on this image, mine first — the order the legend
+    // is drawn in and the order the layers are painted in agree, so the list
+    // reads top-to-bottom the way the marks stack.
+    authors() {
+        const list = [];
+        if (this.scene.length) list.push({ id: this.myId(), name: I18N.t('annot.you'), count: this.scene.length, mine: true });
+        for (const o of this.others) {
+            if (o.shapes.length) list.push({ id: o.user_id, name: o.user_name, count: o.shapes.length, mine: false });
+        }
+        return list;
+    },
+
+    toggleAuthor(userId) {
+        if (this.hiddenAuthors.has(userId)) this.hiddenAuthors.delete(userId);
+        else {
+            this.hiddenAuthors.add(userId);
+            // Hiding your own layer must not leave an invisible selection
+            // that Delete would still act on.
+            if (userId === this.myId()) this.selectedIds.clear();
+        }
+        this.redrawStatic();
+        PreviewPage.renderAnnotateBar();
+    },
+
+    /* ── Export ───────────────────────────────────────────────────────── */
+
+    // Renders the photo and every visible layer into an offscreen canvas at
+    // the image's NATIVE resolution and hands back a PNG. Native, not the
+    // on-screen size, because the point of exporting is to send the result
+    // to someone outside the app or to print it — and because normalised
+    // coordinates mean the same shapes redraw at any resolution for free.
+    //
+    // The image comes from this app's own origin, so the canvas is not
+    // tainted and toBlob is allowed.
+    async exportPNG() {
+        if (!this._mounted || !this._img) return;
+        const W = this._img.naturalWidth || this._img.clientWidth;
+        const H = this._img.naturalHeight || this._img.clientHeight;
+        if (!W || !H) return;
+
+        const canvas = document.createElement('canvas');
+        canvas.width = W;
+        canvas.height = H;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(this._img, 0, 0, W, H);
+
+        const layers = [];
+        for (const o of this.others) if (!this.hiddenAuthors.has(o.user_id)) layers.push(o.shapes);
+        if (!this.hiddenAuthors.has(this.myId())) layers.push(this.scene);
+
+        // Highlighter first and in multiply, mirroring the on-screen stack:
+        // on screen that blend is a property of its own canvas element, here
+        // it is a compositing mode on the one canvas.
+        ctx.globalCompositeOperation = 'multiply';
+        for (const shapes of layers) for (const sh of shapes) if (sh.t === 'hl') this._paint(ctx, sh, W, H);
+        ctx.globalCompositeOperation = 'source-over';
+        for (const shapes of layers) for (const sh of shapes) if (sh.t !== 'hl') this._paint(ctx, sh, W, H);
+
+        const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
+        if (!blob) { UI.toast(I18N.t('annot.export_failed'), 'error'); return; }
+        const base = (PreviewPage.currentFileName || 'image').replace(/\.[^.]+$/, '');
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${base} — ${I18N.t('annot.export_suffix')}.png`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        // Revoked on the next tick rather than immediately: some browsers
+        // have not started reading the blob when click() returns.
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+        UI.toast(I18N.t('annot.export_done'), 'success');
     },
 };

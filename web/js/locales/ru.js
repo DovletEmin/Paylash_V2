@@ -272,6 +272,16 @@ window.PAYLASH_LOCALE_RU = {
     'annot.saved': 'Сохранено',
     'annot.unsaved': 'Есть несохранённые изменения',
     'annot.save_failed': 'Не удалось сохранить разметку',
+    'annot.you': 'Вы',
+    'annot.authors': 'Авторы',
+    'annot.authors_hint': 'Показать разметку только выбранных авторов',
+    'annot.export': 'Выгрузить',
+    'annot.export_hint': 'Скачать изображение с нанесённой разметкой',
+    'annot.export_suffix': 'разметка',
+    'annot.export_done': 'Изображение с разметкой скачано',
+    'annot.export_failed': 'Не удалось выгрузить изображение',
+    'annot.duplicate': 'Дублировать',
+    'annot.selected': { one: 'Выбран {n}', few: 'Выбрано {n}', many: 'Выбрано {n}' },
 
     // chat
     'chat.title': 'Чат',

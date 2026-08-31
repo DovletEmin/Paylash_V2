@@ -812,6 +812,30 @@ html.light .annot-hl{mix-blend-mode:multiply}
    its two children wrap onto separate lines inside the 44px toolbar. */
 .annot-controls{display:flex;align-items:center;gap:6px}
 
+/* Per-author visibility. A dropdown rather than a row in the toolbar: with
+   one author it should not exist at all, and with five it must not push the
+   other controls off the bar. */
+.annot-authors-wrap{position:relative;display:flex;align-items:center}
+.annot-authors{
+  position:absolute;top:calc(100% + 6px);right:0;z-index:60;min-width:210px;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
+  box-shadow:0 8px 28px rgba(0,0,0,.28);padding:6px;
+}
+html.light .annot-authors{box-shadow:0 8px 28px rgba(0,0,0,.12)}
+.annot-author{
+  display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:var(--r);
+  font-size:.8rem;cursor:pointer;user-select:none;color:var(--text);
+}
+.annot-author:hover{background:var(--surface-2)}
+.annot-author.off{color:var(--text-3)}
+.annot-author input{cursor:pointer;accent-color:var(--primary);margin:0;flex-shrink:0}
+.annot-author-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.annot-author-count{
+  font-size:.7rem;color:var(--text-3);background:var(--surface-2);
+  padding:1px 6px;border-radius:var(--r-full);font-variant-numeric:tabular-nums;
+}
+.annot-selcount{font-size:.75rem;color:var(--text-2);white-space:nowrap;padding:0 2px}
+
 /* Five controls with words on them do not fit a phone's preview toolbar.
    Below this width they keep their icons and lose their labels — the icons
    carry the meaning, and every one of them still has a title/aria-label. */

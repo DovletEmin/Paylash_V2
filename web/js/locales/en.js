@@ -272,6 +272,16 @@ window.PAYLASH_LOCALE_EN = {
     'annot.saved': 'Saved',
     'annot.unsaved': 'Unsaved changes',
     'annot.save_failed': 'Could not save the markup',
+    'annot.you': 'You',
+    'annot.authors': 'Authors',
+    'annot.authors_hint': 'Show markup from selected authors only',
+    'annot.export': 'Export',
+    'annot.export_hint': 'Download the image with the markup drawn on it',
+    'annot.export_suffix': 'markup',
+    'annot.export_done': 'Image with markup downloaded',
+    'annot.export_failed': 'Could not export the image',
+    'annot.duplicate': 'Duplicate',
+    'annot.selected': { one: '{n} selected', other: '{n} selected' },
 
     // chat
     'chat.title': 'Chat',
