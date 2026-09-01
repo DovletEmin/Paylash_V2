@@ -1289,17 +1289,42 @@ html.light .context-menu{box-shadow:0 8px 32px rgba(0,0,0,.1)}
 /* ─── Attendance ─── */
 .attn-widget{padding:10px 16px 14px;border-bottom:1px solid var(--border)}
 .attn-widget:empty{display:none}
-.attn-widget-btn{
-  width:100%;display:flex;align-items:center;justify-content:center;gap:6px;
-  padding:9px 12px;border-radius:var(--r);font-size:.82rem;font-weight:600;
-  border:1px solid transparent;transition:transform var(--tr-spring),box-shadow var(--tr-spring);
-}
-.attn-widget-btn:hover{transform:translateY(-1px);box-shadow:var(--shadow-sm)}
-.attn-widget-btn:disabled{opacity:.6;cursor:default;transform:none;box-shadow:none}
-.attn-widget-in{background:var(--success-bg);color:var(--success);border-color:var(--success)}
-.attn-widget-out{background:var(--danger-bg);color:var(--danger);border-color:var(--danger)}
 .attn-widget-status{font-size:.76rem;color:var(--text-2);margin-bottom:8px;text-align:center}
 .attn-widget-status.attn-widget-done{color:var(--success);font-weight:500}
+
+/* One control, split in two: arrival left, departure right. The halves keep
+   their place in every state (see AttendanceWidget.splitHTML for why), so
+   the layout is a fixed 1fr 1fr grid rather than anything that reflows when
+   one side turns off. A 1px gap with a background behind it draws the
+   divider, which keeps each half's own border intact. */
+.attn-split{
+  display:grid;grid-template-columns:1fr 1fr;gap:1px;
+  background:var(--border);border-radius:var(--r);overflow:hidden;
+}
+.attn-split-btn{
+  display:flex;align-items:center;justify-content:center;gap:6px;
+  padding:9px 8px;font-size:.8rem;font-weight:600;cursor:pointer;
+  border:none;transition:filter var(--tr);min-width:0;
+}
+.attn-split-in{background:var(--success-bg);color:var(--success)}
+.attn-split-out{background:var(--danger-bg);color:var(--danger)}
+.attn-split-btn:hover:not(:disabled){filter:brightness(1.12)}
+.attn-split-btn:active:not(:disabled){filter:brightness(.94)}
+/* A disabled half stays legible rather than fading to near-invisible: it is
+   still telling you the shape of the day, and half of this control is
+   disabled at any given moment. The cue is the muted colour, not opacity. */
+.attn-split-btn:disabled{
+  background:var(--surface-2);color:var(--text-3);cursor:not-allowed;filter:none;
+}
+.attn-split-btn:disabled .attn-split-dot{filter:grayscale(1);opacity:.5}
+.attn-split-dot{font-size:.72rem;flex-shrink:0;line-height:1}
+.attn-split-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* The Attendance page's card gets the same control at a size that suits a
+   full page rather than a 240px sidebar. */
+.attn-split-lg{max-width:420px;margin:0 auto;width:100%}
+.attn-split-lg .attn-split-btn{padding:13px 14px;font-size:.9rem;gap:8px}
+.attn-split-lg .attn-split-dot{font-size:.85rem}
 
 .attn-page{max-width:900px}
 .attn-today-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);padding:24px;margin-bottom:20px}

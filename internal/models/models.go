@@ -590,13 +590,20 @@ type AttendanceRecord struct {
 	CheckInAt        time.Time  `json:"check_in_at"`
 	CheckOutAt       *time.Time `json:"check_out_at,omitempty"`
 	ExpectedStartMin int        `json:"-"`
-	ExpectedEndMin   int        `json:"-"`
-	GraceMinutes     int        `json:"-"`
-	IsWorkday        bool       `json:"is_workday"`
-	NeedsReview      bool       `json:"needs_review"`
-	Notes            string     `json:"notes"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	// Sent to the client, unlike its two neighbours, so the check-out button
+	// can warn someone who is leaving before the day is over. It has to be
+	// this snapshot rather than the current schedule: the record is judged
+	// against what the schedule said at check-in, so a schedule edited
+	// mid-day would otherwise make the warning disagree with the verdict.
+	// Nothing here is secret — the working day is the same for everyone and
+	// is on display in the admin panel.
+	ExpectedEndMin int       `json:"expected_end_min"`
+	GraceMinutes   int       `json:"-"`
+	IsWorkday      bool      `json:"is_workday"`
+	NeedsReview    bool      `json:"needs_review"`
+	Notes          string    `json:"notes"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 
 	// Computed (never stored) — see computeAttendanceStatus in internal/db.
 	IsLate            bool `json:"is_late"`
