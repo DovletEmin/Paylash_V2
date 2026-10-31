@@ -235,7 +235,9 @@ func (s *Server) routes(webFS embed.FS) {
 	s.mux.Handle("POST /api/admin/chat-reports/{id}/resolve", auth(AdminMiddleware(http.HandlerFunc(h.AdminResolveChatReport))))
 
 	// Attendance admin/manager views — read-only, so ManagerOrAdminMiddleware;
-	// the one write action (correcting a record) stays AdminMiddleware-only.
+	// correcting a record stays AdminMiddleware-only, deleting one is open to
+	// managers too (a check-in made with a borrowed login must be removable
+	// on the spot).
 	s.mux.Handle("GET /api/admin/attendance", auth(ManagerOrAdminMiddleware(http.HandlerFunc(h.AdminListAttendance))))
 	s.mux.Handle("GET /api/admin/attendance/analytics", auth(ManagerOrAdminMiddleware(http.HandlerFunc(h.AdminAttendanceAnalytics))))
 	s.mux.Handle("GET /api/admin/attendance/summary", auth(ManagerOrAdminMiddleware(http.HandlerFunc(h.AdminAttendanceSummary))))
@@ -245,6 +247,7 @@ func (s *Server) routes(webFS embed.FS) {
 	s.mux.Handle("GET /api/admin/attendance/schedule", auth(ManagerOrAdminMiddleware(http.HandlerFunc(h.AdminGetAttendanceSchedule))))
 	s.mux.Handle("PATCH /api/admin/attendance/schedule", auth(AdminMiddleware(http.HandlerFunc(h.AdminSetAttendanceSchedule))))
 	s.mux.Handle("PATCH /api/admin/attendance/{id}", auth(AdminMiddleware(http.HandlerFunc(h.AdminUpdateAttendanceRecord))))
+	s.mux.Handle("DELETE /api/admin/attendance/{id}", auth(ManagerOrAdminMiddleware(http.HandlerFunc(h.AdminDeleteAttendanceRecord))))
 
 	// Device credentials for the network drive (see internal/dav).
 	s.mux.Handle("GET /api/app-passwords", auth(http.HandlerFunc(h.ListAppPasswords)))

@@ -650,6 +650,8 @@ window.PAYLASH_LOCALE_RU = {
     'attendance.col_worked': 'Отработано',
     'attendance.col_status': 'Статус',
     'attendance.edit_title': 'Исправить запись посещаемости',
+    'attendance.delete_title': 'Удалить запись посещаемости?',
+    'attendance.delete_body': 'Запись «{name}» за {date} будет удалена целиком — и приход, и уход. После этого сотрудник сможет отметиться заново.',
     'attendance.notes_label': 'Заметка',
     'attendance.check_in_required': 'Укажите время прихода',
     'attendance.schedule_title': 'График работы',

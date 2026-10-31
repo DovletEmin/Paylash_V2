@@ -369,8 +369,9 @@ const API = {
             set(quotaMB) { return API._request('PATCH', '/api/admin/public-quota', { quota_mb: quotaMB }); },
         },
         // Read endpoints here are reachable by admin AND manager
-        // (ManagerOrAdminMiddleware); update()/schedule.set() are admin-only
-        // server-side (AdminMiddleware) — see internal/server/server.go.
+        // (ManagerOrAdminMiddleware), as is delete(); update()/schedule.set()
+        // are admin-only server-side (AdminMiddleware) — see
+        // internal/server/server.go.
         attendance: {
             list(from, to, userId) {
                 const qs = new URLSearchParams(); if (from) qs.set('from', from); if (to) qs.set('to', to); if (userId) qs.set('user_id', userId);
@@ -391,6 +392,7 @@ const API = {
             update(id, checkInAt, checkOutAt, notes) {
                 return API._request('PATCH', `/api/admin/attendance/${id}`, { check_in_at: checkInAt, check_out_at: checkOutAt, notes });
             },
+            delete(id) { return API._request('DELETE', `/api/admin/attendance/${id}`); },
             schedule: {
                 get() { return API._request('GET', '/api/admin/attendance/schedule'); },
                 set(sched) { return API._request('PATCH', '/api/admin/attendance/schedule', sched); },

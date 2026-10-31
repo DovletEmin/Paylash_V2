@@ -645,6 +645,8 @@ window.PAYLASH_LOCALE_TK = {
     'attendance.col_worked': 'Işlenen wagt',
     'attendance.col_status': 'Ýagdaý',
     'attendance.edit_title': 'Gatnaşyk ýazgysyny düzetmek',
+    'attendance.delete_title': 'Gatnaşyk ýazgysy pozulsunmy?',
+    'attendance.delete_body': '{name} üçin {date} senesindäki ýazgy doly pozular, gelmesi hem gitmesi bilen. Şondan soň işgär täzeden bellenip biler.',
     'attendance.notes_label': 'Bellik',
     'attendance.check_in_required': 'Gelme wagty görkezilmeli',
     'attendance.schedule_title': 'Iş grafigi',

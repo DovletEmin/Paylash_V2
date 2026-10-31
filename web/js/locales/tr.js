@@ -642,6 +642,8 @@ window.PAYLASH_LOCALE_TR = {
     'attendance.col_worked': 'Çalışma süresi',
     'attendance.col_status': 'Durum',
     'attendance.edit_title': 'Devam kaydını düzelt',
+    'attendance.delete_title': 'Devam kaydı silinsin mi?',
+    'attendance.delete_body': '{name} için {date} tarihli kayıt, giriş ve çıkış dahil tamamen silinecek. Ardından çalışan yeniden giriş yapabilir.',
     'attendance.notes_label': 'Not',
     'attendance.check_in_required': 'Giriş saati gerekli',
     'attendance.schedule_title': 'Çalışma programı',

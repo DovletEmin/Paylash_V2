@@ -447,6 +447,19 @@ func (d *DB) UpdateAttendanceRecord(id int, checkInAt time.Time, checkOutAt *tim
 	return err
 }
 
+// DeleteAttendanceRecord removes a whole day's record (check-in and any
+// check-out with it). The (user_id, work_date) slot is free again afterwards,
+// so the employee can check in for real — that is the point of deleting a
+// check-in someone else made on their behalf. Reports false if no such row.
+func (d *DB) DeleteAttendanceRecord(id int) (bool, error) {
+	res, err := d.Exec(`DELETE FROM attendance_records WHERE id = $1`, id)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
 func (d *DB) GetAttendanceRecordByID(id int) (*models.AttendanceRecord, error) {
 	row := d.QueryRow(`SELECT `+attendanceRecordCols+` FROM attendance_records WHERE id = $1`, id)
 	r, err := scanAttendanceRecord(row)

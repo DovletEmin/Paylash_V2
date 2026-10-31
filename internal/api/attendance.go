@@ -264,6 +264,36 @@ func (h *Handler) AdminUpdateAttendanceRecord(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, rec)
 }
 
+// AdminDeleteAttendanceRecord removes a record outright — ManagerOrAdmin, the
+// one write a manager has: a check-in made by someone else with a borrowed
+// login has to be removable on the spot, and the real employee can then
+// check in under their own account. The audit entry keeps who was affected
+// and the times that were deleted.
+func (h *Handler) AdminDeleteAttendanceRecord(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "nädogry ID")
+		return
+	}
+	rec, err := h.db.GetAttendanceRecordByID(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk ýüze çykdy")
+		return
+	}
+	if rec == nil {
+		writeError(w, http.StatusNotFound, "ýazgy tapylmady")
+		return
+	}
+	if _, err := h.db.DeleteAttendanceRecord(id); err != nil {
+		writeError(w, http.StatusInternalServerError, "pozup bolmady")
+		return
+	}
+	h.logAction(r, "attendance.delete", "attendance", id, "", map[string]any{
+		"user_id": rec.UserID, "work_date": rec.WorkDate, "check_in_at": rec.CheckInAt, "check_out_at": rec.CheckOutAt,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"id": id})
+}
+
 // AdminGetAttendanceSchedule/AdminSetAttendanceSchedule configure the single
 // company-wide schedule every check-in/check-out is measured against. Get is
 // ManagerOrAdminMiddleware (a manager can see what "late" means); Set is

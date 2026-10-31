@@ -610,7 +610,7 @@ const AdminPage = {
             ${hideName ? '' : `<th>${I18N.t('attendance.col_employee')}</th>`}
             <th>${I18N.t('attendance.col_check_in')}</th><th>${I18N.t('attendance.col_check_out')}</th>
             <th>${I18N.t('attendance.col_worked')}</th><th>${I18N.t('attendance.col_status')}</th>
-            ${!isManager ? `<th>${I18N.t('admin.col_actions')}</th>` : ''}
+            <th>${I18N.t('admin.col_actions')}</th>
         </tr></thead><tbody>
             ${list.map(r => `<tr>
                 ${hideDate ? '' : `<td>${UI.esc(r.work_date)}</td>`}
@@ -619,9 +619,25 @@ const AdminPage = {
                 <td>${r.check_out_at ? UI.formatTime(r.check_out_at) : '—'}</td>
                 <td>${r.check_out_at ? UI.formatAttnDuration(r.worked_minutes) : '—'}</td>
                 <td>${UI.attendanceStatusBadges(r)}</td>
-                ${!isManager ? `<td><button class="btn btn-sm btn-ghost" onclick="event.stopPropagation();AdminPage.editAttendanceRecord(${r.id})" title="${I18N.t('common.edit')}" aria-label="${I18N.t('common.edit')}">✏️</button></td>` : ''}
+                <td>
+                    ${!isManager ? `<button class="btn btn-sm btn-ghost" onclick="event.stopPropagation();AdminPage.editAttendanceRecord(${r.id})" title="${I18N.t('common.edit')}" aria-label="${I18N.t('common.edit')}">✏️</button>` : ''}
+                    <button class="btn btn-sm btn-ghost" onclick="event.stopPropagation();AdminPage.deleteAttendanceRecord(${r.id})" title="${I18N.t('common.delete')}" aria-label="${I18N.t('common.delete')}">🗑</button>
+                </td>
             </tr>`).join('')}
         </tbody></table>`;
+    },
+
+    deleteAttendanceRecord(id) {
+        const r = this._attnRecords[id];
+        if (!r) return;
+        UI.confirmAction(I18N.t('attendance.delete_title'), I18N.t('attendance.delete_body', { name: UI.esc(r.full_name || r.username || ''), date: UI.esc(r.work_date) }), I18N.t('common.delete'), async () => {
+            try {
+                await API.admin.attendance.delete(id);
+                delete this._attnRecords[id];
+                UI.toast(I18N.t('admin.deleted'), 'success');
+                this.renderAttendanceView();
+            } catch (e) { UI.toast(e.message, 'error'); }
+        });
     },
 
     editAttendanceRecord(id) {

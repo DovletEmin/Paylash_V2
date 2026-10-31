@@ -642,6 +642,8 @@ window.PAYLASH_LOCALE_EN = {
     'attendance.col_worked': 'Worked',
     'attendance.col_status': 'Status',
     'attendance.edit_title': 'Correct attendance record',
+    'attendance.delete_title': 'Delete attendance record?',
+    'attendance.delete_body': "{name}'s record for {date} will be deleted entirely, check-in and check-out. The employee will then be able to check in again.",
     'attendance.notes_label': 'Note',
     'attendance.check_in_required': 'Check-in time is required',
     'attendance.schedule_title': 'Work schedule',
