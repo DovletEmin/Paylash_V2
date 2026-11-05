@@ -209,6 +209,7 @@ const AdminPage = {
         ];
         el.innerHTML = `
         <div class="admin-header"><h2>${I18N.t('admin.nav_attendance')}</h2><div style="display:flex;gap:8px">
+            ${isAdmin ? `<button class="btn btn-primary btn-sm" onclick="AdminPage.addAttendanceRecord()">+ ${I18N.t('attendance.add_record')}</button>` : ''}
             <button class="btn btn-ghost btn-sm" onclick="AdminPage.exportAttendance()">${UI.icons.download} ${I18N.t('attendance.export_excel')}</button>
         </div></div>
         <div class="attn-subnav">
@@ -638,6 +639,45 @@ const AdminPage = {
                 this.renderAttendanceView();
             } catch (e) { UI.toast(e.message, 'error'); }
         });
+    },
+
+    // For someone with no record that day — there is nothing to ✏️. The date
+    // starts on the day picked in the calendar if there is one, otherwise
+    // yesterday: the usual case is noticing a day that was missed.
+    async addAttendanceRecord() {
+        let roster;
+        try { roster = (await API.admin.attendance.tracking.list() || []).filter(e => e.tracked); }
+        catch (e) { UI.toast(e.message, 'error'); return; }
+        const day = this._attnSelectedDate || UI.dateDaysAgo(1);
+        const sched = await API.admin.attendance.schedule.get().catch(() => null);
+        const hhmm = (min) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+        const inDef = `${day}T${hhmm(sched ? sched.start_min : 540)}`;
+        const outDef = `${day}T${hhmm(sched ? sched.end_min : 1080)}`;
+        UI.showModal(I18N.t('attendance.add_title'), `
+            <div class="form-group"><label>${I18N.t('attendance.col_employee')}</label>
+                <select id="attn-add-user" class="form-control">
+                    <option value="">—</option>
+                    ${roster.map(e => `<option value="${e.user_id}">${UI.esc(e.full_name || e.username)}</option>`).join('')}
+                </select></div>
+            <div class="form-group"><label>${I18N.t('attendance.col_check_in')}</label><input type="datetime-local" id="attn-add-in" class="form-control" value="${inDef}"></div>
+            <div class="form-group"><label>${I18N.t('attendance.col_check_out')}</label><input type="datetime-local" id="attn-add-out" class="form-control" value="${outDef}"></div>
+            <div class="form-group"><label>${I18N.t('attendance.notes_label')}</label><textarea id="attn-add-notes" class="form-control" rows="2"></textarea></div>`,
+            `<button class="btn btn-ghost" onclick="UI.closeModal()">${I18N.t('common.cancel')}</button><button class="btn btn-primary" onclick="AdminPage.saveNewAttendanceRecord()">${I18N.t('common.save')}</button>`);
+    },
+
+    async saveNewAttendanceRecord() {
+        const userId = parseInt(document.getElementById('attn-add-user').value, 10);
+        const inVal = document.getElementById('attn-add-in').value;
+        const outVal = document.getElementById('attn-add-out').value;
+        const notes = document.getElementById('attn-add-notes').value.trim();
+        if (!userId) { UI.toast(I18N.t('attendance.employee_required'), 'error'); return; }
+        if (!inVal) { UI.toast(I18N.t('attendance.check_in_required'), 'error'); return; }
+        try {
+            await API.admin.attendance.create(userId, new Date(inVal).toISOString(), outVal ? new Date(outVal).toISOString() : null, notes);
+            UI.closeModal();
+            UI.toast(I18N.t('admin.updated'), 'success');
+            this.renderAttendanceView();
+        } catch (e) { UI.toast(e.message, 'error'); }
     },
 
     editAttendanceRecord(id) {

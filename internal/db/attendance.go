@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -434,6 +435,32 @@ func (d *DB) GetAttendanceEmployeeSummaries(from, to string) ([]models.Attendanc
 		}
 	}
 	return list, nil
+}
+
+// ErrAttendanceExists is CreateAttendanceRecord's refusal when the employee
+// already has a record for that day — the one to correct is the existing one.
+var ErrAttendanceExists = errors.New("attendance record already exists for that day")
+
+// CreateAttendanceRecord is the admin path for a day nobody checked in on —
+// someone who never opened the app has no row to correct. The day is the
+// check-in's own date in the server's local zone, the same anchor
+// computeAttendanceStatus judges lateness against, so the two can never
+// disagree about which day it was. The schedule snapshot is the one in
+// effect now, as it is for any record written after the fact.
+func (d *DB) CreateAttendanceRecord(userID int, checkInAt time.Time, checkOutAt *time.Time, notes string, sched models.AttendanceSchedule) (*models.AttendanceRecord, error) {
+	local := checkInAt.In(time.Local)
+	row := d.QueryRow(
+		`INSERT INTO attendance_records (user_id, work_date, check_in_at, check_out_at, expected_start_min, expected_end_min, grace_minutes, is_workday, notes)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		 ON CONFLICT (user_id, work_date) DO NOTHING
+		 RETURNING `+attendanceRecordCols,
+		userID, local.Format("2006-01-02"), checkInAt, checkOutAt, sched.StartMin, sched.EndMin, sched.GraceMinutes, isScheduledWorkday(sched, local.Weekday()), notes,
+	)
+	r, err := scanAttendanceRecord(row)
+	if err == sql.ErrNoRows {
+		return nil, ErrAttendanceExists
+	}
+	return r, err
 }
 
 // UpdateAttendanceRecord is the admin-only correction path (e.g. resolving

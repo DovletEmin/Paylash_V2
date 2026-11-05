@@ -361,3 +361,51 @@ func TestIntegrationGetSessionUser(t *testing.T) {
 		t.Errorf("deleted token: got (%v, %v), want (nil, nil)", s, err)
 	}
 }
+
+// CreateAttendanceRecord is the admin's way to record a day nobody checked in
+// on. What needs real SQL: the day comes from the check-in's own local date
+// (not "today"), a second record for that day is refused rather than
+// overwritten, lateness is judged against that day, and a deleted record
+// frees the slot again.
+func TestIntegrationCreateAttendanceRecord(t *testing.T) {
+	database := connectTestDB(t)
+	user := createTestUser(t, database, "user")
+	sched, err := database.GetAttendanceSchedule()
+	if err != nil {
+		t.Fatalf("GetAttendanceSchedule: %v", err)
+	}
+
+	now := time.Now()
+	dayStart := time.Date(now.Year(), now.Month(), now.Day()-3, 0, 0, 0, 0, time.Local)
+	late := dayStart.Add(time.Duration(sched.StartMin+sched.GraceMinutes+30) * time.Minute)
+	out := dayStart.Add(time.Duration(sched.EndMin) * time.Minute)
+
+	rec, err := database.CreateAttendanceRecord(user.ID, late, &out, "added by admin", sched)
+	if err != nil {
+		t.Fatalf("CreateAttendanceRecord: %v", err)
+	}
+	if want := dayStart.Format("2006-01-02"); rec.WorkDate != want {
+		t.Errorf("WorkDate = %q, want %q", rec.WorkDate, want)
+	}
+	if rec.IsWorkday && !rec.IsLate {
+		t.Errorf("a check-in %d min past the grace deadline is not late", 30)
+	}
+	if rec.CheckOutAt == nil || rec.Notes != "added by admin" {
+		t.Errorf("check-out / notes not stored: %+v", rec)
+	}
+
+	if _, err := database.CreateAttendanceRecord(user.ID, late, nil, "", sched); err != ErrAttendanceExists {
+		t.Errorf("second record for the same day: err = %v, want ErrAttendanceExists", err)
+	}
+
+	ok, err := database.DeleteAttendanceRecord(rec.ID)
+	if err != nil || !ok {
+		t.Fatalf("DeleteAttendanceRecord = %v, %v; want true, nil", ok, err)
+	}
+	if ok, _ := database.DeleteAttendanceRecord(rec.ID); ok {
+		t.Errorf("deleting an already-deleted record reported success")
+	}
+	if _, err := database.CreateAttendanceRecord(user.ID, late, nil, "", sched); err != nil {
+		t.Errorf("recreating after delete: %v (the slot should be free again)", err)
+	}
+}

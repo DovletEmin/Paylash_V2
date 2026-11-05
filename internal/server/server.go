@@ -247,6 +247,7 @@ func (s *Server) routes(webFS embed.FS) {
 	s.mux.Handle("GET /api/admin/attendance/schedule", auth(ManagerOrAdminMiddleware(http.HandlerFunc(h.AdminGetAttendanceSchedule))))
 	s.mux.Handle("PATCH /api/admin/attendance/schedule", auth(AdminMiddleware(http.HandlerFunc(h.AdminSetAttendanceSchedule))))
 	s.mux.Handle("PATCH /api/admin/attendance/{id}", auth(AdminMiddleware(http.HandlerFunc(h.AdminUpdateAttendanceRecord))))
+	s.mux.Handle("POST /api/admin/attendance", auth(AdminMiddleware(http.HandlerFunc(h.AdminCreateAttendanceRecord))))
 	s.mux.Handle("DELETE /api/admin/attendance/{id}", auth(ManagerOrAdminMiddleware(http.HandlerFunc(h.AdminDeleteAttendanceRecord))))
 
 	// Device credentials for the network drive (see internal/dav).

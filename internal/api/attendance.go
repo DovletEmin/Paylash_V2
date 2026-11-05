@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"paylash/internal/authutil"
+	"paylash/internal/db"
 	"paylash/internal/models"
 )
 
@@ -262,6 +264,62 @@ func (h *Handler) AdminUpdateAttendanceRecord(w http.ResponseWriter, r *http.Req
 	}
 	h.logAction(r, "attendance.correct", "attendance", id, "", map[string]any{"user_id": rec.UserID})
 	writeJSON(w, http.StatusOK, rec)
+}
+
+// AdminCreateAttendanceRecord records a day on an employee's behalf — for
+// someone who never checked in, so there is nothing for AdminUpdate to
+// correct. Admin-only, like every other change to a record's times. The one
+// place a client-supplied time is accepted, which is exactly why it is
+// admin-only and audited: nothing in the employee-facing path takes one.
+func (h *Handler) AdminCreateAttendanceRecord(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserID     int        `json:"user_id"`
+		CheckInAt  time.Time  `json:"check_in_at"`
+		CheckOutAt *time.Time `json:"check_out_at"`
+		Notes      string     `json:"notes"`
+	}
+	if err := readJSON(r, &req); err != nil || req.UserID == 0 || req.CheckInAt.IsZero() {
+		writeError(w, http.StatusBadRequest, "nädogry maglumat")
+		return
+	}
+	now := time.Now()
+	if req.CheckInAt.After(now) || (req.CheckOutAt != nil && req.CheckOutAt.After(now)) {
+		writeError(w, http.StatusBadRequest, "wagt geljekde bolup bilmez")
+		return
+	}
+	if req.CheckOutAt != nil && req.CheckOutAt.Before(req.CheckInAt) {
+		writeError(w, http.StatusBadRequest, "gitme wagty gelme wagtyndan öň bolup bilmez")
+		return
+	}
+	// An untracked (or missing) account's records are hidden from every
+	// view, so writing one would succeed and then be invisible.
+	tracked, err := h.db.IsAttendanceTracked(req.UserID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk ýüze çykdy")
+		return
+	}
+	if !tracked {
+		writeError(w, http.StatusBadRequest, "bu ulanyjy gelim-gidim hasabatyna goşulmaýar")
+		return
+	}
+	sched, err := h.db.GetAttendanceSchedule()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ýalňyşlyk ýüze çykdy")
+		return
+	}
+	rec, err := h.db.CreateAttendanceRecord(req.UserID, req.CheckInAt, req.CheckOutAt, req.Notes, sched)
+	if errors.Is(err, db.ErrAttendanceExists) {
+		writeError(w, http.StatusConflict, "bu gün üçin ýazgy eýýäm bar")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "döredip bolmady")
+		return
+	}
+	h.logAction(r, "attendance.create", "attendance", rec.ID, "", map[string]any{
+		"user_id": rec.UserID, "work_date": rec.WorkDate, "check_in_at": rec.CheckInAt, "check_out_at": rec.CheckOutAt,
+	})
+	writeJSON(w, http.StatusCreated, rec)
 }
 
 // AdminDeleteAttendanceRecord removes a record outright — ManagerOrAdmin, the

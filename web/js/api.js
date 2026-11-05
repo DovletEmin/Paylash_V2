@@ -392,6 +392,9 @@ const API = {
             update(id, checkInAt, checkOutAt, notes) {
                 return API._request('PATCH', `/api/admin/attendance/${id}`, { check_in_at: checkInAt, check_out_at: checkOutAt, notes });
             },
+            create(userId, checkInAt, checkOutAt, notes) {
+                return API._request('POST', '/api/admin/attendance', { user_id: userId, check_in_at: checkInAt, check_out_at: checkOutAt, notes });
+            },
             delete(id) { return API._request('DELETE', `/api/admin/attendance/${id}`); },
             schedule: {
                 get() { return API._request('GET', '/api/admin/attendance/schedule'); },
